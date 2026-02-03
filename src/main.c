@@ -15,6 +15,19 @@ static volatile struct limine_framebuffer_request framebuffer_request = {
     .revision = 0
 };
 
+__attribute__((used, section(".limine_requests")))
+static volatile struct limine_memmap_request memmap_request = {
+    .id = LIMINE_MEMMAP_REQUEST_ID,
+    .revision = 0
+};
+
+__attribute__((used, section(".limine_requests")))
+static volatile struct limine_mp_request mp_request = {
+    .id = LIMINE_MP_REQUEST_ID,
+    .revision = 0,
+    .flags = 0
+};
+
 __attribute__((used, section(".limine_requests_start")))
 static volatile uint64_t limine_requests_start_marker[] = LIMINE_REQUESTS_START_MARKER;
 
@@ -73,14 +86,31 @@ int memcmp(const void *s1, const void *s2, size_t n) {
     return 0;
 }
 
-/*Kernel Init*/
+/* Kernel halt (avoid IntelliSense errors on non-GNU compilers) */
+#if defined(__GNUC__) || defined(__clang__)
+#define HALT() __asm__ volatile("hlt")
+#else
+#define HALT() do {} while (0)
+#endif
 
-
-
-static void hlt(void) {
-    for (;;) {
-        asm ("hlt");
+static uint64_t get_usable_ram_bytes(void) {
+    if (!memmap_request.response) return 0;
+    struct limine_memmap_response *resp = memmap_request.response;
+    uint64_t total = 0;
+    for (uint64_t i = 0; i < resp->entry_count; ++i) {
+        struct limine_memmap_entry *e = resp->entries[i];
+        if (e && e->type == LIMINE_MEMMAP_USABLE) {
+            total += e->length;
+        }
     }
+    return total;
+}
+
+static void format_gb_1dp(uint64_t bytes, uint64_t *gb_int, uint64_t *gb_tenths) {
+    const uint64_t gb = 1024ull * 1024ull * 1024ull;
+    *gb_int = bytes / gb;
+    uint64_t rem = bytes % gb;
+    *gb_tenths = (rem * 10) / gb;
 }
 
 
@@ -88,12 +118,12 @@ static void hlt(void) {
 
 void kmain(void) {
     if (LIMINE_BASE_REVISION_SUPPORTED(limine_base_revision) == false) {
-        for (;;) __asm__ volatile("hlt");
+        for (;;) { HALT(); }
     }
 
     if (framebuffer_request.response == NULL || framebuffer_request.response->framebuffer_count < 1) {
         /* If no framebuffer, hang or fallback to text mode. */
-        for (;;) __asm__ volatile("hlt");
+        for (;;) { HALT(); }
     }
 
     struct limine_framebuffer *fb = framebuffer_request.response->framebuffers[0];
@@ -109,5 +139,20 @@ void kmain(void) {
     /* test formatters */
     fb_printf("int: %d hex: %x ptr: %p string: %s char: %c\n", -42, 0xABCD, fb, "hi!", 'A');
 
-    for (;;) __asm__ volatile("hlt");
+    uint64_t ram_bytes = get_usable_ram_bytes();
+    if (ram_bytes > 0) {
+        uint64_t gb_int = 0, gb_tenths = 0;
+        format_gb_1dp(ram_bytes, &gb_int, &gb_tenths);
+        fb_printf("Usable RAM: %u.%u GB\n", (unsigned)gb_int, (unsigned)gb_tenths);
+    } else {
+        fb_printf("Usable RAM: unknown\n");
+    }
+
+    if (mp_request.response) {
+        fb_printf("CPU cores: %u\n", (unsigned)mp_request.response->cpu_count);
+    } else {
+        fb_printf("CPU cores: unknown\n");
+    }
+
+    for (;;) { HALT(); }
 }
