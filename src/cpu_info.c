@@ -1,6 +1,19 @@
 #include "cpu_info.h"
 
 #include "compat.h"
+#include "timer.h"
+
+static uint64_t g_tsc_hz_cached = 0;
+
+static inline uint64_t rdtsc(void) {
+#if defined(__GNUC__) || defined(__clang__)
+    uint32_t lo, hi;
+    __asm__ volatile ("rdtsc" : "=a"(lo), "=d"(hi));
+    return ((uint64_t)hi << 32) | lo;
+#else
+    return 0;
+#endif
+}
 
 static inline void cpuid(uint32_t leaf, uint32_t subleaf,
                           uint32_t *a, uint32_t *b, uint32_t *c, uint32_t *d) {
@@ -95,6 +108,10 @@ uint32_t cpu_get_ext_feature_edx(void) {
 
 int cpu_get_tsc_hz(uint64_t *out_hz) {
     if (!out_hz) return 0;
+    if (g_tsc_hz_cached != 0) {
+        *out_hz = g_tsc_hz_cached;
+        return 1;
+    }
     uint32_t a, b, c, d;
     cpuid(0x15, 0, &a, &b, &c, &d);
     if (a != 0 && b != 0 && c != 0) {
@@ -111,4 +128,30 @@ int cpu_get_tsc_hz(uint64_t *out_hz) {
         return 1;
     }
     return 0;
+}
+
+void cpu_set_tsc_hz(uint64_t hz) {
+    g_tsc_hz_cached = hz;
+}
+
+int cpu_calibrate_tsc_hz_pit(uint32_t sample_ms) {
+    uint32_t pit_hz = timer_pit_hz();
+    if (pit_hz == 0) return 0;
+    if (sample_ms < 10) sample_ms = 10;
+    uint64_t ticks = ((uint64_t)pit_hz * sample_ms) / 1000ull;
+    if (ticks == 0) ticks = 1;
+
+    uint64_t start_tick = timer_pit_ticks();
+    while (timer_pit_ticks() == start_tick) {}
+    uint64_t tsc_start = rdtsc();
+
+    uint64_t target = start_tick + ticks;
+    while (timer_pit_ticks() < target) {}
+    uint64_t tsc_end = rdtsc();
+
+    uint64_t delta = tsc_end - tsc_start;
+    uint64_t hz = (delta * 1000ull) / (uint64_t)sample_ms;
+    if (hz == 0) return 0;
+    g_tsc_hz_cached = hz;
+    return 1;
 }

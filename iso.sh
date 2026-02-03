@@ -9,6 +9,15 @@ rm -rf iso_root "$ISO"
 mkdir -p iso_root/boot/limine
 mkdir -p iso_root/EFI/BOOT
 
+req_files="limine/limine-bios.sys limine/limine-bios-cd.bin limine/limine-uefi-cd.bin limine/BOOTX64.EFI"
+for f in $req_files; do
+  if [ ! -f "$f" ]; then
+    echo "Missing Limine file: $f"
+    echo "Place Limine release binaries in ./limine/ (limine-bios.sys, limine-bios-cd.bin, limine-uefi-cd.bin, BOOTX64.EFI)."
+    exit 1
+  fi
+done
+
 # Kernel
 cp -v bin/$KERNEL iso_root/boot/
 
