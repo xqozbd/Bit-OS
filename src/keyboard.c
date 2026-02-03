@@ -96,6 +96,11 @@ static inline int scancode_to_char(uint8_t sc) {
     return (int)c;
 }
 
+static inline int allow_repeat_char(int ch) {
+    if (ch == '\n' || ch == '\r' || ch == '\b' || ch == '\t') return 0;
+    return (ch >= 32);
+}
+
 void kb_irq_handler(void) {
     while (inb(KBD_STATUS) & 0x01) {
         uint8_t sc = inb(KBD_DATA);
@@ -128,8 +133,12 @@ void kb_irq_handler(void) {
         if (ch < 0) continue;
         if (g_repeat_sc != sc) {
             kb_buf_push((uint8_t)ch);
-            g_repeat_sc = sc;
-            g_repeat_next = timer_pit_ticks() + g_repeat_delay_ticks;
+            if (allow_repeat_char(ch)) {
+                g_repeat_sc = sc;
+                g_repeat_next = timer_pit_ticks() + g_repeat_delay_ticks;
+            } else {
+                g_repeat_sc = 0;
+            }
         }
     }
 }
@@ -140,7 +149,7 @@ void kb_tick(void) {
     if (now < g_repeat_next) return;
 
     int ch = scancode_to_char(g_repeat_sc);
-    if (ch >= 0) {
+    if (ch >= 0 && allow_repeat_char(ch)) {
         kb_buf_push((uint8_t)ch);
     }
     g_repeat_next = now + g_repeat_rate_ticks;

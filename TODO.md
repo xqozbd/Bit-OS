@@ -17,9 +17,11 @@
 - [x] Page fault handler with fault reason logging.
 - [x] Limine module loading as an initramfs.
 - [x] Basic VFS layer and in-memory FS for `ls/cd/cat`.
+- [x] Shell history + line editing (up/down, backspace).
+- [x] Heap free list (kfree).
+- [x] Heap reallocation support (krealloc).
 
 ## Next
-- [ ] Heap free list (kfree) and reallocation support.
-- [ ] Simple shell improvements (history, editing, tab completion).
+- [ ] Shell tab completion.
 - [ ] Syscall ABI and userspace ELF loader.
 - [ ] SMP bring-up and per-CPU data.

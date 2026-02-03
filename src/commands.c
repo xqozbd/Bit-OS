@@ -11,6 +11,7 @@
 #include "paging.h"
 #include "pmm.h"
 #include "rtc_util.h"
+#include "heap.h"
 #include "smp.h"
 #include "strutil.h"
 #include "version.h"
@@ -86,13 +87,16 @@ static inline uint64_t rdtsc(void) {
 
 static void cmd_memtest(int pages, uint64_t bytes_limit, uint64_t seconds_limit) {
     if (pages <= 0 && bytes_limit == 0 && seconds_limit == 0) pages = 16;
-    if (pages > 4096) pages = 4096;
 
     uint64_t hhdm = paging_hhdm_offset();
     if (bytes_limit > 0) {
+        if (pages > 0) {
+            log_printf("memtest: cannot use both --size and --pages\n");
+            return;
+        }
         uint64_t p = bytes_limit / 4096ull;
         if (p == 0) p = 1;
-        if (p > (uint64_t)pages) pages = (int)p;
+        pages = (int)p;
     }
 
     const uint64_t pattern1 = 0xAAAAAAAAAAAAAAAAull;
@@ -113,12 +117,44 @@ static void cmd_memtest(int pages, uint64_t bytes_limit, uint64_t seconds_limit)
         log_printf("memtest: SMP not initialized, using 1 core\n");
     }
 
-    while (1) {
-        if (pages > 0 && tested >= (uint64_t)pages) break;
-        if (end_tsc && rdtsc() >= end_tsc) break;
+    if (pages <= 0) {
+        log_printf("memtest: no pages to test\n");
+        return;
+    }
 
+    uint64_t freef = pmm_free_frames();
+    uint64_t free_bytes = freef * 4096ull;
+    if (bytes_limit > 0 && bytes_limit > free_bytes) {
+        log_printf("memtest: requested %u bytes, only %u bytes free\n",
+                   (unsigned)bytes_limit, (unsigned)free_bytes);
+        return;
+    }
+    if ((uint64_t)pages > freef) {
+        log_printf("memtest: requested %u pages, only %u free\n",
+                   (unsigned)pages, (unsigned)freef);
+        return;
+    }
+
+    uint64_t *frames = (uint64_t *)kmalloc((size_t)pages * sizeof(uint64_t));
+    if (!frames) {
+        log_printf("memtest: unable to allocate frame list\n");
+        return;
+    }
+
+    int allocated = 0;
+    for (; allocated < pages; ++allocated) {
         uint64_t phys = pmm_alloc_frame();
         if (phys == 0) break;
+        frames[allocated] = phys;
+    }
+    if (allocated < pages) {
+        log_printf("memtest: allocation failed at %u/%u pages\n",
+                   (unsigned)allocated, (unsigned)pages);
+    }
+
+    for (int i = 0; i < allocated; ++i) {
+        if (end_tsc && rdtsc() >= end_tsc) break;
+        uint64_t phys = frames[i];
         uint64_t *p = (uint64_t *)(uintptr_t)(hhdm + phys);
         for (size_t j = 0; j < 4096 / sizeof(uint64_t); ++j) p[j] = pattern1;
         for (size_t j = 0; j < 4096 / sizeof(uint64_t); ++j) {
@@ -128,9 +164,13 @@ static void cmd_memtest(int pages, uint64_t bytes_limit, uint64_t seconds_limit)
         for (size_t j = 0; j < 4096 / sizeof(uint64_t); ++j) {
             if (p[j] != pattern2) { errors++; break; }
         }
-        pmm_free_frame(phys);
         tested++;
     }
+
+    for (int i = 0; i < allocated; ++i) {
+        pmm_free_frame(frames[i]);
+    }
+    kfree(frames);
 
     log_printf("memtest: pages=%u errors=%u\n", (unsigned)tested, (unsigned)errors);
 }

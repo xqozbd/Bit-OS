@@ -9,6 +9,9 @@
 enum { HEAP_PAGE_SIZE = 0x1000ull };
 enum { HEAP_MAGIC = 0xB17B0050B17B0050ull };
 
+/* From memutils.c */
+void *memcpy(void *restrict dest, const void *restrict src, size_t n);
+
 struct heap_block {
     uint64_t magic;
     size_t size;
@@ -132,6 +135,63 @@ void kfree(void *ptr) {
     }
     b->free = 1;
     heap_coalesce();
+}
+
+void *krealloc(void *ptr, size_t size) {
+    if (!ptr) return kmalloc(size);
+    if (size == 0) {
+        kfree(ptr);
+        return NULL;
+    }
+
+    size = align_up_size(size, 16);
+    struct heap_block *b = (struct heap_block *)((uintptr_t)ptr - sizeof(struct heap_block));
+    if (b->magic != HEAP_MAGIC) {
+        log_printf("Heap: bad realloc (magic)\n");
+        return NULL;
+    }
+
+    if (size <= b->size) {
+        size_t remaining = b->size - size;
+        if (remaining > sizeof(struct heap_block) + 16) {
+            struct heap_block *nb = (struct heap_block *)((uintptr_t)b + sizeof(struct heap_block) + size);
+            nb->magic = HEAP_MAGIC;
+            nb->size = remaining - sizeof(struct heap_block);
+            nb->free = 1;
+            nb->next = b->next;
+            b->next = nb;
+            b->size = size;
+        }
+        return ptr;
+    }
+
+    struct heap_block *next = b->next;
+    uintptr_t b_end = (uintptr_t)b + sizeof(struct heap_block) + b->size;
+    if (next && next->free && b_end == (uintptr_t)next) {
+        size_t total = b->size + sizeof(struct heap_block) + next->size;
+        if (total >= size) {
+            b->size = total;
+            b->next = next->next;
+            size_t remaining = b->size - size;
+            if (remaining > sizeof(struct heap_block) + 16) {
+                struct heap_block *nb = (struct heap_block *)((uintptr_t)b + sizeof(struct heap_block) + size);
+                nb->magic = HEAP_MAGIC;
+                nb->size = remaining - sizeof(struct heap_block);
+                nb->free = 1;
+                nb->next = b->next;
+                b->next = nb;
+                b->size = size;
+            }
+            return ptr;
+        }
+    }
+
+    void *n = kmalloc(size);
+    if (!n) return NULL;
+    size_t to_copy = b->size < size ? b->size : size;
+    memcpy(n, ptr, to_copy);
+    kfree(ptr);
+    return n;
 }
 
 int heap_check(void) {
