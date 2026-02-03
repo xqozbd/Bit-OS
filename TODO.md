@@ -20,8 +20,11 @@
 - [x] Shell history + line editing (up/down, backspace).
 - [x] Heap free list (kfree).
 - [x] Heap reallocation support (krealloc).
+- [x] Shell tab completion.
+- [x] Syscall ABI and userspace ELF loader.
+- [x] Add in a cursor.
 
 ## Next
-- [ ] Shell tab completion.
-- [ ] Syscall ABI and userspace ELF loader.
 - [ ] SMP bring-up and per-CPU data.
+- [ ] Add in networking. Write ethernet AMD PCNet PCI driver (VirtualBox supports this card)
+ 
