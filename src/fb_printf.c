@@ -1,3 +1,4 @@
+
 #include "fb_printf.h"
 #include "font8x8_basic.h"
 #include <stddef.h>
@@ -16,7 +17,8 @@ static uint32_t fb_bytes_per_pixel = 0;
 
 /* cursor (pixel coordinates) */
 static uint32_t cursor_x = 0, cursor_y = 0;
-static uint32_t char_w = 8, char_h = 8;
+/* Horizontal glyph width stays 8; vertical height doubled to 16 */
+static uint32_t char_w = 8, char_h = 16;
 
 /* current colors */
 static uint32_t cur_fg = 0xFFFFFF, cur_bg = 0x000000;
@@ -61,25 +63,32 @@ static void put_pixel(int x, int y, uint32_t rgb24) {
     }
 }
 
-/* draw character at pixel coordinates */
+/*
+ * draw character at pixel coordinates (x,y).
+ * Uses font8x8_basic (8 rows). We duplicate each row vertically so
+ * font 8x8 becomes 8x16 on screen.
+ */
 static void draw_char_px(uint32_t x, uint32_t y, char c, uint32_t fg, uint32_t bg) {
     unsigned char uc = (unsigned char)c;
     if (uc > 127) uc = '?';
     const unsigned char *glyph = font8x8_basic[uc];
 
-    for (uint32_t row = 0; row < char_h; ++row) {
+    /* glyph has 8 rows; for each row we draw two pixel rows */
+    for (uint32_t row = 0; row < 8; ++row) {
         unsigned char rowbits = glyph[row];
+        /* compute the y positions for the doubled rows */
+        uint32_t y_top = y + row * 2;
+        uint32_t y_bottom = y_top + 1;
+
         for (uint32_t col = 0; col < char_w; ++col) {
-            if (rowbits & (1u << col)) {
-                put_pixel(x + col, y + row, fg);
-            } else {
-                put_pixel(x + col, y + row, bg);
-            }
+            uint32_t color = (rowbits & (1u << col)) ? fg : bg;
+            put_pixel(x + col, y_top, color);
+            put_pixel(x + col, y_bottom, color);
         }
     }
 }
 
-/* copy rows for scrolling */
+/* copy rows for scrolling (rows are counted in pixels) */
 static void copy_rows(uint32_t dst_row, uint32_t src_row, uint32_t row_count) {
     uint8_t *addr = fb_ptr;
     uint8_t *dst = addr + (size_t)dst_row * fb_pitch;
@@ -98,15 +107,30 @@ static void clear_last_row_pixels(uint32_t row) {
     for (uint64_t i = 0; i < fb_pitch; ++i) addr[i] = 0;
 }
 
+/*
+ * Scroll up by n_chars character-rows (n_chars * char_h pixels).
+ * char_h is now 16 (8 glyph rows * 2 duplicate rows).
+ */
 static void scroll_up_chars(uint32_t n_chars) {
     if (!g_fb || n_chars == 0) return;
-    uint32_t rows_to_move = fb_height - n_chars * char_h;
-    if ((int)rows_to_move <= 0) {
+
+    /* number of pixel rows to move/skip */
+    uint32_t pixel_rows = n_chars * char_h;
+
+    /* rows_to_move = remaining pixel rows after removing the top pixel_rows */
+    if (pixel_rows >= fb_height) {
+        /* clear screen */
         for (size_t i = 0; i < fb_pitch * fb_height; ++i) fb_ptr[i] = 0;
         cursor_x = cursor_y = 0;
         return;
     }
-    copy_rows(0, n_chars * char_h, rows_to_move);
+
+    uint32_t rows_to_move = fb_height - pixel_rows;
+
+    /* move the block up */
+    copy_rows(0, pixel_rows, rows_to_move);
+
+    /* clear bottom pixel_rows */
     for (uint32_t r = rows_to_move; r < fb_height; ++r) clear_last_row_pixels(r);
 }
 
@@ -163,6 +187,7 @@ void fb_init(struct limine_framebuffer *fb, uint32_t fg, uint32_t bg) {
     cursor_x = cursor_y = 0;
     cur_fg = fg; cur_bg = bg;
 
+    /* clear framebuffer to bg color */
     for (uint32_t y = 0; y < fb_height; ++y)
         for (uint32_t x = 0; x < fb_width; ++x)
             put_pixel(x, y, bg);
