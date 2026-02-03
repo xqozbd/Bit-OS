@@ -5,3 +5,4 @@ BitOS.iso
 iso_root/*
 .vscode/*
 obj/*
+/limine
