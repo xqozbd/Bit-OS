@@ -17,6 +17,11 @@ static uint32_t fb_bytes_per_pixel = 0;
 /* cursor (pixel coordinates) */
 static uint32_t cursor_x = 0, cursor_y = 0;
 static uint32_t char_w = 8, char_h = 8;
+static uint32_t char_scale = 1;
+static uint32_t line_gap = 1;
+static uint32_t margin_x = 8, margin_y = 8;
+static uint32_t tab_width = 4;
+static uint32_t char_spacing = 1;
 
 /* current colors */
 static uint32_t cur_fg = 0xFFFFFF, cur_bg = 0x000000;
@@ -61,6 +66,10 @@ static void put_pixel(int x, int y, uint32_t rgb24) {
     }
 }
 
+static uint32_t line_step(void) {
+    return char_h * char_scale + line_gap;
+}
+
 /* draw character at pixel coordinates */
 static void draw_char_px(uint32_t x, uint32_t y, char c, uint32_t fg, uint32_t bg) {
     unsigned char uc = (unsigned char)c;
@@ -70,11 +79,12 @@ static void draw_char_px(uint32_t x, uint32_t y, char c, uint32_t fg, uint32_t b
     for (uint32_t row = 0; row < char_h; ++row) {
         unsigned char rowbits = glyph[row];
         for (uint32_t col = 0; col < char_w; ++col) {
-            if (rowbits & (1u << col)) {
-                put_pixel(x + col, y + row, fg);
-            } else {
-                put_pixel(x + col, y + row, bg);
-            }
+            uint32_t color = (rowbits & (1u << col)) ? fg : bg;
+            uint32_t px = x + col * char_scale;
+            uint32_t py = y + row * char_scale;
+            for (uint32_t sy = 0; sy < char_scale; ++sy)
+                for (uint32_t sx = 0; sx < char_scale; ++sx)
+                    put_pixel(px + sx, py + sy, color);
         }
     }
 }
@@ -93,29 +103,47 @@ static void copy_rows(uint32_t dst_row, uint32_t src_row, uint32_t row_count) {
     }
 }
 
-static void clear_last_row_pixels(uint32_t row) {
+static void clear_row_bg(uint32_t row) {
     uint8_t *addr = fb_ptr + (size_t)row * fb_pitch;
-    for (uint64_t i = 0; i < fb_pitch; ++i) addr[i] = 0;
+    uint32_t pixel = pack_pixel(cur_bg);
+
+    if (fb_bytes_per_pixel == 4) {
+        uint32_t *p = (uint32_t *)addr;
+        for (uint64_t i = 0; i < fb_pitch / 4; ++i) p[i] = pixel;
+    } else if (fb_bytes_per_pixel == 3) {
+        for (uint64_t i = 0; i < fb_pitch; i += 3) {
+            addr[i + 0] = pixel & 0xFF;
+            addr[i + 1] = (pixel >> 8) & 0xFF;
+            addr[i + 2] = (pixel >> 16) & 0xFF;
+        }
+    } else if (fb_bytes_per_pixel == 2) {
+        uint16_t v = (uint16_t)(pixel & 0xFFFF);
+        for (uint64_t i = 0; i < fb_pitch; i += 2) {
+            addr[i + 0] = v & 0xFF;
+            addr[i + 1] = (v >> 8) & 0xFF;
+        }
+    }
 }
 
-static void scroll_up_chars(uint32_t n_chars) {
-    if (!g_fb || n_chars == 0) return;
-    uint32_t rows_to_move = fb_height - n_chars * char_h;
-    if ((int)rows_to_move <= 0) {
-        for (size_t i = 0; i < fb_pitch * fb_height; ++i) fb_ptr[i] = 0;
-        cursor_x = cursor_y = 0;
+static void scroll_up_pixels(uint32_t n_rows) {
+    if (!g_fb || n_rows == 0) return;
+    if (n_rows >= fb_height) {
+        for (uint32_t r = 0; r < fb_height; ++r) clear_row_bg(r);
+        cursor_x = margin_x;
+        cursor_y = margin_y;
         return;
     }
-    copy_rows(0, n_chars * char_h, rows_to_move);
-    for (uint32_t r = rows_to_move; r < fb_height; ++r) clear_last_row_pixels(r);
+    uint32_t rows_to_move = fb_height - n_rows;
+    copy_rows(0, n_rows, rows_to_move);
+    for (uint32_t r = rows_to_move; r < fb_height; ++r) clear_row_bg(r);
 }
 
 static void new_line(void) {
-    cursor_x = 0;
-    cursor_y += char_h;
-    if (cursor_y + char_h > fb_height) {
-        scroll_up_chars(1);
-        cursor_y -= char_h;
+    cursor_x = margin_x;
+    cursor_y += line_step();
+    if (cursor_y + char_h * char_scale > (fb_height - margin_y)) {
+        scroll_up_pixels(line_step());
+        cursor_y -= line_step();
     }
 }
 
@@ -123,11 +151,24 @@ static void new_line(void) {
 void fb_putc(char c) {
     if (!g_fb) return;
     if (c == '\n') { new_line(); return; }
-    if (c == '\r') { cursor_x = 0; return; }
+    if (c == '\r') { cursor_x = margin_x; return; }
+    if (c == '\t') {
+        uint32_t step = char_w * char_scale;
+        uint32_t tab_px = tab_width * step;
+        uint32_t next = ((cursor_x - margin_x + tab_px) / tab_px) * tab_px + margin_x;
+        cursor_x = next;
+        return;
+    }
+    if (c == '\b') {
+        uint32_t step = char_w * char_scale;
+        if (cursor_x >= margin_x + step) cursor_x -= step;
+        draw_char_px(cursor_x, cursor_y, ' ', cur_fg, cur_bg);
+        return;
+    }
 
     draw_char_px(cursor_x, cursor_y, c, cur_fg, cur_bg);
-    cursor_x += char_w;
-    if (cursor_x + char_w > fb_width) new_line();
+    cursor_x += char_w * char_scale + char_spacing;
+    if (cursor_x + char_w * char_scale > (fb_width - margin_x)) new_line();
 }
 
 void fb_puts(const char *s) { while (*s) fb_putc(*s++); }
@@ -160,16 +201,30 @@ void fb_init(struct limine_framebuffer *fb, uint32_t fg, uint32_t bg) {
     fb_gm_size = fb->green_mask_size; fb_gm_shift = fb->green_mask_shift;
     fb_bm_size = fb->blue_mask_size; fb_bm_shift = fb->blue_mask_shift;
     fb_bytes_per_pixel = (fb_bpp + 7) / 8;
-    cursor_x = cursor_y = 0;
+    cursor_x = margin_x;
+    cursor_y = margin_y;
     cur_fg = fg; cur_bg = bg;
 
-    for (uint32_t y = 0; y < fb_height; ++y)
-        for (uint32_t x = 0; x < fb_width; ++x)
-            put_pixel(x, y, bg);
+    for (uint32_t y = 0; y < fb_height; ++y) clear_row_bg(y);
 }
 
-void fb_clear(void) { fb_init(g_fb, cur_fg, cur_bg); cursor_x = cursor_y = 0; }
+void fb_clear(void) { fb_init(g_fb, cur_fg, cur_bg); cursor_x = margin_x; cursor_y = margin_y; }
 void fb_set_colors(uint32_t fg, uint32_t bg) { cur_fg = fg; cur_bg = bg; }
+void fb_set_layout(uint32_t scale, uint32_t gap, uint32_t mx, uint32_t my, uint32_t tabw) {
+    fb_set_layout_ex(scale, gap, mx, my, tabw, char_spacing);
+}
+
+void fb_set_layout_ex(uint32_t scale, uint32_t gap, uint32_t mx, uint32_t my, uint32_t tabw, uint32_t spacing) {
+    if (scale == 0) scale = 1;
+    char_scale = scale;
+    line_gap = gap;
+    margin_x = mx;
+    margin_y = my;
+    tab_width = (tabw == 0) ? 4 : tabw;
+    char_spacing = spacing;
+    cursor_x = margin_x;
+    cursor_y = margin_y;
+}
 
 void fb_printf(const char *fmt, ...) {
     if (!g_fb) return;

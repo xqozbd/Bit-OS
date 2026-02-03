@@ -8,6 +8,10 @@
 /* Initialize framebuffer printing with foreground/background color */
 void fb_init(struct limine_framebuffer *fb, uint32_t fg, uint32_t bg);
 
+/* Optional layout controls */
+void fb_set_layout(uint32_t scale, uint32_t line_gap, uint32_t margin_x, uint32_t margin_y, uint32_t tab_width);
+void fb_set_layout_ex(uint32_t scale, uint32_t line_gap, uint32_t margin_x, uint32_t margin_y, uint32_t tab_width, uint32_t char_spacing);
+
 /* Print functions */
 void fb_clear(void);
 void fb_putc(char c);
