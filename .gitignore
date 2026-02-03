@@ -1,3 +1,7 @@
 limine/*
 i686-elf-tools-master/*
 bin/*
+BitOS.iso
+iso_root/*
+.vscode/*
+obj/*
