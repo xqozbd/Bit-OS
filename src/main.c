@@ -2,7 +2,7 @@
 #include <stddef.h>
 #include <stdbool.h>
 #include <limine.h>
-
+#include "fb_printf.h"
 /*
 Limine boot bullshit
 */
@@ -87,26 +87,26 @@ static void hlt(void) {
 
 
 void kmain(void) {
-    // Ensure the bootloader actually understands our base revision (see spec).
     if (LIMINE_BASE_REVISION_SUPPORTED(limine_base_revision) == false) {
-        hlt();
+        for (;;) __asm__ volatile("hlt");
     }
 
-    // Ensure we got a framebuffer.
-    if (framebuffer_request.response == NULL
-     || framebuffer_request.response->framebuffer_count < 1) {
-        hlt();
+    if (framebuffer_request.response == NULL || framebuffer_request.response->framebuffer_count < 1) {
+        /* If no framebuffer, hang or fallback to text mode. */
+        for (;;) __asm__ volatile("hlt");
     }
 
-    // Fetch the first framebuffer.
-    struct limine_framebuffer *framebuffer = framebuffer_request.response->framebuffers[0];
+    struct limine_framebuffer *fb = framebuffer_request.response->framebuffers[0];
 
-    // Note: we assume the framebuffer model is RGB with 32-bit pixels.
-    for (size_t i = 0; i < 100; i++) {
-        volatile uint32_t *fb_ptr = framebuffer->address;
-        fb_ptr[i * (framebuffer->pitch / 4) + i] = 0xffffff;
-    }
+    /* Initialize fb_printf with white on black */
+    fb_init(fb, 0xFFFFFF, 0x000000);
 
-    // We're done, just hang...
-    hlt();
+    fb_printf("Hello framebuffer!\n");
+    fb_printf("Width: %u Height: %u Pitch: %u BPP: %u\n",
+              (unsigned)fb->width, (unsigned)fb->height, (unsigned)fb->pitch, (unsigned)fb->bpp);
+
+    /* test formatters */
+    fb_printf("int: %d hex: %x ptr: %p string: %s char: %c\n", -42, 0xABCD, fb, "hi!", 'A');
+
+    for (;;) __asm__ volatile("hlt");
 }
