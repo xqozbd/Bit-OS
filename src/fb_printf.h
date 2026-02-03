@@ -23,4 +23,11 @@ void fb_vprintf(const char *fmt, va_list ap);
 /* Optional: change colors for next prints */
 void fb_set_colors(uint32_t fg, uint32_t bg);
 
+/* Optional: cursor/layout queries and drawing helpers */
+void fb_set_cursor_px(uint32_t x, uint32_t y);
+uint32_t fb_line_height(void);
+uint32_t fb_margin_x(void);
+uint32_t fb_margin_y(void);
+void fb_draw_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t rgb24);
+
 #endif /* FB_PRINTF_H */

@@ -155,3 +155,8 @@ void pmm_free_frame(uint64_t phys_addr) {
 uint64_t pmm_total_frames(void) { return g_total_frames; }
 uint64_t pmm_used_frames(void) { return g_used_frames; }
 uint64_t pmm_free_frames(void) { return g_total_frames - g_used_frames; }
+
+int pmm_sanity_check(void) {
+    if (g_used_frames > g_total_frames) return -1;
+    return 0;
+}

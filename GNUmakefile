@@ -23,6 +23,7 @@ override CFLAGS += \
     -Wextra \
     -std=gnu11 \
     -ffreestanding \
+    -fcf-protection=none \
     -fno-stack-protector \
     -fno-stack-check \
     -fno-lto \

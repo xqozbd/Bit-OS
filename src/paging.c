@@ -25,6 +25,8 @@ enum {
 };
 
 static uint64_t g_hhdm_offset = 0;
+static uint64_t *g_pml4 = 0;
+static uint64_t g_pml4_phys = 0;
 
 static inline uint64_t align_up_u64(uint64_t v, uint64_t a) {
     return (v + a - 1) & ~(a - 1);
@@ -96,6 +98,17 @@ static void map_4k(uint64_t *pml4, uint64_t virt, uint64_t phys, uint64_t flags)
     pt[pt_i] = (phys & 0x000ffffffffff000ull) | flags | PTE_P | PTE_RW;
 }
 
+int paging_map_4k(uint64_t virt, uint64_t phys, uint64_t flags) {
+    if (!g_pml4) return -1;
+    map_4k(g_pml4, virt, phys, flags);
+#if defined(__GNUC__) || defined(__clang__)
+    __asm__ volatile ("invlpg (%0)" : : "r"(virt) : "memory");
+#else
+    (void)virt;
+#endif
+    return 0;
+}
+
 static inline void load_cr3(uint64_t phys) {
 #if defined(__GNUC__) || defined(__clang__)
     __asm__ volatile ("mov %0, %%cr3" : : "r"(phys) : "memory");
@@ -130,13 +143,13 @@ int paging_init(void) {
     }
     max_phys = align_up_u64(max_phys, PAGE_2M);
 
-    uint64_t pml4_phys = 0;
-    uint64_t pml4_virt = alloc_table(&pml4_phys);
+    uint64_t pml4_virt = alloc_table(&g_pml4_phys);
     if (pml4_virt == 0) {
         log_printf("Paging: failed to allocate PML4\n");
         return -1;
     }
     uint64_t *pml4 = (uint64_t *)(uintptr_t)pml4_virt;
+    g_pml4 = pml4;
 
     /* Identity map low memory and map HHDM using 2MiB pages. */
     for (uint64_t addr = 0; addr < max_phys; addr += PAGE_2M) {
@@ -155,7 +168,7 @@ int paging_init(void) {
         map_4k(pml4, kern_start + off, kern_phys_start + off, 0);
     }
 
-    load_cr3(pml4_phys);
-    log_printf("Paging: enabled (PML4=0x%x)\n", (unsigned)pml4_phys);
+    load_cr3(g_pml4_phys);
+    log_printf("Paging: enabled (PML4=0x%x)\n", (unsigned)g_pml4_phys);
     return 0;
 }

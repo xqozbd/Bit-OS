@@ -4,6 +4,9 @@
 #include "cpu.h"
 #include "idt.h"
 #include "log.h"
+#include "pic.h"
+#include "apic.h"
+#include "timer.h"
 
 /* IDT + exceptions */
 struct interrupt_frame {
@@ -29,12 +32,22 @@ struct idt_ptr {
     uint64_t base;
 } __attribute__((packed));
 
-static struct idt_entry idt[256];
+static volatile struct idt_entry idt[256];
+
+static inline uint16_t read_cs(void) {
+#if defined(__GNUC__) || defined(__clang__)
+    uint16_t cs;
+    __asm__ volatile ("mov %%cs, %0" : "=r"(cs));
+    return cs;
+#else
+    return 0x08;
+#endif
+}
 
 static void idt_set_gate(int vec, void *isr) {
     uint64_t addr = (uint64_t)isr;
     idt[vec].offset_low = (uint16_t)(addr & 0xFFFF);
-    idt[vec].selector = 0x08;
+    idt[vec].selector = read_cs();
     idt[vec].ist = 0;
     idt[vec].type_attr = 0x8E;
     idt[vec].offset_mid = (uint16_t)((addr >> 16) & 0xFFFF);
@@ -42,9 +55,9 @@ static void idt_set_gate(int vec, void *isr) {
     idt[vec].zero = 0;
 }
 
-static inline void lidt(struct idt_ptr *p) {
+static inline void lidt(const struct idt_ptr *p) {
 #if defined(__GNUC__) || defined(__clang__)
-    __asm__ volatile ("lidt (%0)" : : "r"(p));
+    __asm__ volatile ("lidt %0" : : "m"(*p) : "memory");
 #else
     (void)p;
 #endif
@@ -58,12 +71,12 @@ static void exception_common(uint8_t vec, uint64_t err, int has_err) {
 }
 
 #define ISR_NOERR(n) \
-    __attribute__((interrupt, target("general-regs-only"))) void isr_noerr_##n(struct interrupt_frame *frame) { \
+    __attribute__((interrupt, target("general-regs-only"), used)) void isr_noerr_##n(struct interrupt_frame *frame) { \
         (void)frame; exception_common((uint8_t)n, 0, 0); \
     }
 
 #define ISR_ERR(n) \
-    __attribute__((interrupt, target("general-regs-only"))) void isr_err_##n(struct interrupt_frame *frame, uint64_t error_code) { \
+    __attribute__((interrupt, target("general-regs-only"), used)) void isr_err_##n(struct interrupt_frame *frame, uint64_t error_code) { \
         (void)frame; exception_common((uint8_t)n, error_code, 1); \
     }
 
@@ -75,6 +88,26 @@ ISR_NOERR(16) ISR_ERR(17)   ISR_NOERR(18) ISR_NOERR(19)
 ISR_NOERR(20) ISR_ERR(21)   ISR_NOERR(22) ISR_NOERR(23)
 ISR_NOERR(24) ISR_NOERR(25) ISR_NOERR(26) ISR_NOERR(27)
 ISR_NOERR(28) ISR_NOERR(29) ISR_NOERR(30) ISR_NOERR(31)
+
+__attribute__((interrupt, target("general-regs-only"), used))
+void isr_irq0(struct interrupt_frame *frame) {
+    (void)frame;
+    timer_pit_tick();
+    pic_send_eoi(0);
+}
+
+__attribute__((interrupt, target("general-regs-only"), used))
+void isr_apic_timer(struct interrupt_frame *frame) {
+    (void)frame;
+    timer_apic_tick();
+    apic_eoi();
+}
+
+__attribute__((interrupt, target("general-regs-only"), used))
+void isr_spurious(struct interrupt_frame *frame) {
+    (void)frame;
+    apic_eoi();
+}
 
 void idt_init(void) {
     for (int i = 0; i < 256; ++i) {
@@ -119,6 +152,10 @@ void idt_init(void) {
     idt_set_gate(29, isr_noerr_29);
     idt_set_gate(30, isr_noerr_30);
     idt_set_gate(31, isr_noerr_31);
+
+    idt_set_gate(32, isr_irq0);
+    idt_set_gate(0x40, isr_apic_timer);
+    idt_set_gate(0xFF, isr_spurious);
 
     struct idt_ptr idtp = { .limit = sizeof(idt) - 1, .base = (uint64_t)&idt };
     lidt(&idtp);
