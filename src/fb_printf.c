@@ -229,9 +229,8 @@ void fb_set_layout_ex(uint32_t scale, uint32_t gap, uint32_t mx, uint32_t my, ui
     cursor_y = margin_y;
 }
 
-void fb_printf(const char *fmt, ...) {
+void fb_vprintf(const char *fmt, va_list ap) {
     if (!g_fb) return;
-    va_list ap; va_start(ap, fmt);
     const char *p = fmt; char numbuf[64];
 
     while (*p) {
@@ -251,6 +250,10 @@ void fb_printf(const char *fmt, ...) {
         else fb_putc(*p);
         ++p;
     }
+}
 
+void fb_printf(const char *fmt, ...) {
+    va_list ap; va_start(ap, fmt);
+    fb_vprintf(fmt, ap);
     va_end(ap);
 }

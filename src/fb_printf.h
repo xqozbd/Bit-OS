@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stdarg.h>
+#include "compat.h"
 #include "limine.h" /* Make sure limine.h is in your include path */
 
 /* Initialize framebuffer printing with foreground/background color */
@@ -17,6 +18,7 @@ void fb_clear(void);
 void fb_putc(char c);
 void fb_puts(const char *s);
 void fb_printf(const char *fmt, ...);
+void fb_vprintf(const char *fmt, va_list ap);
 
 /* Optional: change colors for next prints */
 void fb_set_colors(uint32_t fg, uint32_t bg);
