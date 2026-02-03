@@ -1,5 +1,6 @@
 #include "fs_mock.h"
 
+#include "initramfs.h"
 #include "log.h"
 #include "strutil.h"
 
@@ -12,6 +13,25 @@ struct fs_node {
     int child_start;
     int child_count;
 };
+
+static const char g_readme_txt[] =
+    "BitOS mock FS\n"
+    "This is a placeholder file.\n";
+
+static const char g_hello_txt[] =
+    "#!/bin/bitos\n"
+    "echo Hello from BitOS\n";
+
+static const char g_echo_txt[] =
+    "#!/bin/bitos\n"
+    "echo $@\n";
+
+static const char g_os_conf[] =
+    "name=BitOS\n"
+    "version=0.1.0\n";
+
+static const char g_note_txt[] =
+    "Welcome to BitOS.\n";
 
 static const struct fs_node fs_nodes[FS_MAX_NODES] = {
     { "/", 1, -1, 1, 5 },        /* 0 */
@@ -29,11 +49,51 @@ static const struct fs_node fs_nodes[FS_MAX_NODES] = {
     { "note.txt", 0, 9, 0, 0 },   /* 12 */
 };
 
-int fs_root(void) { return 0; }
+int fs_root(void) {
+    if (initramfs_available()) return initramfs_root();
+    return 0;
+}
 
 int fs_is_dir(int node) {
+    if (initramfs_available()) return initramfs_is_dir(node);
     if (node < 0 || node >= FS_MAX_NODES) return 0;
     return fs_nodes[node].is_dir != 0;
+}
+
+int fs_read_file(int node, const uint8_t **data, uint64_t *size) {
+    if (initramfs_available()) return initramfs_read_file(node, data, size);
+    if (!data || !size) return 0;
+    if (node < 0 || node >= FS_MAX_NODES) return 0;
+    if (fs_nodes[node].is_dir) return 0;
+
+    const char *name = fs_nodes[node].name;
+    if (str_eq(name, "README.txt")) {
+        *data = (const uint8_t *)g_readme_txt;
+        *size = (uint64_t)(sizeof(g_readme_txt) - 1);
+        return 1;
+    }
+    if (str_eq(name, "hello")) {
+        *data = (const uint8_t *)g_hello_txt;
+        *size = (uint64_t)(sizeof(g_hello_txt) - 1);
+        return 1;
+    }
+    if (str_eq(name, "echo")) {
+        *data = (const uint8_t *)g_echo_txt;
+        *size = (uint64_t)(sizeof(g_echo_txt) - 1);
+        return 1;
+    }
+    if (str_eq(name, "os.conf")) {
+        *data = (const uint8_t *)g_os_conf;
+        *size = (uint64_t)(sizeof(g_os_conf) - 1);
+        return 1;
+    }
+    if (str_eq(name, "note.txt")) {
+        *data = (const uint8_t *)g_note_txt;
+        *size = (uint64_t)(sizeof(g_note_txt) - 1);
+        return 1;
+    }
+
+    return 0;
 }
 
 static int fs_find_child(int dir, const char *name) {
@@ -49,6 +109,7 @@ static int fs_find_child(int dir, const char *name) {
 }
 
 int fs_resolve(int cwd, const char *path) {
+    if (initramfs_available()) return initramfs_resolve(cwd, path);
     if (!path || path[0] == '\0') return cwd;
     int cur = (path[0] == '/') ? 0 : cwd;
     size_t i = (path[0] == '/') ? 1 : 0;
@@ -81,6 +142,10 @@ int fs_resolve(int cwd, const char *path) {
 }
 
 void fs_pwd(int cwd) {
+    if (initramfs_available()) {
+        initramfs_pwd(cwd);
+        return;
+    }
     char buf[128];
     size_t len = 0;
     int cur = cwd;
@@ -106,6 +171,10 @@ void fs_pwd(int cwd) {
 }
 
 void fs_ls(int node) {
+    if (initramfs_available()) {
+        initramfs_ls(node);
+        return;
+    }
     if (node < 0 || node >= FS_MAX_NODES) return;
     const struct fs_node *d = &fs_nodes[node];
     if (!d->is_dir) {

@@ -11,11 +11,12 @@
 #include "paging.h"
 #include "pmm.h"
 #include "rtc_util.h"
+#include "smp.h"
 #include "strutil.h"
 #include "version.h"
 
 static void cmd_help(void) {
-    log_printf("Commands: help, clear, time, mem, memtest, cputest, ls, cd, pwd, echo, ver\n");
+    log_printf("Commands: help, clear, time, mem, memtest, cputest, ls, cd, pwd, cat, echo, ver\n");
     log_printf("  memtest [--size N] [--time T] [--pages N]\n");
     log_printf("  sizes: 1g 512m 256k (also gb/mb/kb/gig/meg)\n");
     log_printf("  time: 20s 1min 2minutes\n");
@@ -44,6 +45,33 @@ static void cmd_clear(void) {
 
 static void cmd_ver(void) {
     log_printf("BitOS v%s (build %s %s)\n", BITOS_VERSION, __DATE__, __TIME__);
+}
+
+static void cmd_cat(const char *path, int cwd) {
+    if (!path) {
+        log_printf("cat: missing file\n");
+        return;
+    }
+    int node = fs_resolve(cwd, path);
+    if (node < 0) {
+        log_printf("cat: not found\n");
+        return;
+    }
+    if (fs_is_dir(node)) {
+        log_printf("cat: is a directory\n");
+        return;
+    }
+
+    const uint8_t *data = NULL;
+    uint64_t size = 0;
+    if (!fs_read_file(node, &data, &size) || !data) {
+        log_printf("cat: unreadable\n");
+        return;
+    }
+    for (uint64_t i = 0; i < size; ++i) {
+        log_printf("%c", (char)data[i]);
+    }
+    if (size == 0 || data[size - 1] != '\n') log_printf("\n");
 }
 
 static inline uint64_t rdtsc(void) {
@@ -81,7 +109,7 @@ static void cmd_memtest(int pages, uint64_t bytes_limit, uint64_t seconds_limit)
         }
     }
 
-    if (mp_request.response && mp_request.response->cpu_count > 1) {
+    if (!smp_is_initialized() && smp_cpu_count() > 1) {
         log_printf("memtest: SMP not initialized, using 1 core\n");
     }
 
@@ -186,6 +214,12 @@ int commands_exec(int argc, char **argv, struct command_ctx *ctx) {
             } else {
                 *ctx->cwd = target;
             }
+        }
+    } else if (str_eq(argv[0], "cat")) {
+        if (argc < 2) {
+            cmd_cat(NULL, *ctx->cwd);
+        } else {
+            cmd_cat(argv[1], *ctx->cwd);
         }
     } else if (str_eq(argv[0], "echo")) {
         if (argc > 1) {

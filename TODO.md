@@ -15,10 +15,10 @@
 - [x] SMP bring-up (Limine MP).
 - [x] PIT/APIC timer + timekeeping (uptime and RTC sync).
 - [x] Page fault handler with fault reason logging.
+- [x] Limine module loading as an initramfs.
+- [x] Basic VFS layer and in-memory FS for `ls/cd/cat`.
 
 ## Next
-- [ ] Basic VFS layer and in-memory FS for `ls/cd/cat`.
-- [ ] Limine module loading as an initramfs.
 - [ ] Heap free list (kfree) and reallocation support.
 - [ ] Simple shell improvements (history, editing, tab completion).
 - [ ] Syscall ABI and userspace ELF loader.

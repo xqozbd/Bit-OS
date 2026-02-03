@@ -44,6 +44,15 @@ xorriso -as mkisofs \
   iso_root -o "$ISO"
 
 # Install Limine BIOS stage
-./limine/limine bios-install "$ISO"
+if [ ! -x ./limine/limine ]; then
+  echo "Limine BIOS installer not found, building..."
+  (cd limine && make limine) || true
+fi
+
+if [ -x ./limine/limine ]; then
+  ./limine/limine bios-install "$ISO"
+else
+  echo "Warning: ./limine/limine not available. BIOS install step skipped."
+fi
 
 echo "ISO built: $ISO"

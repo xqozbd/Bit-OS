@@ -10,6 +10,7 @@
 #include "fb_printf.h"
 #include "heap.h"
 #include "idt.h"
+#include "initramfs.h"
 #include "log.h"
 #include "monitor.h"
 #include "paging.h"
@@ -65,6 +66,7 @@ static void kmain_stage2(void) {
     pmm_init();
     paging_init();
     heap_init();
+    initramfs_init_from_limine();
     smp_init();
 
     struct limine_framebuffer *fb = framebuffer_request.response->framebuffers[0];
