@@ -35,6 +35,16 @@ struct idt_ptr {
 
 static volatile struct idt_entry idt[256];
 
+static inline uint64_t read_cr2(void) {
+#if defined(__GNUC__) || defined(__clang__)
+    uint64_t val;
+    __asm__ volatile ("mov %%cr2, %0" : "=r"(val));
+    return val;
+#else
+    return 0;
+#endif
+}
+
 static inline uint16_t read_cs(void) {
 #if defined(__GNUC__) || defined(__clang__)
     uint16_t cs;
@@ -84,11 +94,28 @@ static void exception_common(uint8_t vec, uint64_t err, int has_err) {
 ISR_NOERR(0)  ISR_NOERR(1)  ISR_NOERR(2)  ISR_NOERR(3)
 ISR_NOERR(4)  ISR_NOERR(5)  ISR_NOERR(6)  ISR_NOERR(7)
 ISR_ERR(8)    ISR_NOERR(9)  ISR_ERR(10)   ISR_ERR(11)
-ISR_ERR(12)   ISR_ERR(13)   ISR_ERR(14)   ISR_NOERR(15)
+ISR_ERR(12)   ISR_ERR(13)                 ISR_NOERR(15)
 ISR_NOERR(16) ISR_ERR(17)   ISR_NOERR(18) ISR_NOERR(19)
 ISR_NOERR(20) ISR_ERR(21)   ISR_NOERR(22) ISR_NOERR(23)
 ISR_NOERR(24) ISR_NOERR(25) ISR_NOERR(26) ISR_NOERR(27)
 ISR_NOERR(28) ISR_NOERR(29) ISR_NOERR(30) ISR_NOERR(31)
+
+__attribute__((interrupt, target("general-regs-only"), used))
+void isr_err_14(struct interrupt_frame *frame, uint64_t error_code) {
+    uint64_t cr2 = read_cr2();
+    log_printf("\nEXCEPTION 14 err=0x%x", (unsigned)error_code);
+    log_printf(" cr2=%p rip=%p cs=0x%x rflags=0x%x rsp=%p ss=0x%x\n",
+               (void *)cr2, (void *)frame->rip, (unsigned)frame->cs,
+               (unsigned)frame->rflags, (void *)frame->rsp, (unsigned)frame->ss);
+    log_printf("PF: P=%u W=%u U=%u R=%u I=%u\n",
+               (unsigned)(error_code & 1),
+               (unsigned)((error_code >> 1) & 1),
+               (unsigned)((error_code >> 2) & 1),
+               (unsigned)((error_code >> 3) & 1),
+               (unsigned)((error_code >> 4) & 1));
+    log_printf("System halted.\n");
+    halt_forever();
+}
 
 __attribute__((interrupt, target("general-regs-only"), used))
 void isr_irq0(struct interrupt_frame *frame) {

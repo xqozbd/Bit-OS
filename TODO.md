@@ -13,10 +13,10 @@
 - [x] Interrupt-driven PS/2 keyboard (IRQ1) with key repeat.
 - [x] Add a minimal console with built-in commands (help, ls, cd, pwd, time, mem, echo, ver, clear).
 - [x] SMP bring-up (Limine MP).
+- [x] PIT/APIC timer + timekeeping (uptime and RTC sync).
+- [x] Page fault handler with fault reason logging.
 
 ## Next
-- [ ] PIT/APIC timer + timekeeping (uptime and RTC sync).
-- [ ] Page fault handler with fault reason logging.
 - [ ] Basic VFS layer and in-memory FS for `ls/cd/cat`.
 - [ ] Limine module loading as an initramfs.
 - [ ] Heap free list (kfree) and reallocation support.
