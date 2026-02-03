@@ -17,8 +17,13 @@ static uint32_t fb_bytes_per_pixel = 0;
 
 /* cursor (pixel coordinates) */
 static uint32_t cursor_x = 0, cursor_y = 0;
-/* Horizontal glyph width stays 8; vertical height doubled to 16 */
-static uint32_t char_w = 8, char_h = 16;
+/* base font dimensions */
+static uint32_t char_w = 8, char_h = 8;
+static uint32_t char_scale = 2;
+static uint32_t line_gap = 4;
+static uint32_t margin_x = 24, margin_y = 24;
+static uint32_t tab_width = 4;
+static uint32_t char_spacing = 2;
 
 /* current colors */
 static uint32_t cur_fg = 0xFFFFFF, cur_bg = 0x000000;
@@ -63,27 +68,25 @@ static void put_pixel(int x, int y, uint32_t rgb24) {
     }
 }
 
-/*
- * draw character at pixel coordinates (x,y).
- * Uses font8x8_basic (8 rows). We duplicate each row vertically so
- * font 8x8 becomes 8x16 on screen.
- */
+static uint32_t line_step(void) {
+    return char_h * char_scale + line_gap;
+}
+
+/* draw character at pixel coordinates (x,y) with scaling */
 static void draw_char_px(uint32_t x, uint32_t y, char c, uint32_t fg, uint32_t bg) {
     unsigned char uc = (unsigned char)c;
     if (uc > 127) uc = '?';
-    const unsigned char *glyph = font8x8_basic[uc];
+    const unsigned char *glyph = (const unsigned char *)font8x8_basic[uc];
 
-    /* glyph has 8 rows; for each row we draw two pixel rows */
-    for (uint32_t row = 0; row < 8; ++row) {
+    for (uint32_t row = 0; row < char_h; ++row) {
         unsigned char rowbits = glyph[row];
-        /* compute the y positions for the doubled rows */
-        uint32_t y_top = y + row * 2;
-        uint32_t y_bottom = y_top + 1;
-
         for (uint32_t col = 0; col < char_w; ++col) {
             uint32_t color = (rowbits & (1u << col)) ? fg : bg;
-            put_pixel(x + col, y_top, color);
-            put_pixel(x + col, y_bottom, color);
+            uint32_t px = x + col * char_scale;
+            uint32_t py = y + row * char_scale;
+            for (uint32_t sy = 0; sy < char_scale; ++sy)
+                for (uint32_t sx = 0; sx < char_scale; ++sx)
+                    put_pixel(px + sx, py + sy, color);
         }
     }
 }
@@ -102,44 +105,47 @@ static void copy_rows(uint32_t dst_row, uint32_t src_row, uint32_t row_count) {
     }
 }
 
-static void clear_last_row_pixels(uint32_t row) {
+static void clear_row_bg(uint32_t row) {
     uint8_t *addr = fb_ptr + (size_t)row * fb_pitch;
-    for (uint64_t i = 0; i < fb_pitch; ++i) addr[i] = 0;
+    uint32_t pixel = pack_pixel(cur_bg);
+
+    if (fb_bytes_per_pixel == 4) {
+        uint32_t *p = (uint32_t *)addr;
+        for (uint64_t i = 0; i < fb_pitch / 4; ++i) p[i] = pixel;
+    } else if (fb_bytes_per_pixel == 3) {
+        for (uint64_t i = 0; i < fb_pitch; i += 3) {
+            addr[i + 0] = pixel & 0xFF;
+            addr[i + 1] = (pixel >> 8) & 0xFF;
+            addr[i + 2] = (pixel >> 16) & 0xFF;
+        }
+    } else if (fb_bytes_per_pixel == 2) {
+        uint16_t v = (uint16_t)(pixel & 0xFFFF);
+        for (uint64_t i = 0; i < fb_pitch; i += 2) {
+            addr[i + 0] = v & 0xFF;
+            addr[i + 1] = (v >> 8) & 0xFF;
+        }
+    }
 }
 
-/*
- * Scroll up by n_chars character-rows (n_chars * char_h pixels).
- * char_h is now 16 (8 glyph rows * 2 duplicate rows).
- */
-static void scroll_up_chars(uint32_t n_chars) {
-    if (!g_fb || n_chars == 0) return;
-
-    /* number of pixel rows to move/skip */
-    uint32_t pixel_rows = n_chars * char_h;
-
-    /* rows_to_move = remaining pixel rows after removing the top pixel_rows */
-    if (pixel_rows >= fb_height) {
-        /* clear screen */
-        for (size_t i = 0; i < fb_pitch * fb_height; ++i) fb_ptr[i] = 0;
-        cursor_x = cursor_y = 0;
+static void scroll_up_pixels(uint32_t n_rows) {
+    if (!g_fb || n_rows == 0) return;
+    if (n_rows >= fb_height) {
+        for (uint32_t r = 0; r < fb_height; ++r) clear_row_bg(r);
+        cursor_x = margin_x;
+        cursor_y = margin_y;
         return;
     }
-
-    uint32_t rows_to_move = fb_height - pixel_rows;
-
-    /* move the block up */
-    copy_rows(0, pixel_rows, rows_to_move);
-
-    /* clear bottom pixel_rows */
-    for (uint32_t r = rows_to_move; r < fb_height; ++r) clear_last_row_pixels(r);
+    uint32_t rows_to_move = fb_height - n_rows;
+    copy_rows(0, n_rows, rows_to_move);
+    for (uint32_t r = rows_to_move; r < fb_height; ++r) clear_row_bg(r);
 }
 
 static void new_line(void) {
-    cursor_x = 0;
-    cursor_y += char_h;
-    if (cursor_y + char_h > fb_height) {
-        scroll_up_chars(1);
-        cursor_y -= char_h;
+    cursor_x = margin_x;
+    cursor_y += line_step();
+    if (cursor_y + char_h * char_scale > (fb_height - margin_y)) {
+        scroll_up_pixels(line_step());
+        cursor_y -= line_step();
     }
 }
 
@@ -147,11 +153,24 @@ static void new_line(void) {
 void fb_putc(char c) {
     if (!g_fb) return;
     if (c == '\n') { new_line(); return; }
-    if (c == '\r') { cursor_x = 0; return; }
+    if (c == '\r') { cursor_x = margin_x; return; }
+    if (c == '\t') {
+        uint32_t step = char_w * char_scale + char_spacing;
+        uint32_t tab_px = tab_width * step;
+        uint32_t next = ((cursor_x - margin_x + tab_px) / tab_px) * tab_px + margin_x;
+        cursor_x = next;
+        return;
+    }
+    if (c == '\b') {
+        uint32_t step = char_w * char_scale + char_spacing;
+        if (cursor_x >= margin_x + step) cursor_x -= step;
+        draw_char_px(cursor_x, cursor_y, ' ', cur_fg, cur_bg);
+        return;
+    }
 
     draw_char_px(cursor_x, cursor_y, c, cur_fg, cur_bg);
-    cursor_x += char_w;
-    if (cursor_x + char_w > fb_width) new_line();
+    cursor_x += char_w * char_scale + char_spacing;
+    if (cursor_x + char_w * char_scale > (fb_width - margin_x)) new_line();
 }
 
 void fb_puts(const char *s) { while (*s) fb_putc(*s++); }
@@ -184,17 +203,31 @@ void fb_init(struct limine_framebuffer *fb, uint32_t fg, uint32_t bg) {
     fb_gm_size = fb->green_mask_size; fb_gm_shift = fb->green_mask_shift;
     fb_bm_size = fb->blue_mask_size; fb_bm_shift = fb->blue_mask_shift;
     fb_bytes_per_pixel = (fb_bpp + 7) / 8;
-    cursor_x = cursor_y = 0;
+    cursor_x = margin_x;
+    cursor_y = margin_y;
     cur_fg = fg; cur_bg = bg;
 
     /* clear framebuffer to bg color */
-    for (uint32_t y = 0; y < fb_height; ++y)
-        for (uint32_t x = 0; x < fb_width; ++x)
-            put_pixel(x, y, bg);
+    for (uint32_t y = 0; y < fb_height; ++y) clear_row_bg(y);
 }
 
-void fb_clear(void) { fb_init(g_fb, cur_fg, cur_bg); cursor_x = cursor_y = 0; }
+void fb_clear(void) { fb_init(g_fb, cur_fg, cur_bg); cursor_x = margin_x; cursor_y = margin_y; }
 void fb_set_colors(uint32_t fg, uint32_t bg) { cur_fg = fg; cur_bg = bg; }
+void fb_set_layout(uint32_t scale, uint32_t gap, uint32_t mx, uint32_t my, uint32_t tabw) {
+    fb_set_layout_ex(scale, gap, mx, my, tabw, char_spacing);
+}
+
+void fb_set_layout_ex(uint32_t scale, uint32_t gap, uint32_t mx, uint32_t my, uint32_t tabw, uint32_t spacing) {
+    if (scale == 0) scale = 1;
+    char_scale = scale;
+    line_gap = gap;
+    margin_x = mx;
+    margin_y = my;
+    tab_width = (tabw == 0) ? 4 : tabw;
+    char_spacing = spacing;
+    cursor_x = margin_x;
+    cursor_y = margin_y;
+}
 
 void fb_printf(const char *fmt, ...) {
     if (!g_fb) return;

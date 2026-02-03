@@ -102,7 +102,7 @@ void kmain(void) {
     fb_init(fb, 0xE6E6E6, 0x0B0F14);
     fb_set_layout_ex(3, 4, 24, 24, 4, 2);
 
-    fb_printf("BitOS booted.\n");
+    fb_printf("Hello BitOS!\n");
     fb_printf("Width: %u Height: %u Pitch: %u BPP: %u\n",
               (unsigned)fb->width, (unsigned)fb->height, (unsigned)fb->pitch, (unsigned)fb->bpp);
 
