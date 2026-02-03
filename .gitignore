@@ -6,3 +6,4 @@ iso_root/*
 obj/*
 iso_root/boot/bitos
 BitOS.iso
+/limine
