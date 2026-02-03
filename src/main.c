@@ -6,6 +6,7 @@
 #include "boot_screen.h"
 #include "console.h"
 #include "cpu.h"
+#include "cpu_info.h"
 #include "fb_printf.h"
 #include "heap.h"
 #include "idt.h"
@@ -13,7 +14,9 @@
 #include "monitor.h"
 #include "paging.h"
 #include "pmm.h"
+#include "smp.h"
 #include "timer.h"
+#include "watchdog.h"
 
 /* Bootstrap stack: keep it inside the kernel image so it's mapped in our page tables. */
 #define KSTACK_SIZE (64 * 1024)
@@ -24,12 +27,15 @@ static void kmain_stage2(void);
 __attribute__((noreturn, noinline))
 static void stack_switch_and_jump(void (*entry)(void), void *stack_top) {
 #if defined(__GNUC__) || defined(__clang__)
+    uintptr_t sp = (uintptr_t)stack_top;
+    sp &= ~0xFULL; /* 16-byte align */
+    sp -= 8;       /* SysV ABI: entry RSP%16 == 8 */
     __asm__ volatile(
         "mov %0, %%rsp\n"
         "xor %%rbp, %%rbp\n"
         "jmp *%1\n"
         :
-        : "r"(stack_top), "r"(entry)
+        : "r"(sp), "r"(entry)
         : "memory");
 #else
     (void)stack_top;
@@ -59,6 +65,7 @@ static void kmain_stage2(void) {
     pmm_init();
     paging_init();
     heap_init();
+    smp_init();
 
     struct limine_framebuffer *fb = framebuffer_request.response->framebuffers[0];
     fb_init(fb, 0xE6E6E6, 0x0B0F14);
@@ -69,7 +76,17 @@ static void kmain_stage2(void) {
     boot_screen_print();
     monitor_init();
     timer_init();
+    watchdog_init(1);
     cpu_enable_interrupts();
+    if (cpu_calibrate_tsc_hz_pit(100)) {
+        uint64_t hz = 0;
+        if (cpu_get_tsc_hz(&hz)) {
+            log_printf("TSC: %u Hz (PIT calibrated)\n", (unsigned)hz);
+        }
+    } else {
+        log_printf("TSC: unavailable\n");
+    }
     console_init();
+    watchdog_checkpoint_boot_ok();
     console_run();
 }
