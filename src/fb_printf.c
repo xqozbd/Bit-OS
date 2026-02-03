@@ -229,9 +229,37 @@ void fb_set_layout_ex(uint32_t scale, uint32_t gap, uint32_t mx, uint32_t my, ui
     cursor_y = margin_y;
 }
 
-void fb_printf(const char *fmt, ...) {
+void fb_set_cursor_px(uint32_t x, uint32_t y) {
+    cursor_x = x;
+    cursor_y = y;
+}
+
+uint32_t fb_line_height(void) {
+    return line_step();
+}
+
+uint32_t fb_margin_x(void) {
+    return margin_x;
+}
+
+uint32_t fb_margin_y(void) {
+    return margin_y;
+}
+
+void fb_draw_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t rgb24) {
     if (!g_fb) return;
-    va_list ap; va_start(ap, fmt);
+    if (x >= fb_width || y >= fb_height) return;
+    if (x + w > fb_width) w = fb_width - x;
+    if (y + h > fb_height) h = fb_height - y;
+    for (uint32_t py = y; py < y + h; ++py) {
+        for (uint32_t px = x; px < x + w; ++px) {
+            put_pixel((int)px, (int)py, rgb24);
+        }
+    }
+}
+
+void fb_vprintf(const char *fmt, va_list ap) {
+    if (!g_fb) return;
     const char *p = fmt; char numbuf[64];
 
     while (*p) {
@@ -251,6 +279,10 @@ void fb_printf(const char *fmt, ...) {
         else fb_putc(*p);
         ++p;
     }
+}
 
+void fb_printf(const char *fmt, ...) {
+    va_list ap; va_start(ap, fmt);
+    fb_vprintf(fmt, ap);
     va_end(ap);
 }

@@ -40,10 +40,6 @@ void console_init(void) {
 void console_run(void) {
     int cwd = fs_root();
     char line[128];
-    char clipboard[128] = {0};
-    char history[16][128];
-    int hist_len = 0;
-    int hist_pos = -1;
     int len = 0;
     struct command_ctx ctx = { .cwd = &cwd };
 
@@ -55,62 +51,6 @@ void console_run(void) {
             did_work = 1;
 
             if (ch == '\r') ch = '\n';
-            if (ch == KB_KEY_UP) {
-                if (hist_len == 0) continue;
-                if (hist_pos < hist_len - 1) hist_pos++;
-                int idx = hist_len - 1 - hist_pos;
-                while (len > 0) {
-                    len--;
-                    line[len] = '\0';
-                    log_printf("\b");
-                }
-                for (int i = 0; history[idx][i] && len + 1 < (int)sizeof(line); ++i) {
-                    line[len++] = history[idx][i];
-                    line[len] = '\0';
-                    log_printf("%c", history[idx][i]);
-                }
-                continue;
-            }
-            if (ch == KB_KEY_DOWN) {
-                if (hist_len == 0) continue;
-                if (hist_pos > 0) {
-                    hist_pos--;
-                    int idx = hist_len - 1 - hist_pos;
-                    while (len > 0) {
-                        len--;
-                        line[len] = '\0';
-                        log_printf("\b");
-                    }
-                    for (int i = 0; history[idx][i] && len + 1 < (int)sizeof(line); ++i) {
-                        line[len++] = history[idx][i];
-                        line[len] = '\0';
-                        log_printf("%c", history[idx][i]);
-                    }
-                } else if (hist_pos == 0) {
-                    hist_pos = -1;
-                    while (len > 0) {
-                        len--;
-                        line[len] = '\0';
-                        log_printf("\b");
-                    }
-                }
-                continue;
-            }
-            if (ch == KB_KEY_CTRL_C) {
-                for (int i = 0; i < (int)sizeof(clipboard); ++i) {
-                    clipboard[i] = line[i];
-                    if (line[i] == '\0') break;
-                }
-                continue;
-            }
-            if (ch == KB_KEY_CTRL_V) {
-                for (int i = 0; clipboard[i] && len + 1 < (int)sizeof(line); ++i) {
-                    line[len++] = clipboard[i];
-                    line[len] = '\0';
-                    log_printf("%c", clipboard[i]);
-                }
-                continue;
-            }
             if (ch == '\b') {
                 if (len > 0) {
                     len--;
@@ -131,26 +71,8 @@ void console_run(void) {
                             log_printf("Unknown command. Type 'help'.\n");
                         }
                     }
-                    if (hist_len < (int)(sizeof(history) / sizeof(history[0]))) {
-                        for (int i = 0; i < (int)sizeof(history[0]); ++i) {
-                            history[hist_len][i] = line[i];
-                            if (line[i] == '\0') break;
-                        }
-                        hist_len++;
-                    } else {
-                        for (int i = 1; i < (int)(sizeof(history) / sizeof(history[0])); ++i) {
-                            for (int j = 0; j < (int)sizeof(history[0]); ++j) {
-                                history[i - 1][j] = history[i][j];
-                            }
-                        }
-                        for (int j = 0; j < (int)sizeof(history[0]); ++j) {
-                            history[hist_len - 1][j] = line[j];
-                            if (line[j] == '\0') break;
-                        }
-                    }
                 }
                 len = 0;
-                hist_pos = -1;
                 log_printf("> ");
                 continue;
             }

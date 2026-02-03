@@ -109,30 +109,6 @@ int paging_map_4k(uint64_t virt, uint64_t phys, uint64_t flags) {
     return 0;
 }
 
-int paging_unmap_4k(uint64_t virt) {
-    if (!g_pml4) return -1;
-
-    uint64_t pml4_i = (virt >> 39) & 0x1FF;
-    uint64_t pdpt_i = (virt >> 30) & 0x1FF;
-    uint64_t pd_i   = (virt >> 21) & 0x1FF;
-    uint64_t pt_i   = (virt >> 12) & 0x1FF;
-
-    if ((g_pml4[pml4_i] & PTE_P) == 0) return -1;
-    uint64_t *pdpt = table_from_entry(g_pml4[pml4_i]);
-    if ((pdpt[pdpt_i] & PTE_P) == 0) return -1;
-    uint64_t *pd = table_from_entry(pdpt[pdpt_i]);
-    if ((pd[pd_i] & PTE_P) == 0 || (pd[pd_i] & PTE_PS)) return -1;
-    uint64_t *pt = table_from_entry(pd[pd_i]);
-
-    pt[pt_i] = 0;
-#if defined(__GNUC__) || defined(__clang__)
-    __asm__ volatile ("invlpg (%0)" : : "r"(virt) : "memory");
-#else
-    (void)virt;
-#endif
-    return 0;
-}
-
 static inline void load_cr3(uint64_t phys) {
 #if defined(__GNUC__) || defined(__clang__)
     __asm__ volatile ("mov %0, %%cr3" : : "r"(phys) : "memory");

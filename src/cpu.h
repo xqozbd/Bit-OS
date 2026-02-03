@@ -9,7 +9,6 @@
 #define HALT() do {} while (0)
 #endif
 
-__attribute__((noreturn))
 static inline void halt_forever(void) {
     for (;;) { HALT(); }
 }

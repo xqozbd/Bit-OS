@@ -1,10 +1,24 @@
 # BitOS TODO
 
-- Set up IDT and exception handlers (avoid triple-faults, enable debug output).
-- Add serial logger (COM1) for early-boot diagnostics.
-- Implement physical memory map parsing (Limine memmap request).
-- Build a simple physical frame allocator (bitmap).
-- Add paging + higher-half mapping.
-- Create a minimal kernel heap allocator.
-- Add a framebuffer status banner (BitOS version/build info).
-- Add keyboard input (PS/2 or HID later).
+## Completed
+- [x] Grab info from CMOS such as time and date.
+- [x] Set up IDT and exception handlers (avoid triple-faults, enable debug output).
+- [x] Add serial logger (COM1) for early-boot diagnostics.
+- [x] Implement physical memory map parsing (Limine memmap request).
+- [x] Build a simple physical frame allocator (bitmap).
+- [x] Add paging + higher-half mapping.
+- [x] Create a minimal kernel heap allocator.
+- [x] Add a framebuffer status banner (BitOS version/build info).
+- [x] Add keyboard input (PS/2 or HID later).
+- [x] Add a minimal console with built-in commands (help, ls, cd, pwd, time, mem, echo, ver, clear).
+
+## Next
+- [ ] Interrupt-driven PS/2 keyboard (IRQ1) with proper key repeat.
+- [ ] PIT/APIC timer + timekeeping (uptime and RTC sync).
+- [ ] Page fault handler with fault reason logging.
+- [ ] Basic VFS layer and in-memory FS for `ls/cd/cat`.
+- [ ] Limine module loading as an initramfs.
+- [ ] Heap free list (kfree) and reallocation support.
+- [ ] Simple shell improvements (history, editing, tab completion).
+- [ ] Syscall ABI and userspace ELF loader.
+- [ ] SMP bring-up and per-CPU data.

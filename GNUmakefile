@@ -23,6 +23,7 @@ override CFLAGS += \
     -Wextra \
     -std=gnu11 \
     -ffreestanding \
+    -fcf-protection=none \
     -fno-stack-protector \
     -fno-stack-check \
     -fno-lto \
@@ -57,8 +58,9 @@ override LDFLAGS += \
     --gc-sections \
     -T linker.lds
 
-# Source discovery
-override SRCFILES := $(shell find -L src -type f 2>/dev/null | LC_ALL=C sort)
+# Source discovery (exclude broken/unused sources)
+EXCLUDE :=
+override SRCFILES := $(filter-out $(EXCLUDE),$(shell find -L src -type f 2>/dev/null | LC_ALL=C sort))
 override CFILES := $(filter %.c,$(SRCFILES))
 override ASFILES := $(filter %.S,$(SRCFILES))
 override NASMFILES := $(filter %.asm,$(SRCFILES))

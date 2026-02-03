@@ -21,8 +21,6 @@ static inline uint8_t inb(uint16_t port) { (void)port; return 0; }
 #endif
 
 static int shift_down = 0;
-static int ctrl_down = 0;
-static int extended = 0;
 
 static const char scancode_set1[128] = {
     0,  27, '1','2','3','4','5','6','7','8','9','0','-','=', '\b',
@@ -56,14 +54,12 @@ int kb_poll_char(void) {
     uint8_t sc = inb(KBD_DATA);
 
     if (sc == 0xE0) {
-        extended = 1;
-        return -1;
+        return -1; /* Ignore extended for now */
     }
 
     if (sc & 0x80) {
         uint8_t rel = sc & 0x7F;
         if (rel == 0x2A || rel == 0x36) shift_down = 0;
-        if (rel == 0x1D) ctrl_down = 0;
         return -1;
     }
 
@@ -71,25 +67,8 @@ int kb_poll_char(void) {
         shift_down = 1;
         return -1;
     }
-    if (sc == 0x1D) {
-        ctrl_down = 1;
-        return -1;
-    }
-
-    if (extended) {
-        extended = 0;
-        if (sc == 0x48) return KB_KEY_UP;
-        if (sc == 0x50) return KB_KEY_DOWN;
-        if (sc == 0x4B) return KB_KEY_LEFT;
-        if (sc == 0x4D) return KB_KEY_RIGHT;
-        return -1;
-    }
 
     char c = shift_down ? scancode_set1_shift[sc] : scancode_set1[sc];
     if (c == 0) return -1;
-    if (ctrl_down) {
-        if (c == 'c' || c == 'C') return KB_KEY_CTRL_C;
-        if (c == 'v' || c == 'V') return KB_KEY_CTRL_V;
-    }
     return (int)c;
 }

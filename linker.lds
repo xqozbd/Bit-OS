@@ -16,6 +16,7 @@ SECTIONS
 {
 
     . = 0xffffffff80000000;
+    __kernel_start = .;
 
     .limine_requests : {
         KEEP(*(.limine_requests_start))
@@ -51,6 +52,8 @@ SECTIONS
         *(.bss .bss.*)
         *(COMMON)
     } :data
+
+    __kernel_end = .;
 
     /DISCARD/ : {
         *(.eh_frame*)
