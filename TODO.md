@@ -10,10 +10,11 @@
 - [x] Create a minimal kernel heap allocator.
 - [x] Add a framebuffer status banner (BitOS version/build info).
 - [x] Add keyboard input (PS/2 or HID later).
+- [x] Interrupt-driven PS/2 keyboard (IRQ1) with key repeat.
 - [x] Add a minimal console with built-in commands (help, ls, cd, pwd, time, mem, echo, ver, clear).
+- [x] SMP bring-up (Limine MP).
 
 ## Next
-- [ ] Interrupt-driven PS/2 keyboard (IRQ1) with proper key repeat.
 - [ ] PIT/APIC timer + timekeeping (uptime and RTC sync).
 - [ ] Page fault handler with fault reason logging.
 - [ ] Basic VFS layer and in-memory FS for `ls/cd/cat`.

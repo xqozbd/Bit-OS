@@ -5,6 +5,7 @@
 #include "pic.h"
 #include "pit.h"
 #include "watchdog.h"
+#include "keyboard.h"
 
 static uint64_t g_ticks = 0;
 static uint64_t g_pit_ticks = 0;
@@ -23,6 +24,7 @@ void timer_pit_tick(void) {
     g_ticks++;
     g_pit_ticks++;
     monitor_tick();
+    kb_tick();
     watchdog_tick();
 }
 

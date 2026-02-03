@@ -7,6 +7,7 @@
 #include "pic.h"
 #include "apic.h"
 #include "timer.h"
+#include "keyboard.h"
 
 /* IDT + exceptions */
 struct interrupt_frame {
@@ -97,6 +98,13 @@ void isr_irq0(struct interrupt_frame *frame) {
 }
 
 __attribute__((interrupt, target("general-regs-only"), used))
+void isr_irq1(struct interrupt_frame *frame) {
+    (void)frame;
+    kb_irq_handler();
+    pic_send_eoi(1);
+}
+
+__attribute__((interrupt, target("general-regs-only"), used))
 void isr_apic_timer(struct interrupt_frame *frame) {
     (void)frame;
     timer_apic_tick();
@@ -154,6 +162,7 @@ void idt_init(void) {
     idt_set_gate(31, isr_noerr_31);
 
     idt_set_gate(32, isr_irq0);
+    idt_set_gate(33, isr_irq1);
     idt_set_gate(0x40, isr_apic_timer);
     idt_set_gate(0xFF, isr_spurious);
 
