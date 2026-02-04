@@ -23,6 +23,9 @@ static uint32_t g_cpu_count = 1;
 static uint32_t g_next_tid = 1;
 static uint32_t g_quantum = 5;
 static int g_sched_ready = 0;
+static volatile uint64_t g_sched_ticks = 0;
+static const uint32_t g_max_prio = 4;
+static const uint32_t g_age_step = 20;
 
 static struct thread g_boot_thread;
 
@@ -53,13 +56,29 @@ static void runq_push(struct runqueue *rq, struct thread *t) {
     rq->tail = t;
 }
 
-static struct thread *runq_pop(struct runqueue *rq) {
-    struct thread *t = rq->head;
-    if (!t) return NULL;
-    rq->head = t->next;
-    if (!rq->head) rq->tail = NULL;
-    t->next = NULL;
-    return t;
+static struct thread *runq_pick(struct runqueue *rq) {
+    struct thread *best = NULL;
+    struct thread *best_prev = NULL;
+    struct thread *prev = NULL;
+    struct thread *cur = rq->head;
+    while (cur) {
+        if (cur->dyn_prio > g_max_prio) cur->dyn_prio = g_max_prio;
+        if (!best || cur->dyn_prio > best->dyn_prio) {
+            best = cur;
+            best_prev = prev;
+        }
+        prev = cur;
+        cur = cur->next;
+    }
+    if (!best) return NULL;
+    if (best_prev) {
+        best_prev->next = best->next;
+    } else {
+        rq->head = best->next;
+    }
+    if (rq->tail == best) rq->tail = best_prev;
+    best->next = NULL;
+    return best;
 }
 
 void sched_enqueue(struct thread *t) {
@@ -67,6 +86,14 @@ void sched_enqueue(struct thread *t) {
     if (!g_runq) return;
     uint32_t cpu = t->cpu;
     if (cpu >= g_cpu_count) cpu = 0;
+    uint64_t waited = 0;
+    if (g_sched_ticks > t->last_run_tick) {
+        waited = g_sched_ticks - t->last_run_tick;
+    }
+    uint32_t boost = (uint32_t)(waited / g_age_step);
+    uint32_t target = t->base_prio + boost;
+    if (target > g_max_prio) target = g_max_prio;
+    t->dyn_prio = target;
     runq_push(&g_runq[cpu], t);
 }
 
@@ -112,6 +139,12 @@ void sched_init(void) {
     g_boot_thread.cpu = smp_bsp_index();
     g_boot_thread.id = sched_next_tid();
     g_boot_thread.state = THREAD_RUNNING;
+    g_boot_thread.base_prio = 3;
+    g_boot_thread.dyn_prio = 3;
+    g_boot_thread.cpu_ticks = 0;
+    g_boot_thread.last_run_tick = 0;
+    g_boot_thread.mem_current = 0;
+    g_boot_thread.mem_peak = 0;
     g_boot_thread.name = "bootstrap";
     g_current[g_boot_thread.cpu] = &g_boot_thread;
 
@@ -153,10 +186,13 @@ void sched_init(void) {
 
 void sched_tick(void) {
     if (!g_sched_ready) return;
+    g_sched_ticks++;
     uint32_t cpu = sched_cpu_index();
     static uint32_t ticks[256];
     if (cpu >= 256) return;
     ticks[cpu]++;
+    struct thread *cur = g_current[cpu];
+    if (cur) cur->cpu_ticks++;
     if (ticks[cpu] >= g_quantum) {
         ticks[cpu] = 0;
         if (g_runq && g_runq[cpu].head) {
@@ -178,7 +214,7 @@ void sched_yield(void) {
     cpu_disable_interrupts();
     uint32_t cpu = sched_cpu_index();
     struct thread *prev = g_current[cpu];
-    struct thread *next = runq_pop(&g_runq[cpu]);
+    struct thread *next = runq_pick(&g_runq[cpu]);
     if (!next) {
         g_need_resched[cpu] = 0;
         cpu_enable_interrupts();
@@ -198,10 +234,13 @@ void sched_yield(void) {
 
     if (prev && prev->state == THREAD_RUNNING && prev != g_idle[cpu]) {
         prev->state = THREAD_READY;
+        prev->last_run_tick = g_sched_ticks;
+        prev->dyn_prio = prev->base_prio;
         runq_push(&g_runq[cpu], prev);
     }
 
     next->state = (next->state == THREAD_IDLE) ? THREAD_IDLE : THREAD_RUNNING;
+    next->last_run_tick = g_sched_ticks;
     g_current[cpu] = next;
 
     if (!prev) {

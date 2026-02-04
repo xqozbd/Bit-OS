@@ -34,11 +34,19 @@ struct thread {
     uint32_t cpu;
     uint32_t id;
     uint32_t state;
+    uint32_t base_prio;
+    uint32_t dyn_prio;
+    uint64_t cpu_ticks;
+    uint64_t last_run_tick;
+    uint64_t mem_current;
+    uint64_t mem_peak;
     const char *name;
 };
 
 struct thread *thread_current(void);
 struct thread *thread_create(void (*entry)(void *), void *arg, size_t stack_size, const char *name);
 void thread_exit(void) __attribute__((noreturn));
+void thread_account_alloc(struct thread *t, size_t bytes);
+void thread_account_free(struct thread *t, size_t bytes);
 
 #endif /* KERNEL_THREAD_H */

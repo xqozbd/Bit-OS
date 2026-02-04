@@ -5,6 +5,7 @@
 #include "lib/log.h"
 #include "arch/x86_64/paging.h"
 #include "kernel/pmm.h"
+#include "kernel/thread.h"
 
 enum { HEAP_PAGE_SIZE = 0x1000ull };
 enum { HEAP_MAGIC = 0xB17B0050B17B0050ull };
@@ -16,6 +17,7 @@ struct heap_block {
     uint64_t magic;
     size_t size;
     int free;
+    struct thread *owner;
     struct heap_block *next;
 };
 
@@ -112,6 +114,8 @@ void *kmalloc(size_t size) {
                 b->size = size;
             }
             b->free = 0;
+            b->owner = thread_current();
+            thread_account_alloc(b->owner, b->size);
             return (void *)((uintptr_t)b + sizeof(struct heap_block));
         }
         b = b->next;
@@ -133,6 +137,7 @@ void kfree(void *ptr) {
         log_printf("Heap: bad free (magic)\n");
         return;
     }
+    thread_account_free(b->owner, b->size);
     b->free = 1;
     heap_coalesce();
 }
@@ -152,19 +157,25 @@ void *krealloc(void *ptr, size_t size) {
     }
 
     if (size <= b->size) {
-        size_t remaining = b->size - size;
+        size_t old_size = b->size;
+        size_t remaining = old_size - size;
         if (remaining > sizeof(struct heap_block) + 16) {
             struct heap_block *nb = (struct heap_block *)((uintptr_t)b + sizeof(struct heap_block) + size);
             nb->magic = HEAP_MAGIC;
             nb->size = remaining - sizeof(struct heap_block);
             nb->free = 1;
+            nb->owner = NULL;
             nb->next = b->next;
             b->next = nb;
             b->size = size;
         }
+        if (b->owner && old_size > size) {
+            thread_account_free(b->owner, old_size - size);
+        }
         return ptr;
     }
 
+    size_t old_size = b->size;
     struct heap_block *next = b->next;
     uintptr_t b_end = (uintptr_t)b + sizeof(struct heap_block) + b->size;
     if (next && next->free && b_end == (uintptr_t)next) {
@@ -178,9 +189,17 @@ void *krealloc(void *ptr, size_t size) {
                 nb->magic = HEAP_MAGIC;
                 nb->size = remaining - sizeof(struct heap_block);
                 nb->free = 1;
+                nb->owner = NULL;
                 nb->next = b->next;
                 b->next = nb;
                 b->size = size;
+            }
+            if (b->owner) {
+                if (size > old_size) {
+                    thread_account_alloc(b->owner, size - old_size);
+                } else if (old_size > size) {
+                    thread_account_free(b->owner, old_size - size);
+                }
             }
             return ptr;
         }
@@ -190,6 +209,9 @@ void *krealloc(void *ptr, size_t size) {
     if (!n) return NULL;
     size_t to_copy = b->size < size ? b->size : size;
     memcpy(n, ptr, to_copy);
+    if (b->owner) {
+        thread_account_free(b->owner, b->size);
+    }
     kfree(ptr);
     return n;
 }

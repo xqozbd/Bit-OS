@@ -45,6 +45,12 @@ struct thread *thread_create(void (*entry)(void *), void *arg, size_t stack_size
     t->cpu = sched_cpu_index();
     t->id = sched_next_tid();
     t->state = THREAD_READY;
+    t->base_prio = 2;
+    t->dyn_prio = 2;
+    t->cpu_ticks = 0;
+    t->last_run_tick = 0;
+    t->mem_current = 0;
+    t->mem_peak = 0;
     t->name = name;
 
     sched_enqueue(t);
@@ -59,4 +65,21 @@ void thread_exit(void) {
     sched_yield();
     halt_forever();
     __builtin_unreachable();
+}
+
+void thread_account_alloc(struct thread *t, size_t bytes) {
+    if (!t || bytes == 0) return;
+    t->mem_current += bytes;
+    if (t->mem_current > t->mem_peak) {
+        t->mem_peak = t->mem_current;
+    }
+}
+
+void thread_account_free(struct thread *t, size_t bytes) {
+    if (!t || bytes == 0) return;
+    if (t->mem_current >= bytes) {
+        t->mem_current -= bytes;
+    } else {
+        t->mem_current = 0;
+    }
 }
