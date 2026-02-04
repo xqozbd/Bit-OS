@@ -1,7 +1,6 @@
 #include "drivers/video/banner.h"
 
 #include "drivers/video/fb_printf.h"
-#include "lib/log.h"
 #include "lib/version.h"
 
 static struct limine_framebuffer *g_fb = 0;
@@ -29,7 +28,7 @@ void banner_draw(void) {
     fb_draw_rect(0, top_pad, (uint32_t)g_fb->width, banner_h, banner_bg);
     fb_set_colors(banner_fg, banner_bg);
     fb_set_cursor_px(fb_margin_x(), top_pad + y_text);
-    log_printf("BitOS v%s  |  build %s %s", BITOS_VERSION, __DATE__, __TIME__);
+    fb_printf("BitOS v%s  |  build %s %s", BITOS_VERSION, __DATE__, __TIME__);
 
     fb_set_colors(0xE6E6E6, 0x0B0F14);
     fb_set_cursor_px(fb_margin_x(), fb_margin_y() + g_banner_h);
