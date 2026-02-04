@@ -71,10 +71,11 @@ static uint64_t sys_sbrk_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4
 }
 
 static syscall_fn g_syscalls[SYS_MAX] = {
-    [SYS_WRITE] = sys_write_impl,
-    [SYS_EXIT]  = sys_exit_impl,
-    [SYS_SLEEP] = sys_sleep_impl,
-    [SYS_SBRK]  = sys_sbrk_impl
+    0,
+    sys_write_impl,
+    sys_exit_impl,
+    sys_sleep_impl,
+    sys_sbrk_impl
 };
 
 uint64_t syscall_dispatch(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3,
