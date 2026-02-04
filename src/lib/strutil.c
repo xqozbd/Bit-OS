@@ -24,6 +24,16 @@ int str_eqn(const char *a, const char *b, size_t n) {
     return 1;
 }
 
+int str_starts_with(const char *s, const char *prefix) {
+    if (!s || !prefix) return 0;
+    while (*prefix) {
+        if (*s != *prefix) return 0;
+        s++;
+        prefix++;
+    }
+    return 1;
+}
+
 int str_to_u64(const char *s, uint64_t *out) {
     if (!s || !*s || !out) return 0;
     uint64_t v = 0;

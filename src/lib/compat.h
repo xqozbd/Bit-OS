@@ -14,4 +14,11 @@
 #  undef __clang__
 #endif
 
+/* IntelliSense: provide atomic order constants to avoid parse errors. */
+#if !defined(__GNUC__) && !defined(__clang__)
+#  ifndef __ATOMIC_SEQ_CST
+#    define __ATOMIC_SEQ_CST 5
+#  endif
+#endif
+
 #endif /* COMPAT_H */

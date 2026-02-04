@@ -57,6 +57,7 @@ static volatile uint8_t g_head = 0;
 static volatile uint8_t g_tail = 0;
 
 static int shift_down = 0;
+static int ctrl_down = 0;
 static int e0_prefix = 0;
 
 static uint8_t g_repeat_sc = 0;
@@ -164,33 +165,59 @@ void kb_irq_handler(void) {
             continue;
         }
 
-        if (sc & 0x80) {
-            uint8_t rel = sc & 0x7F;
-            if (rel == 0x2A || rel == 0x36) shift_down = 0;
-            if (rel == g_repeat_sc) g_repeat_sc = 0;
-            e0_prefix = 0;
-            continue;
-        }
+    if (sc & 0x80) {
+        uint8_t rel = sc & 0x7F;
+        if (rel == 0x2A || rel == 0x36) shift_down = 0;
+        if (rel == 0x1D) ctrl_down = 0;
+        if (rel == g_repeat_sc) g_repeat_sc = 0;
+        e0_prefix = 0;
+        continue;
+    }
 
-        if (sc == 0x2A || sc == 0x36) {
-            shift_down = 1;
-            e0_prefix = 0;
-            continue;
-        }
+    if (sc == 0x2A || sc == 0x36) {
+        shift_down = 1;
+        e0_prefix = 0;
+        continue;
+    }
+    if (sc == 0x1D) {
+        ctrl_down = 1;
+        e0_prefix = 0;
+        continue;
+    }
         if (e0_prefix) {
             if (sc == 0x4B) { /* left */
                 kb_buf_push(KB_KEY_LEFT);
             } else if (sc == 0x4D) { /* right */
                 kb_buf_push(KB_KEY_RIGHT);
+            } else if (sc == 0x48) { /* up */
+                kb_buf_push(KB_KEY_UP);
+            } else if (sc == 0x50) { /* down */
+                kb_buf_push(KB_KEY_DOWN);
+            } else if (sc == 0x49) { /* page up */
+                kb_buf_push(KB_KEY_PGUP);
+            } else if (sc == 0x51) { /* page down */
+                kb_buf_push(KB_KEY_PGDN);
             }
             e0_prefix = 0;
             continue;
         }
 
-        int ch = scancode_to_char(sc);
-        if (ch < 0) continue;
-        if (g_repeat_sc != sc) {
-            kb_buf_push((uint8_t)ch);
+    int ch = scancode_to_char(sc);
+    if (ch < 0) continue;
+    if (ctrl_down) {
+        if (ch == 'c' || ch == 'C') {
+            kb_buf_push(0x03);
+            g_repeat_sc = 0;
+            continue;
+        }
+        if (ch == 'v' || ch == 'V') {
+            kb_buf_push(0x16);
+            g_repeat_sc = 0;
+            continue;
+        }
+    }
+    if (g_repeat_sc != sc) {
+        kb_buf_push((uint8_t)ch);
             if (allow_repeat_char(ch)) {
                 g_repeat_sc = sc;
                 g_repeat_next = timer_pit_ticks() + g_repeat_delay_ticks;

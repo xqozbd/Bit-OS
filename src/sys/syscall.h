@@ -5,7 +5,10 @@
 
 enum {
     SYS_WRITE = 1,
-    SYS_EXIT  = 2
+    SYS_EXIT  = 2,
+    SYS_SLEEP = 3,
+    SYS_SBRK  = 4,
+    SYS_MAX
 };
 
 struct syscall_frame {

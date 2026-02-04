@@ -23,4 +23,8 @@ int ms_poll_event(struct mouse_event *out);
 /* Update and draw cursor from pending mouse events */
 void ms_draw_cursor(void);
 
+/* Temporarily hide/show cursor around framebuffer drawing */
+void ms_cursor_hide(void);
+void ms_cursor_show(void);
+
 #endif /* MOUSE_H */

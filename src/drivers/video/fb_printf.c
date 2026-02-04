@@ -1,6 +1,7 @@
 
 #include "drivers/video/fb_printf.h"
 #include "drivers/video/font8x8_basic.h"
+#include "drivers/ps2/mouse.h"
 #include <stddef.h>
 #include <stdint.h>
 #include <stdarg.h>
@@ -27,6 +28,24 @@ static uint32_t char_spacing = 2;
 
 /* current colors */
 static uint32_t cur_fg = 0xFFFFFF, cur_bg = 0x000000;
+
+/* forward declarations */
+static void draw_char_px(uint32_t x, uint32_t y, char c, uint32_t fg, uint32_t bg);
+static void clear_row_bg(uint32_t row);
+
+/* scrollback buffer */
+#define SB_MAX_LINES 1024
+#define SB_MAX_COLS 160
+static char sb_lines[SB_MAX_LINES][SB_MAX_COLS];
+static uint16_t sb_lens[SB_MAX_LINES];
+static uint32_t sb_head = 0;
+static uint32_t sb_count = 0;
+static uint32_t sb_cur_line = 0;
+static uint32_t sb_cursor_col = 0;
+static uint32_t sb_cols = 0;
+static uint32_t sb_rows = 0;
+static uint32_t sb_view_offset = 0;
+static int sb_record_enabled = 1;
 
 /* helpers */
 static inline void min_max_uint32(uint32_t *v, uint32_t minv, uint32_t maxv) {
@@ -88,6 +107,137 @@ void fb_write_pixel(uint32_t x, uint32_t y, uint32_t rgb24) {
 
 static uint32_t line_step(void) {
     return char_h * char_scale + line_gap;
+}
+
+static uint32_t col_step(void) {
+    return char_w * char_scale + char_spacing;
+}
+
+static uint32_t sb_ring_index(uint32_t logical) {
+    return (sb_head + logical) % SB_MAX_LINES;
+}
+
+static void sb_clear_lines(void) {
+    for (uint32_t i = 0; i < SB_MAX_LINES; ++i) {
+        sb_lens[i] = 0;
+        sb_lines[i][0] = '\0';
+    }
+}
+
+static void sb_recalc_geometry(void) {
+    uint32_t step = col_step();
+    if (step == 0) step = 1;
+    uint32_t avail_w = (fb_width > (margin_x * 2)) ? (fb_width - margin_x * 2) : fb_width;
+    uint32_t avail_h = (fb_height > (margin_y * 2)) ? (fb_height - margin_y * 2) : fb_height;
+    sb_cols = avail_w / step;
+    if (sb_cols == 0) sb_cols = 1;
+    if (sb_cols > SB_MAX_COLS) sb_cols = SB_MAX_COLS;
+    uint32_t lstep = line_step();
+    if (lstep == 0) lstep = 1;
+    sb_rows = avail_h / lstep;
+    if (sb_rows == 0) sb_rows = 1;
+    if (sb_rows > SB_MAX_LINES) sb_rows = SB_MAX_LINES;
+}
+
+static void sb_reset(void) {
+    sb_clear_lines();
+    sb_head = 0;
+    sb_count = 1;
+    sb_cur_line = 0;
+    sb_cursor_col = 0;
+    sb_view_offset = 0;
+    sb_lens[0] = 0;
+    sb_lines[0][0] = '\0';
+}
+
+static uint32_t sb_view_start(void) {
+    if (sb_count <= sb_rows) return 0;
+    uint32_t max_off = sb_count - sb_rows;
+    if (sb_view_offset > max_off) sb_view_offset = max_off;
+    return (sb_count - sb_rows) - sb_view_offset;
+}
+
+static void sb_set_cursor_px(void) {
+    if (sb_count == 0) {
+        cursor_x = margin_x;
+        cursor_y = margin_y;
+        return;
+    }
+    uint32_t row = 0;
+    if (sb_count <= sb_rows) row = sb_count - 1;
+    else row = sb_rows - 1;
+    cursor_x = margin_x + sb_cursor_col * col_step();
+    cursor_y = margin_y + row * line_step();
+}
+
+static void sb_newline(void) {
+    if (sb_count < SB_MAX_LINES) {
+        sb_cur_line = sb_ring_index(sb_count);
+        sb_count++;
+    } else {
+        sb_head = (sb_head + 1) % SB_MAX_LINES;
+        sb_cur_line = sb_ring_index(sb_count - 1);
+    }
+    sb_lens[sb_cur_line] = 0;
+    sb_lines[sb_cur_line][0] = '\0';
+    sb_cursor_col = 0;
+    if (sb_view_offset > 0) {
+        sb_view_offset++;
+        uint32_t max_off = (sb_count > sb_rows) ? (sb_count - sb_rows) : 0;
+        if (sb_view_offset > max_off) sb_view_offset = max_off;
+    }
+}
+
+static void sb_put_char(char c) {
+    if (c == '\n') { sb_newline(); return; }
+    if (c == '\r') { sb_cursor_col = 0; return; }
+    if (c == '\b') {
+        if (sb_cursor_col > 0) {
+            sb_cursor_col--;
+            if (sb_lens[sb_cur_line] > sb_cursor_col) {
+                sb_lens[sb_cur_line] = sb_cursor_col;
+                sb_lines[sb_cur_line][sb_cursor_col] = '\0';
+            }
+        }
+        return;
+    }
+    if (c == '\t') {
+        uint32_t tab = (tab_width == 0) ? 4 : tab_width;
+        uint32_t next = ((sb_cursor_col + tab) / tab) * tab;
+        while (sb_cursor_col < next) {
+            sb_put_char(' ');
+        }
+        return;
+    }
+    if (sb_cursor_col >= sb_cols) sb_newline();
+    if (sb_cursor_col >= SB_MAX_COLS) return;
+    sb_lines[sb_cur_line][sb_cursor_col++] = c;
+    if (sb_cursor_col > sb_lens[sb_cur_line]) {
+        sb_lens[sb_cur_line] = sb_cursor_col;
+        if (sb_cursor_col < SB_MAX_COLS) sb_lines[sb_cur_line][sb_cursor_col] = '\0';
+    }
+}
+
+static void sb_render_full(void) {
+    if (!g_fb) return;
+    ms_cursor_hide();
+    for (uint32_t y = 0; y < fb_height; ++y) clear_row_bg(y);
+    uint32_t start = sb_view_start();
+    uint32_t rows = sb_rows;
+    for (uint32_t r = 0; r < rows; ++r) {
+        uint32_t line_idx = start + r;
+        if (line_idx >= sb_count) break;
+        uint32_t ring = sb_ring_index(line_idx);
+        uint16_t len = sb_lens[ring];
+        uint32_t px = margin_x;
+        uint32_t py = margin_y + r * line_step();
+        for (uint32_t c = 0; c < len && c < sb_cols; ++c) {
+            draw_char_px(px, py, sb_lines[ring][c], cur_fg, cur_bg);
+            px += col_step();
+        }
+    }
+    if (sb_view_offset == 0) sb_set_cursor_px();
+    ms_cursor_show();
 }
 
 /* draw character at pixel coordinates (x,y) with scaling */
@@ -170,6 +320,11 @@ static void new_line(void) {
 /* API functions */
 void fb_putc(char c) {
     if (!g_fb) return;
+    if (sb_record_enabled) sb_put_char(c);
+    if (sb_view_offset > 0 && sb_record_enabled) {
+        /* keep output buffered while scrolled back */
+        return;
+    }
     if (c == '\n') { new_line(); return; }
     if (c == '\r') { cursor_x = margin_x; return; }
     if (c == '\t') {
@@ -182,7 +337,6 @@ void fb_putc(char c) {
     if (c == '\b') {
         uint32_t step = char_w * char_scale + char_spacing;
         if (cursor_x >= margin_x + step) cursor_x -= step;
-        draw_char_px(cursor_x, cursor_y, ' ', cur_fg, cur_bg);
         return;
     }
 
@@ -227,6 +381,8 @@ void fb_init(struct limine_framebuffer *fb, uint32_t fg, uint32_t bg) {
 
     /* clear framebuffer to bg color */
     for (uint32_t y = 0; y < fb_height; ++y) clear_row_bg(y);
+    sb_recalc_geometry();
+    sb_reset();
 }
 
 void fb_clear(void) { fb_init(g_fb, cur_fg, cur_bg); cursor_x = margin_x; cursor_y = margin_y; }
@@ -249,6 +405,10 @@ void fb_set_layout_ex(uint32_t scale, uint32_t gap, uint32_t mx, uint32_t my, ui
     char_spacing = spacing;
     cursor_x = margin_x;
     cursor_y = margin_y;
+    if (g_fb) {
+        sb_recalc_geometry();
+        sb_reset();
+    }
 }
 
 void fb_set_cursor_px(uint32_t x, uint32_t y) {
@@ -317,4 +477,38 @@ void fb_printf(const char *fmt, ...) {
     va_list ap; va_start(ap, fmt);
     fb_vprintf(fmt, ap);
     va_end(ap);
+}
+
+void fb_scrollback_up(uint32_t lines) {
+    if (!g_fb || sb_count == 0) return;
+    if (lines == 0) lines = 1;
+    uint32_t max_off = (sb_count > sb_rows) ? (sb_count - sb_rows) : 0;
+    if (max_off == 0) return;
+    if (sb_view_offset + lines > max_off) sb_view_offset = max_off;
+    else sb_view_offset += lines;
+    sb_render_full();
+}
+
+void fb_scrollback_down(uint32_t lines) {
+    if (!g_fb || sb_count == 0) return;
+    if (lines == 0) lines = 1;
+    if (sb_view_offset == 0) return;
+    if (lines >= sb_view_offset) sb_view_offset = 0;
+    else sb_view_offset -= lines;
+    sb_render_full();
+}
+
+void fb_scrollback_reset(void) {
+    if (!g_fb) return;
+    if (sb_view_offset == 0) return;
+    sb_view_offset = 0;
+    sb_render_full();
+}
+
+uint32_t fb_scrollback_offset(void) {
+    return sb_view_offset;
+}
+
+void fb_scrollback_suspend(int suspend) {
+    sb_record_enabled = suspend ? 0 : 1;
 }

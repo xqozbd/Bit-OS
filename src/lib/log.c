@@ -3,10 +3,12 @@
 
 #include "lib/compat.h"
 #include "lib/log.h"
+#include "drivers/ps2/mouse.h"
 #include "drivers/video/fb_printf.h"
 
 /* Serial (COM1) logging */
 #define COM1_PORT 0x3F8
+#define LOG_RING_SIZE (64 * 1024u)
 
 #if defined(__GNUC__) || defined(__clang__)
 static inline void outb(uint16_t port, uint8_t val) {
@@ -24,6 +26,10 @@ static inline uint8_t inb(uint16_t port) { (void)port; return 0; }
 #endif
 
 static int fb_ready = 0;
+static char g_ring[LOG_RING_SIZE];
+static uint32_t g_ring_head = 0;
+static uint32_t g_ring_len = 0;
+static int g_ring_frozen = 0;
 
 void log_init_serial(void) {
     outb(COM1_PORT + 1, 0x00); /* Disable interrupts */
@@ -43,6 +49,15 @@ static int serial_can_tx(void) {
     return inb(COM1_PORT + 5) & 0x20;
 }
 
+static void ring_putc(char c) {
+    if (g_ring_frozen) return;
+    g_ring[g_ring_head] = c;
+    g_ring_head = (g_ring_head + 1u) % LOG_RING_SIZE;
+    if (g_ring_len < LOG_RING_SIZE) {
+        g_ring_len++;
+    }
+}
+
 static void serial_putc(char c) {
     if (c == '\n') {
         while (!serial_can_tx()) {}
@@ -50,6 +65,7 @@ static void serial_putc(char c) {
     }
     while (!serial_can_tx()) {}
     outb(COM1_PORT, (uint8_t)c);
+    ring_putc(c);
 }
 
 static void serial_puts(const char *s) {
@@ -99,11 +115,33 @@ void log_printf(const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
     if (fb_ready) {
+        ms_cursor_hide();
         va_list ap2;
         va_copy(ap2, ap);
         fb_vprintf(fmt, ap2);
         va_end(ap2);
+        ms_cursor_show();
     }
     serial_vprintf(fmt, ap);
     va_end(ap);
+}
+
+void log_ring_freeze(int freeze) {
+    g_ring_frozen = freeze ? 1 : 0;
+}
+
+void log_ring_dump(void) {
+    if (g_ring_len == 0) return;
+    int prev_freeze = g_ring_frozen;
+    g_ring_frozen = 1;
+    uint32_t start = (g_ring_head + LOG_RING_SIZE - g_ring_len) % LOG_RING_SIZE;
+    ms_cursor_hide();
+    for (uint32_t i = 0; i < g_ring_len; ++i) {
+        uint32_t idx = (start + i) % LOG_RING_SIZE;
+        char c = g_ring[idx];
+        if (fb_ready) fb_putc(c);
+        serial_putc(c);
+    }
+    ms_cursor_show();
+    g_ring_frozen = prev_freeze;
 }

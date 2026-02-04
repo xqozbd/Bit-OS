@@ -1,25 +1,35 @@
 #include "sys/commands.h"
 
 #include <stddef.h>
+#include <stdint.h>
 
 #include "drivers/video/banner.h"
 #include "sys/elf_loader.h"
 #include "arch/x86_64/cpu_info.h"
+#include "arch/x86_64/cpu.h"
 #include "drivers/video/fb_printf.h"
-#include "sys/fs_mock.h"
+#include "sys/vfs.h"
 #include "lib/log.h"
+#include "arch/x86_64/io.h"
 #include "arch/x86_64/paging.h"
 #include "kernel/pmm.h"
 #include "drivers/rtc/rtc_util.h"
+#include "kernel/time.h"
 #include "kernel/heap.h"
 #include "arch/x86_64/smp.h"
 #include "lib/strutil.h"
 #include "lib/version.h"
+#include "boot/bootinfo.h"
+#include "drivers/net/pcnet.h"
+#include "kernel/power.h"
+#include "kernel/task.h"
 
 static const char *const g_commands[] = {
-    "help", "clear", "time", "mem", "memtest", "cputest",
-    "ls", "cd", "pwd", "cat", "run", "echo", "ver"
+    "help", "clear", "time", "mem", "memtest", "cputest", "ps",
+    "ls", "cd", "pwd", "cat", "run", "echo", "ver", "debug", "ping",
+    "shutdown", "restart", "s3", "s4", "thermal", "dmesg"
 };
+
 
 size_t commands_count(void) {
     return sizeof(g_commands) / sizeof(g_commands[0]);
@@ -37,17 +47,94 @@ static void cmd_help(void) {
     }
     log_printf("  memtest [--size N] [--time T] [--pages N]\n");
     log_printf("  run <path> (ELF64, higher-half)\n");
+    log_printf("  ping <ip>\n");
+    log_printf("  ps\n");
+    log_printf("  debug\n");
+    log_printf("  shutdown\n");
+    log_printf("  restart\n");
+    log_printf("  s3 (suspend to RAM)\n");
+    log_printf("  s4 (hibernate)\n");
+    log_printf("  thermal (ACPI thermal status)\n");
+    log_printf("  dmesg (dump ring buffer log)\n");
     log_printf("  sizes: 1g 512m 256k (also gb/mb/kb/gig/meg)\n");
     log_printf("  time: 20s 1min 2minutes\n\n");
 
 }
 
+static int parse_ipv4(const char *s, uint8_t out[4]) {
+    if (!s || !out) return 0;
+    uint32_t acc = 0;
+    int octet = 0;
+    int digit = 0;
+    for (const char *p = s; ; ++p) {
+        char c = *p;
+        if (c >= '0' && c <= '9') {
+            acc = acc * 10u + (uint32_t)(c - '0');
+            if (acc > 255u) return 0;
+            digit = 1;
+        } else if (c == '.' || c == '\0') {
+            if (!digit) return 0;
+            if (octet >= 4) return 0;
+            out[octet++] = (uint8_t)acc;
+            acc = 0;
+            digit = 0;
+            if (c == '\0') break;
+        } else {
+            return 0;
+        }
+    }
+    return octet == 4;
+}
+
 static void cmd_time(void) {
+    char time_buf[20];
+    int rc = time_get_string(time_buf);
+    if (rc == 0) {
+        log_printf("%s\n", time_buf);
+        return;
+    }
+    char rtc_buf[20];
+    int rrc = rtc_get_string(rtc_buf);
+    if (rrc == 0) log_printf("%s\n", rtc_buf);
+    else log_printf("RTC: unavailable (err=%d)\n", rrc);
+}
+
+static void cmd_debug(void) {
+    log_printf("BitOS Debug Info\n");
+    log_printf("================\n");
+
     char rtc_buf[20];
     int rc = rtc_get_string(rtc_buf);
-    if (rc == 0) log_printf("%s\n", rtc_buf);
-    else log_printf("RTC: unavailable (err=%d)\n", rc);
+    if (rc == 0) {
+        log_printf("RTC: %s\n", rtc_buf);
+    } else {
+        log_printf("RTC: unavailable (err=%d)\n", rc);
+    }
+
+    bootinfo_log();
+    systeminfo_log();
+    pcnet_log_status();
+    log_printf("\n");
 }
+
+static void cmd_shutdown(void) {
+    log_printf("Shutting down Bit-OS...\n");
+    log_printf("Goodbye\n");
+
+    if (power_shutdown_acpi()) {
+        halt_forever();
+    }
+
+    outw(0x604, 0x2000);
+    outw(0xB004, 0x2000);
+    outw(0x4004, 0x3400);
+    outw(0x4004, 0x2000);
+
+    // fallback is to stop the cpu
+    halt_forever();
+}
+
+
 
 static void cmd_mem(void) {
     uint64_t total = pmm_total_frames();
@@ -60,11 +147,40 @@ static void cmd_mem(void) {
 static void cmd_clear(void) {
     fb_clear();
     banner_draw();
-    log_printf("BitOS v%s\n", BITOS_VERSION);
 }
 
 static void cmd_ver(void) {
     log_printf("BitOS v%s (build %s %s)\n", BITOS_VERSION, __DATE__, __TIME__);
+}
+
+static void cmd_restart(void) {
+    log_printf("Restarting...\n");
+    outb(0x64, 0xFE);
+    halt_forever();
+}
+
+static void cmd_s3(void) {
+    if (!power_suspend_s3()) {
+        log_printf("S3: not supported or failed\n");
+    }
+}
+
+static void cmd_s4(void) {
+    if (!power_suspend_s4()) {
+        log_printf("S4: not supported or failed\n");
+    }
+}
+
+static void cmd_thermal(void) {
+    acpi_thermal_log();
+}
+
+static void cmd_dmesg(void) {
+    log_ring_dump();
+}
+
+static void cmd_ps(void) {
+    task_dump_list();
 }
 
 static void cmd_cat(const char *path, int cwd) {
@@ -72,19 +188,19 @@ static void cmd_cat(const char *path, int cwd) {
         log_printf("cat: missing file\n");
         return;
     }
-    int node = fs_resolve(cwd, path);
+    int node = vfs_resolve(cwd, path);
     if (node < 0) {
         log_printf("cat: not found\n");
         return;
     }
-    if (fs_is_dir(node)) {
+    if (vfs_is_dir(node)) {
         log_printf("cat: is a directory\n");
         return;
     }
 
     const uint8_t *data = NULL;
     uint64_t size = 0;
-    if (!fs_read_file(node, &data, &size) || !data) {
+    if (!vfs_read_file(node, &data, &size) || !data) {
         log_printf("cat: unreadable\n");
         return;
     }
@@ -256,22 +372,50 @@ int commands_exec(int argc, char **argv, struct command_ctx *ctx) {
         cmd_memtest(pages, bytes, seconds);
     } else if (str_eq(argv[0], "cputest")) {
         cmd_cputest();
+    } else if (str_eq(argv[0], "ps")) {
+        cmd_ps();
     } else if (str_eq(argv[0], "pwd")) {
-        fs_pwd(*ctx->cwd);
+        vfs_pwd(*ctx->cwd);
     } else if (str_eq(argv[0], "ls")) {
         int target = *ctx->cwd;
-        if (argc > 1) target = fs_resolve(*ctx->cwd, argv[1]);
+        if (argc > 1) target = vfs_resolve(*ctx->cwd, argv[1]);
         if (target < 0) log_printf("ls: not found\n");
-        else fs_ls(target);
+        else vfs_ls(target);
     } else if (str_eq(argv[0], "cd")) {
         if (argc < 2) {
-            *ctx->cwd = fs_root();
+            *ctx->cwd = vfs_resolve(0, "/");
         } else {
-            int target = fs_resolve(*ctx->cwd, argv[1]);
-            if (target < 0 || !fs_is_dir(target)) {
-                log_printf("cd: not a directory\n");
+            const char *target_path = argv[1];
+            if (target_path[0] == '~') {
+                int home = vfs_resolve(vfs_resolve(0, "/"), "home");
+                if (home < 0) {
+                    if (target_path[1] == '\0' || (target_path[1] == '/' && target_path[2] == '\0')) {
+                        *ctx->cwd = vfs_resolve(0, "/");
+                    } else if (target_path[1] == '/' && target_path[2] != '\0') {
+                        int tgt = vfs_resolve(vfs_resolve(0, "/"), &target_path[2]);
+                        if (tgt < 0 || !vfs_is_dir(tgt)) log_printf("cd: not a directory\n");
+                        else *ctx->cwd = tgt;
+                    } else {
+                        *ctx->cwd = vfs_resolve(0, "/");
+                    }
+                } else {
+                    if (target_path[1] == '\0' || (target_path[1] == '/' && target_path[2] == '\0')) {
+                        *ctx->cwd = home;
+                    } else if (target_path[1] == '/' && target_path[2] != '\0') {
+                        int tgt = vfs_resolve(home, &target_path[2]);
+                        if (tgt < 0 || !vfs_is_dir(tgt)) log_printf("cd: not a directory\n");
+                        else *ctx->cwd = tgt;
+                    } else {
+                        *ctx->cwd = home;
+                    }
+                }
             } else {
-                *ctx->cwd = target;
+                int target = vfs_resolve(*ctx->cwd, target_path);
+                if (target < 0 || !vfs_is_dir(target)) {
+                    log_printf("cd: not a directory\n");
+                } else {
+                    *ctx->cwd = target;
+                }
             }
         }
     } else if (str_eq(argv[0], "cat")) {
@@ -284,7 +428,9 @@ int commands_exec(int argc, char **argv, struct command_ctx *ctx) {
         if (argc < 2) {
             log_printf("run: missing path\n");
         } else {
-            elf_load_and_run(argv[1]);
+            int eargc = argc - 1;
+            char **eargv = &argv[1];
+            elf_load_and_run(argv[1], eargc, eargv, NULL);
         }
     } else if (str_eq(argv[0], "echo")) {
         if (argc > 1) {
@@ -295,6 +441,31 @@ int commands_exec(int argc, char **argv, struct command_ctx *ctx) {
         log_printf("\n");
     } else if (str_eq(argv[0], "ver")) {
         cmd_ver();
+    } else if (str_eq(argv[0], "debug")) {
+        cmd_debug();
+    } else if (str_eq(argv[0], "ping")) {
+        if (argc < 2) {
+            log_printf("ping: missing ip\n");
+        } else {
+            uint8_t ip[4];
+            if (!parse_ipv4(argv[1], ip)) {
+                log_printf("ping: invalid ip\n");
+            } else {
+                pcnet_ping(ip);
+            }
+        }
+    } else if (str_eq(argv[0], "shutdown")) {
+        cmd_shutdown();
+    } else if (str_eq(argv[0], "restart")) {
+        cmd_restart();
+    } else if (str_eq(argv[0], "s3")) {
+        cmd_s3();
+    } else if (str_eq(argv[0], "s4")) {
+        cmd_s4();
+    } else if (str_eq(argv[0], "thermal")) {
+        cmd_thermal();
+    } else if (str_eq(argv[0], "dmesg")) {
+        cmd_dmesg();
     } else {
         return 0;
     }

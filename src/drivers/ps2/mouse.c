@@ -66,22 +66,36 @@ static volatile uint8_t pkt[3];
 static volatile uint8_t pkt_idx = 0;
 static volatile int32_t g_x = 0;
 static volatile int32_t g_y = 0;
+static volatile int32_t g_pending_dx = 0;
+static volatile int32_t g_pending_dy = 0;
 static volatile uint8_t g_buttons = 0;
 static volatile int g_event_ready = 0;
 static int g_inited = 0;
+static uint64_t g_last_event_tick = 0;
+static uint64_t g_min_event_ticks = 1;
 static int g_cursor_drawn = 0;
+static int g_cursor_hidden = 0;
 static int32_t g_cur_x = 0;
 static int32_t g_cur_y = 0;
-static uint32_t g_cursor_w = 6;
-static uint32_t g_cursor_h = 6;
-static uint32_t g_saved[36];
+#define CURSOR_W 8
+#define CURSOR_H 12
+static const uint8_t g_cursor_mask[CURSOR_H] = {
+	0x01, 0x03, 0x07, 0x0F,
+	0x1F, 0x3F, 0x7F, 0xFF,
+	0xF8, 0xE0, 0xC0, 0x80
+};
+static uint32_t g_cursor_w = CURSOR_W;
+static uint32_t g_cursor_h = CURSOR_H;
+static uint32_t g_saved[CURSOR_W * CURSOR_H];
 
 int ms_poll_event(struct mouse_event *out) {
 	if (!out) return 0;
 	/* simple single-event model: return last accumulated delta when ready */
 	if (!g_event_ready) return 0;
-	out->dx = (int32_t)((int8_t)pkt[1]);
-	out->dy = -(int32_t)((int8_t)pkt[2]); /* invert Y to screen coords */
+	out->dx = g_pending_dx;
+	out->dy = g_pending_dy;
+	g_pending_dx = 0;
+	g_pending_dy = 0;
 	out->buttons = g_buttons;
 	out->x = g_x;
 	out->y = g_y;
@@ -120,7 +134,9 @@ static void restore_under_cursor(int32_t x, int32_t y) {
 
 static void draw_cursor_at(int32_t x, int32_t y, uint32_t color) {
 	for (uint32_t dy = 0; dy < g_cursor_h; ++dy) {
+		uint8_t mask = g_cursor_mask[dy];
 		for (uint32_t dx = 0; dx < g_cursor_w; ++dx) {
+			if ((mask & (1u << dx)) == 0) continue;
 			fb_write_pixel((uint32_t)(x + (int32_t)dx),
 			               (uint32_t)(y + (int32_t)dy),
 			               color);
@@ -137,8 +153,12 @@ void ms_draw_cursor(void) {
 	int32_t ny = g_cur_y + ev.dy;
 	clamp_cursor(&nx, &ny);
 
-	uint32_t fg = 0, bg = 0;
-	fb_get_colors(&fg, &bg);
+	if (g_cursor_hidden) {
+		g_cur_x = nx;
+		g_cur_y = ny;
+		return;
+	}
+
 	if (g_cursor_drawn) {
 		restore_under_cursor(g_cur_x, g_cur_y);
 	}
@@ -147,6 +167,22 @@ void ms_draw_cursor(void) {
 	save_under_cursor(g_cur_x, g_cur_y);
 	draw_cursor_at(g_cur_x, g_cur_y, 0xFFFFFF);
 	g_cursor_drawn = 1;
+	g_cursor_hidden = 0;
+}
+
+void ms_cursor_hide(void) {
+	if (!g_inited || !g_cursor_drawn || g_cursor_hidden) return;
+	restore_under_cursor(g_cur_x, g_cur_y);
+	g_cursor_drawn = 0;
+	g_cursor_hidden = 1;
+}
+
+void ms_cursor_show(void) {
+	if (!g_inited || !g_cursor_hidden) return;
+	save_under_cursor(g_cur_x, g_cur_y);
+	draw_cursor_at(g_cur_x, g_cur_y, 0xFFFFFF);
+	g_cursor_drawn = 1;
+	g_cursor_hidden = 0;
 }
 
 void ms_irq_handler(void) {
@@ -170,19 +206,38 @@ void ms_irq_handler(void) {
 		pkt[pkt_idx++] = b;
 		if (pkt_idx >= 3) {
 			pkt_idx = 0;
+			/* Validate packet: bit3 must be set, overflow bits must be clear. */
+			if ((pkt[0] & 0x08) == 0 || (pkt[0] & 0xC0)) {
+				continue;
+			}
 			uint8_t buttons = pkt[0] & 0x07; /* left/middle/right */
 			int8_t dx = (int8_t)pkt[1];
 			int8_t dy = (int8_t)pkt[2];
+			/* Validate sign bits (bit4/5 in first byte). */
+			if (((pkt[0] & 0x10) != 0) != (dx < 0)) continue;
+			if (((pkt[0] & 0x20) != 0) != (dy < 0)) continue;
 			g_buttons = buttons;
 			g_x += (int32_t)dx;
 			g_y += -(int32_t)dy; /* invert Y to screen coords */
-			g_event_ready = 1;
+			g_pending_dx += (int32_t)dx;
+			g_pending_dy += -(int32_t)dy;
+			uint64_t now = timer_uptime_ticks();
+			if (now - g_last_event_tick >= g_min_event_ticks) {
+				g_last_event_tick = now;
+				g_event_ready = 1;
+			}
 		}
 	}
 }
 
 void ms_init(void) {
 	g_inited = 1;
+	uint32_t hz = timer_pit_hz();
+	if (hz == 0) hz = 100;
+	/* Rate limit mouse events to ~120 Hz (or 1 tick minimum). */
+	g_min_event_ticks = hz / 120u;
+	if (g_min_event_ticks == 0) g_min_event_ticks = 1;
+	g_last_event_tick = timer_uptime_ticks();
 	/* Enable IRQ12 + IRQ1 in controller command byte */
 	uint8_t cmd = read_cmd_byte();
 	cmd |= 0x03; /* bit0=IRQ1, bit1=IRQ12 */
@@ -213,8 +268,12 @@ void ms_init(void) {
 	if (w && h) {
 		g_cur_x = (int32_t)(w / 2);
 		g_cur_y = (int32_t)(h / 2);
+		clamp_cursor(&g_cur_x, &g_cur_y);
+		g_x = g_cur_x;
+		g_y = g_cur_y;
 		save_under_cursor(g_cur_x, g_cur_y);
 		draw_cursor_at(g_cur_x, g_cur_y, 0xFFFFFF);
 		g_cursor_drawn = 1;
+		g_cursor_hidden = 0;
 	}
 }

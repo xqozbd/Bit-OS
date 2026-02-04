@@ -4,6 +4,8 @@
 #include <stdint.h>
 
 void watchdog_init(uint32_t timeout_seconds);
+void watchdog_early_stage(const char *stage);
+const char *watchdog_last_stage(void);
 void watchdog_tick(void);
 void watchdog_checkpoint_boot_ok(void);
 void watchdog_checkpoint(const char *stage);

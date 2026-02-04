@@ -10,16 +10,12 @@
 #include "drivers/ps2/keyboard.h"
 #include "drivers/ps2/mouse.h"
 #include "sys/syscall.h"
+#include "kernel/watchdog.h"
+#include "kernel/crash.h"
+#include "kernel/sched.h"
+#include "kernel/thread.h"
 
 /* IDT + exceptions */
-struct interrupt_frame {
-    uint64_t rip;
-    uint64_t cs;
-    uint64_t rflags;
-    uint64_t rsp;
-    uint64_t ss;
-};
-
 struct idt_entry {
     uint16_t offset_low;
     uint16_t selector;
@@ -87,21 +83,29 @@ static inline void lidt(const struct idt_ptr *p) {
 #endif
 }
 
-static void exception_common(uint8_t vec, uint64_t err, int has_err) {
-    log_printf("\nEXCEPTION %u", (unsigned)vec);
-    if (has_err) log_printf(" err=0x%x", (unsigned)err);
-    log_printf("\nSystem halted.\n");
+void idt_reload(void) {
+    struct idt_ptr idtp = { .limit = sizeof(idt) - 1, .base = (uint64_t)&idt };
+    lidt(&idtp);
+}
+
+static void exception_common(uint8_t vec, uint64_t err, int has_err, struct interrupt_frame *frame) {
+    enum crash_action action = crash_handle_exception(vec, err, has_err, frame);
+    if (action == CRASH_CONTINUE) return;
+    if (action == CRASH_KILL_TASK) {
+        thread_exit();
+        __builtin_unreachable();
+    }
     halt_forever();
 }
 
 #define ISR_NOERR(n) \
     __attribute__((interrupt, target("general-regs-only"), used)) void isr_noerr_##n(struct interrupt_frame *frame) { \
-        (void)frame; exception_common((uint8_t)n, 0, 0); \
+        exception_common((uint8_t)n, 0, 0, frame); \
     }
 
 #define ISR_ERR(n) \
     __attribute__((interrupt, target("general-regs-only"), used)) void isr_err_##n(struct interrupt_frame *frame, uint64_t error_code) { \
-        (void)frame; exception_common((uint8_t)n, error_code, 1); \
+        exception_common((uint8_t)n, error_code, 1, frame); \
     }
 
 ISR_NOERR(0)  ISR_NOERR(1)  ISR_NOERR(2)  ISR_NOERR(3)
@@ -116,16 +120,25 @@ ISR_NOERR(28) ISR_NOERR(29) ISR_NOERR(30) ISR_NOERR(31)
 __attribute__((interrupt, target("general-regs-only"), used))
 void isr_err_14(struct interrupt_frame *frame, uint64_t error_code) {
     uint64_t cr2 = read_cr2();
+    struct thread *t = thread_current();
+    int is_user = (((frame->cs & 0x3u) == 0x3u) || (t && t->is_user));
     log_printf("\nEXCEPTION 14 err=0x%x", (unsigned)error_code);
     log_printf(" cr2=%p rip=%p cs=0x%x rflags=0x%x rsp=%p ss=0x%x\n",
                (void *)cr2, (void *)frame->rip, (unsigned)frame->cs,
                (unsigned)frame->rflags, (void *)frame->rsp, (unsigned)frame->ss);
+    log_printf("stage: %s\n", watchdog_last_stage());
     log_printf("PF: P=%u W=%u U=%u R=%u I=%u\n",
                (unsigned)(error_code & 1),
                (unsigned)((error_code >> 1) & 1),
                (unsigned)((error_code >> 2) & 1),
                (unsigned)((error_code >> 3) & 1),
                (unsigned)((error_code >> 4) & 1));
+    if (is_user && t) {
+        log_printf("PF: killing userspace task tid=%u name=%s\n",
+                   (unsigned)t->id, t->name ? t->name : "(null)");
+        thread_exit();
+        __builtin_unreachable();
+    }
     log_printf("System halted.\n");
     halt_forever();
 }
@@ -135,6 +148,7 @@ void isr_irq0(struct interrupt_frame *frame) {
     (void)frame;
     timer_pit_tick();
     pic_send_eoi(0);
+    sched_preempt_from_isr();
 }
 
 __attribute__((interrupt, target("general-regs-only"), used))
@@ -156,6 +170,7 @@ void isr_apic_timer(struct interrupt_frame *frame) {
     (void)frame;
     timer_apic_tick();
     apic_eoi();
+    sched_preempt_from_isr();
 }
 
 __attribute__((interrupt, target("general-regs-only"), used))
@@ -215,6 +230,5 @@ void idt_init(void) {
     idt_set_gate(0x40, isr_apic_timer);
     idt_set_gate(0xFF, isr_spurious);
 
-    struct idt_ptr idtp = { .limit = sizeof(idt) - 1, .base = (uint64_t)&idt };
-    lidt(&idtp);
+    idt_reload();
 }

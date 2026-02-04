@@ -7,6 +7,7 @@
 size_t str_len(const char *s);
 int str_eq(const char *a, const char *b);
 int str_eqn(const char *a, const char *b, size_t n);
+int str_starts_with(const char *s, const char *prefix);
 int str_to_u64(const char *s, uint64_t *out);
 int str_parse_size_bytes(const char *s, uint64_t *out_bytes);
 int str_parse_seconds(const char *s, uint64_t *out_seconds);

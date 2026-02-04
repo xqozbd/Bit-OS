@@ -8,11 +8,13 @@
 #include "drivers/ps2/mouse.h"
 #include "kernel/pmm.h"
 #include "kernel/panic.h"
+#include "arch/x86_64/timer.h"
 
 static uint64_t g_last_tsc = 0;
 static uint64_t g_tsc_hz = 0;
 static uint64_t g_interval = 0;
 static uint32_t g_ticks = 0;
+static uint64_t g_ui_last_tick = 0;
 
 static inline uint64_t rdtsc(void) {
 #if defined(__GNUC__) || defined(__clang__)
@@ -32,17 +34,29 @@ void monitor_init(void) {
         g_interval = 0;
     }
     g_ticks = 0;
+    g_ui_last_tick = timer_uptime_ticks();
 }
 
 void monitor_tick(void) {
+    int do_checks = 0;
     if (g_interval != 0) {
         uint64_t now = rdtsc();
-        if (now - g_last_tsc < g_interval) return;
-        g_last_tsc = now;
+        if (now - g_last_tsc >= g_interval) {
+            g_last_tsc = now;
+            do_checks = 1;
+        }
     } else {
         g_ticks++;
-        if ((g_ticks % 1000) != 0) return;
+        if ((g_ticks % 1000) == 0) do_checks = 1;
     }
+
+    uint64_t now = timer_uptime_ticks();
+    if (now != g_ui_last_tick) {
+        g_ui_last_tick = now;
+        ms_draw_cursor();
+    }
+
+    if (!do_checks) return;
 
     int heap_rc = heap_check();
     if (heap_rc != 0) {
@@ -52,6 +66,4 @@ void monitor_tick(void) {
     if (pmm_rc != 0) {
         panic_screen(0xE002, "PMM counters invalid");
     }
-
-    ms_draw_cursor();
 }

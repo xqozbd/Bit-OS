@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 
+#include "sys/vfs.h"
 int fs_root(void);
 int fs_resolve(int cwd, const char *path);
 int fs_is_dir(int node);

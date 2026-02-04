@@ -21,6 +21,7 @@ enum {
 enum {
     PTE_P  = 1ull << 0,
     PTE_RW = 1ull << 1,
+    PTE_US = 1ull << 2,
     PTE_PS = 1ull << 7
 };
 
@@ -40,7 +41,7 @@ static uint64_t alloc_table(uint64_t *out_phys) {
     *out_phys = phys;
     return virt;
 }
-
+// man page these fucking balls. this shit sucks -xqozbd
 static uint64_t *table_from_entry(uint64_t entry) {
     uint64_t phys = entry & 0x000ffffffffff000ull;
     return (uint64_t *)(uintptr_t)(g_hhdm_offset + phys);
@@ -109,6 +110,22 @@ int paging_map_4k(uint64_t virt, uint64_t phys, uint64_t flags) {
     return 0;
 }
 
+int paging_map_4k_in_pml4(uint64_t pml4_phys, uint64_t virt, uint64_t phys, uint64_t flags) {
+    if (pml4_phys == 0 || g_hhdm_offset == 0) return -1;
+    uint64_t *pml4 = (uint64_t *)(uintptr_t)(g_hhdm_offset + pml4_phys);
+    map_4k(pml4, virt, phys, flags);
+#if defined(__GNUC__) || defined(__clang__)
+    __asm__ volatile ("invlpg (%0)" : : "r"(virt) : "memory");
+#else
+    (void)virt;
+#endif
+    return 0;
+}
+
+int paging_map_user_4k(uint64_t pml4_phys, uint64_t virt, uint64_t phys, uint64_t flags) {
+    return paging_map_4k_in_pml4(pml4_phys, virt, phys, flags | PTE_US);
+}
+
 static inline void load_cr3(uint64_t phys) {
 #if defined(__GNUC__) || defined(__clang__)
     __asm__ volatile ("mov %0, %%cr3" : : "r"(phys) : "memory");
@@ -119,6 +136,27 @@ static inline void load_cr3(uint64_t phys) {
 
 uint64_t paging_hhdm_offset(void) {
     return g_hhdm_offset;
+}
+
+uint64_t paging_pml4_phys(void) {
+    return g_pml4_phys;
+}
+
+void paging_switch_to(uint64_t pml4_phys) {
+    if (pml4_phys == 0) return;
+    load_cr3(pml4_phys);
+}
+
+uint64_t paging_new_user_pml4(void) {
+    if (!g_pml4) return 0;
+    uint64_t new_phys = 0;
+    uint64_t new_virt = alloc_table(&new_phys);
+    if (new_virt == 0) return 0;
+    uint64_t *new_pml4 = (uint64_t *)(uintptr_t)new_virt;
+    for (uint32_t i = 256; i < 512; ++i) {
+        new_pml4[i] = g_pml4[i];
+    }
+    return new_phys;
 }
 
 int paging_init(void) {
