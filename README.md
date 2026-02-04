@@ -43,3 +43,7 @@ The build generates `BitOS.iso` for booting in a VM. If you see Limine missing e
 
 ## License
 See `LICENSE`.
+
+
+
+this project is the reason i wanna blow my brains out everynight - xqozbd 2/4/26

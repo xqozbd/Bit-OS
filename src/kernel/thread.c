@@ -67,6 +67,15 @@ void thread_exit(void) {
     __builtin_unreachable();
 }
 
+int thread_join(struct thread *t) {
+    if (!t) return -1;
+    /* Spin-yield until target is dead. */
+    while (t->state != THREAD_DEAD) {
+        sched_yield();
+    }
+    return 0;
+}
+
 void thread_account_alloc(struct thread *t, size_t bytes) {
     if (!t || bytes == 0) return;
     t->mem_current += bytes;

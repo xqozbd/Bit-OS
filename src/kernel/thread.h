@@ -46,6 +46,7 @@ struct thread {
 struct thread *thread_current(void);
 struct thread *thread_create(void (*entry)(void *), void *arg, size_t stack_size, const char *name);
 void thread_exit(void) __attribute__((noreturn));
+int thread_join(struct thread *t);
 void thread_account_alloc(struct thread *t, size_t bytes);
 void thread_account_free(struct thread *t, size_t bytes);
 
