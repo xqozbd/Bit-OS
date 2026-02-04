@@ -13,17 +13,44 @@
 - [x] Interrupt-driven PS/2 keyboard (IRQ1) with key repeat.
 - [x] Add a minimal console with built-in commands (help, ls, cd, pwd, time, mem, echo, ver, clear).
 - [x] SMP bring-up (Limine MP).
-- [x] PIT/APIC timer + timekeeping (uptime and RTC sync).
+- [x] PIT timer + uptime ticks.
 - [x] Page fault handler with fault reason logging.
 - [x] Limine module loading as an initramfs.
 - [x] Basic VFS layer and in-memory FS for `ls/cd/cat`.
-- [x] Shell history + line editing (up/down, backspace).
+- [x] Line editing (backspace, left/right).
 - [x] Heap free list (kfree).
 - [x] Heap reallocation support (krealloc).
-- [x] Shell tab completion.
-- [x] Syscall ABI and userspace ELF loader.
+- [x] Syscall ABI stub + kernel-mode ELF loader.
 - [x] Add in a cursor.
 - [x] SMP bring-up and per-CPU data.
+- [x] PCNet PCI probe + MAC read (VirtualBox card).
 
 ## Next
-- [ ] Add in networking. Write ethernet AMD PCNet PCI driver (VirtualBox supports this card)
+- [ ] APIC timer calibration and switch from PIT to APIC timer for scheduling.
+- [ ] RTC sync to system time.
+- [ ] Preemptive scheduler with per-CPU run queues.
+- [ ] Basic kernel thread API (create/join/exit).
+- [ ] Proper sleep/timer queue (sleep ms).
+- [ ] Userspace syscall table + minimal libc stubs.
+- [ ] ELF loader: relocations + stack setup with argv/envp.
+- [ ] Initramfs unpacker (tar or cpio) into VFS.
+- [ ] VFS: path normalization + mount points.
+- [ ] Memory protection: user/kernel page separation.
+- [ ] Page fault recovery + kill userspace task.
+- [ ] PCI enumeration: BAR sizing, MSI support, device driver registry.
+- [ ] PCNet TX/RX ring buffers + basic ARP.
+- [ ] Basic network stack (Ethernet + ARP + IPv4 + ICMP ping).
+- [ ] PS/2 mouse packet sync + rate limiting improvements.
+- [ ] Ring buffer logging + persistent crash dump to RAM.
+- [ ] Shell history (up/down).
+- [ ] Shell tab completion.
+- [ ] Process/task model (PID, state, kernel stack, page table).
+- [ ] Userspace memory allocator (brk/sbrk syscall).
+- [ ] Keyboard line discipline (canonical mode, Ctrl+C, Ctrl+V).
+- [ ] Console output buffering + scrollback.
+- [ ] Interrupt masking / IRQ priority routing.
+- [ ] Driver registry (init order + status).
+- [ ] ACPI parsing stub (device discovery).
+- [ ] Kernel panic backtrace (stack walk).
+- [ ] Framebuffer cursor sprite (separate from text caret).
+- [ ] Configurable boot params (Limine cmdline).

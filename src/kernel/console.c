@@ -18,6 +18,8 @@ static void console_idle(void) {
     for (int i = 0; i < 50; ++i) cpu_relax();
 }
 
+static void console_redraw(const char *line, int len, int cursor, int *last_len);
+
 static int split_args(char *buf, char **argv, int max_args) {
     int argc = 0;
     size_t i = 0;
@@ -35,6 +37,8 @@ static int split_args(char *buf, char **argv, int max_args) {
 void console_init(void) {
     kb_init();
     log_printf("\nConsole ready. Type:\n> ");
+    int last_len = 0;
+    console_redraw("", 0, 0, &last_len);
 }
 
 static void console_redraw(const char *line, int len, int cursor, int *last_len) {
@@ -112,6 +116,7 @@ void console_run(void) {
                 cursor = 0;
                 last_len = 0;
                 log_printf("> ");
+                console_redraw("", 0, 0, &last_len);
                 continue;
             }
 

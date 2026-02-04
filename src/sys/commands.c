@@ -5,9 +5,11 @@
 #include "drivers/video/banner.h"
 #include "sys/elf_loader.h"
 #include "arch/x86_64/cpu_info.h"
+#include "arch/x86_64/cpu.h"
 #include "drivers/video/fb_printf.h"
 #include "sys/fs_mock.h"
 #include "lib/log.h"
+#include "arch/x86_64/io.h"
 #include "arch/x86_64/paging.h"
 #include "kernel/pmm.h"
 #include "drivers/rtc/rtc_util.h"
@@ -18,7 +20,7 @@
 
 static const char *const g_commands[] = {
     "help", "clear", "time", "mem", "memtest", "cputest",
-    "ls", "cd", "pwd", "cat", "run", "echo", "ver"
+    "ls", "cd", "pwd", "cat", "run", "echo", "ver", "restart"
 };
 
 size_t commands_count(void) {
@@ -37,6 +39,7 @@ static void cmd_help(void) {
     }
     log_printf("  memtest [--size N] [--time T] [--pages N]\n");
     log_printf("  run <path> (ELF64, higher-half)\n");
+    log_printf("  restart\n");
     log_printf("  sizes: 1g 512m 256k (also gb/mb/kb/gig/meg)\n");
     log_printf("  time: 20s 1min 2minutes\n\n");
 
@@ -65,6 +68,12 @@ static void cmd_clear(void) {
 
 static void cmd_ver(void) {
     log_printf("BitOS v%s (build %s %s)\n", BITOS_VERSION, __DATE__, __TIME__);
+}
+
+static void cmd_restart(void) {
+    log_printf("Restarting...\n");
+    outb(0x64, 0xFE);
+    halt_forever();
 }
 
 static void cmd_cat(const char *path, int cwd) {
@@ -295,6 +304,8 @@ int commands_exec(int argc, char **argv, struct command_ctx *ctx) {
         log_printf("\n");
     } else if (str_eq(argv[0], "ver")) {
         cmd_ver();
+    } else if (str_eq(argv[0], "restart")) {
+        cmd_restart();
     } else {
         return 0;
     }
