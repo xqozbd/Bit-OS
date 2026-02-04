@@ -11,6 +11,7 @@
 #define APIC_REG_LVT_TMR 0x320
 #define APIC_REG_TMRDIV  0x3E0
 #define APIC_REG_TMRINIT 0x380
+#define APIC_REG_TMRCUR  0x390
 
 static volatile uint32_t *g_apic = 0;
 
@@ -39,7 +40,11 @@ static inline void apic_write(uint32_t reg, uint32_t val) {
     g_apic[reg / 4] = val;
 }
 
-int apic_init(uint8_t timer_vector, uint32_t initial_count) {
+static inline uint32_t apic_read(uint32_t reg) {
+    return g_apic[reg / 4];
+}
+
+int apic_init(void) {
     uint64_t apic_base = rdmsr(IA32_APIC_BASE_MSR);
     apic_base |= APIC_ENABLE;
     wrmsr(IA32_APIC_BASE_MSR, apic_base);
@@ -50,13 +55,22 @@ int apic_init(uint8_t timer_vector, uint32_t initial_count) {
     if (!g_apic) return -1;
 
     apic_write(APIC_REG_SVR, 0x100u | 0xFFu);
-    apic_write(APIC_REG_TMRDIV, 0x3); /* divide by 16 */
-    apic_write(APIC_REG_LVT_TMR, 0x20000u | timer_vector); /* periodic */
-    apic_write(APIC_REG_TMRINIT, initial_count);
     return 0;
 }
 
 void apic_eoi(void) {
     if (!g_apic) return;
     apic_write(APIC_REG_EOI, 0);
+}
+
+void apic_timer_set_periodic(uint8_t vector, uint32_t initial_count) {
+    if (!g_apic) return;
+    apic_write(APIC_REG_TMRDIV, 0x3); /* divide by 16 */
+    apic_write(APIC_REG_LVT_TMR, 0x20000u | vector); /* periodic */
+    apic_write(APIC_REG_TMRINIT, initial_count);
+}
+
+uint32_t apic_timer_current(void) {
+    if (!g_apic) return 0;
+    return apic_read(APIC_REG_TMRCUR);
 }

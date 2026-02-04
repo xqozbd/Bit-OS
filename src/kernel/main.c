@@ -148,6 +148,9 @@ static void kmain_stage2(void) {
     }
     watchdog_checkpoint("tsc_done");
     watchdog_log_stage("tsc_done");
+    watchdog_checkpoint("apic_calibrate");
+    timer_switch_to_apic(100);
+    watchdog_checkpoint("apic_done");
     console_init();
     watchdog_checkpoint_boot_ok();
     watchdog_checkpoint("mouse_init");

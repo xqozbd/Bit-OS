@@ -14,6 +14,7 @@
 - [x] Add a minimal console with built-in commands (help, ls, cd, pwd, time, mem, echo, ver, clear).
 - [x] SMP bring-up (Limine MP).
 - [x] PIT timer + uptime ticks.
+- [x] APIC timer calibration and switch from PIT to APIC timer for scheduling.
 - [x] Page fault handler with fault reason logging.
 - [x] Limine module loading as an initramfs.
 - [x] Basic VFS layer and in-memory FS for `ls/cd/cat`.
@@ -26,7 +27,6 @@
 - [x] PCNet PCI probe + MAC read (VirtualBox card).
 
 ## Next
-- [ ] APIC timer calibration and switch from PIT to APIC timer for scheduling.
 - [ ] RTC sync to system time.
 - [ ] Preemptive scheduler with per-CPU run queues.
 - [ ] Basic kernel thread API (create/join/exit).
