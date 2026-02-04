@@ -6,6 +6,7 @@
 #include "arch/x86_64/smp.h"
 #include "kernel/heap.h"
 #include "kernel/thread.h"
+#include "kernel/sleep.h"
 #include "lib/log.h"
 
 extern void context_switch(struct cpu_context *prev, struct cpu_context *next);
@@ -187,6 +188,7 @@ void sched_init(void) {
 void sched_tick(void) {
     if (!g_sched_ready) return;
     g_sched_ticks++;
+    sleep_tick();
     uint32_t cpu = sched_cpu_index();
     static uint32_t ticks[256];
     if (cpu >= 256) return;
@@ -216,9 +218,13 @@ void sched_yield(void) {
     struct thread *prev = g_current[cpu];
     struct thread *next = runq_pick(&g_runq[cpu]);
     if (!next) {
-        g_need_resched[cpu] = 0;
-        cpu_enable_interrupts();
-        return;
+        if (prev && (prev->state == THREAD_BLOCKED || prev->state == THREAD_DEAD)) {
+            next = g_idle[cpu];
+        } else {
+            g_need_resched[cpu] = 0;
+            cpu_enable_interrupts();
+            return;
+        }
     }
     if (!next) {
         cpu_enable_interrupts();

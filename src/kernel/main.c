@@ -17,6 +17,7 @@
 #include "arch/x86_64/paging.h"
 #include "kernel/pmm.h"
 #include "kernel/sched.h"
+#include "kernel/sleep.h"
 #include "arch/x86_64/smp.h"
 #include "arch/x86_64/timer.h"
 #include "kernel/watchdog.h"
@@ -147,6 +148,7 @@ static void kmain_stage2(void) {
     boot_screen_set_status("sched");
     log_printf("Boot: initializing scheduler...\n");
     sched_init();
+    sleep_init();
     watchdog_log_stage("sched_init");
     log_printf("Boot: scheduler ready\n");
     boot_screen_set_status("switching");

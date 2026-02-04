@@ -3,9 +3,15 @@
 #include <stddef.h>
 
 #include "arch/x86_64/cpu.h"
+#include "kernel/sleep.h"
 #include "lib/log.h"
 
-static uint64_t sys_write(const char *buf, uint64_t len) {
+typedef uint64_t (*syscall_fn)(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+
+static uint64_t sys_write_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a3; (void)a4; (void)a5; (void)a6;
+    const char *buf = (const char *)a1;
+    uint64_t len = a2;
     if (!buf || len == 0) return 0;
     if (len > 4096) len = 4096;
     for (uint64_t i = 0; i < len; ++i) {
@@ -14,20 +20,32 @@ static uint64_t sys_write(const char *buf, uint64_t len) {
     return len;
 }
 
-static uint64_t sys_exit(uint64_t code) {
+static uint64_t sys_exit_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    uint64_t code = a1;
     log_printf("\n[sys_exit] code=%u\n", (unsigned)code);
     halt_forever();
     return 0;
 }
 
+static uint64_t sys_sleep_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    sleep_ms(a1);
+    return 0;
+}
+
+static syscall_fn g_syscalls[SYS_MAX] = {
+    [SYS_WRITE] = sys_write_impl,
+    [SYS_EXIT]  = sys_exit_impl,
+    [SYS_SLEEP] = sys_sleep_impl
+};
+
 uint64_t syscall_dispatch(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3,
                           uint64_t a4, uint64_t a5, uint64_t a6) {
-    (void)a3; (void)a4; (void)a5; (void)a6;
-    switch (num) {
-        case SYS_WRITE: return sys_write((const char *)a1, a2);
-        case SYS_EXIT:  return sys_exit(a1);
-        default:        return (uint64_t)-1;
-    }
+    if (num >= SYS_MAX) return (uint64_t)-1;
+    syscall_fn fn = g_syscalls[num];
+    if (!fn) return (uint64_t)-1;
+    return fn(a1, a2, a3, a4, a5, a6);
 }
 
 uint64_t syscall_handler(struct syscall_frame *f) {

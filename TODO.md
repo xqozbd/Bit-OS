@@ -27,12 +27,12 @@
 - [x] PCNet PCI probe + MAC read (VirtualBox card).
 - [x] RTC sync to system time.
 - [x] Preemptive scheduler with per-CPU run queues.
+- [x] Proper sleep/timer queue (sleep ms).
 - [x] Basic kernel thread API (create/join/exit).
+- [x] Userspace syscall table + minimal libc stubs.
+- [x] ELF loader: relocations + stack setup with argv/envp.
 
 ## Next
-- [ ] Proper sleep/timer queue (sleep ms).
-- [ ] Userspace syscall table + minimal libc stubs.
-- [ ] ELF loader: relocations + stack setup with argv/envp.
 - [ ] Initramfs unpacker (tar or cpio) into VFS.
 - [ ] VFS: path normalization + mount points.
 - [ ] Memory protection: user/kernel page separation.

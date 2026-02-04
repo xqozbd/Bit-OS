@@ -364,7 +364,9 @@ int commands_exec(int argc, char **argv, struct command_ctx *ctx) {
         if (argc < 2) {
             log_printf("run: missing path\n");
         } else {
-            elf_load_and_run(argv[1]);
+            int eargc = argc - 1;
+            char **eargv = &argv[1];
+            elf_load_and_run(argv[1], eargc, eargv, NULL);
         }
     } else if (str_eq(argv[0], "echo")) {
         if (argc > 1) {
