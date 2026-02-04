@@ -12,6 +12,8 @@
 #include "lib/log.h"
 
 enum { AP_STACK_SIZE = 0x1000 };
+_Static_assert(offsetof(struct limine_mp_info, extra_argument) == 24,
+               "limine_mp_info layout unexpected: extra_argument offset");
 
 static volatile uint32_t g_online = 1; /* BSP */
 static uint32_t g_cpu_count = 1;
@@ -50,7 +52,7 @@ static void ap_entry(struct limine_mp_info *info) {
     __asm__ volatile(
         ".intel_syntax noprefix\n"
         "cli\n"
-        "mov rax, qword ptr [rdi + 32]\n" /* info->extra_argument (stack_top) */
+        "mov rax, qword ptr [rdi + %c0]\n"
         "mov rcx, qword ptr [rip + g_boot_cr3]\n"
         "test rcx, rcx\n"
         "jz 0f\n"
@@ -64,7 +66,10 @@ static void ap_entry(struct limine_mp_info *info) {
         "1:\n"
         "xor rbp, rbp\n"
         "jmp ap_entry_c\n"
-        ".att_syntax\n");
+        ".att_syntax\n"
+        :
+        : "i"(offsetof(struct limine_mp_info, extra_argument))
+        : "rax", "rcx", "memory");
 #else
     (void)info;
     ap_entry_c(info);
