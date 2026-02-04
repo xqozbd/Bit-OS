@@ -1,4 +1,4 @@
-BitOS Source-Available License (BSAL) v1.1
+BitOS Source-Available License (BSAL) v1.2
 
 Copyright (c) 2026 Vvoidddd and Ty Mumm
 
@@ -29,32 +29,37 @@ Terms and Conditions
    3.4. You may not remove or alter this license or copyright notices.
    3.5. You may not imply endorsement by the copyright holders.
 
-4. Contributions
-   4.1. Contributions intended for upstream inclusion must be submitted through
+4. Retroactive Notice
+   4.1. This license applies to all copies of the Software and Derivative Works
+        obtained before the publication of this license. Continued use,
+        modification, or distribution of prior forks is subject to these terms.
+
+5. Contributions
+   5.1. Contributions intended for upstream inclusion must be submitted through
         the project's official channels.
-   4.2. By submitting a contribution, you represent that you have the right to
+   5.2. By submitting a contribution, you represent that you have the right to
         submit it and that it does not violate any third‑party rights.
 
-5. Trademarks
-   5.1. This license does not grant any trademark rights. "BitOS" and associated
+6. Trademarks
+   6.1. This license does not grant any trademark rights. "BitOS" and associated
         logos/names remain with the copyright holders.
 
-6. Termination
-   6.1. This license and your rights under it terminate automatically if you
+7. Termination
+   7.1. This license and your rights under it terminate automatically if you
         violate any term. Upon termination, you must cease all use and destroy
         all copies of the Software in your possession.
 
-7. Disclaimer of Warranty
+8. Disclaimer of Warranty
    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
 
-8. Limitation of Liability
+9. Limitation of Liability
    IN NO EVENT SHALL THE COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR
    OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
    IN THE SOFTWARE.
 
-9. Governing Law
-   9.1. This license is governed by the laws of the jurisdiction chosen by the
-        copyright holders.
+10. Governing Law
+   10.1. This license is governed by the laws of the jurisdiction chosen by the
+         copyright holders.
