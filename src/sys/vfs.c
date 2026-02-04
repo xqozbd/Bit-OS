@@ -206,6 +206,19 @@ void vfs_pwd(int cwd) {
 void vfs_ls(int node) {
     if (node < 0 || node >= g_node_count) return;
     const struct vfs_node *n = &g_nodes[node];
+    if (node == g_root) {
+        /* List mount points that aren't part of the backend root. */
+        int printed = 0;
+        for (int i = 0; i < g_mount_count; ++i) {
+            const char *mp = g_mounts[i].path;
+            if (!mp || str_eq(mp, "/")) continue;
+            if (mp[0] == '/') mp++;
+            if (*mp == '\0') continue;
+            log_printf("%s/ ", mp);
+            printed = 1;
+        }
+        if (printed) log_printf("\n");
+    }
     if (n->backend == VFS_BACKEND_INITRAMFS) {
         initramfs_ls(n->node);
         return;

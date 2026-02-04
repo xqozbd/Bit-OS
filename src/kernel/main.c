@@ -12,6 +12,7 @@
 #include "kernel/heap.h"
 #include "arch/x86_64/idt.h"
 #include "sys/initramfs.h"
+#include "sys/fs_mock.h"
 #include "sys/vfs.h"
 #include "lib/log.h"
 #include "kernel/monitor.h"
@@ -140,9 +141,15 @@ static void kmain_stage2(void) {
     if (initramfs_available()) {
         vfs_set_root(VFS_BACKEND_INITRAMFS, initramfs_root());
         log_printf("Boot: VFS root set to initramfs\n");
+        vfs_mount("/mock", VFS_BACKEND_MOCK, fs_root());
+        log_printf("Boot: mounted mock FS at /mock\n");
     } else {
-        vfs_set_root(VFS_BACKEND_MOCK, 0);
+        vfs_set_root(VFS_BACKEND_MOCK, fs_root());
         log_printf("Boot: VFS root set to mock FS\n");
+    }
+    if (initramfs_available()) {
+        vfs_mount("/initramfs", VFS_BACKEND_INITRAMFS, initramfs_root());
+        log_printf("Boot: mounted initramfs at /initramfs\n");
     }
     watchdog_early_stage("vfs_init");
     watchdog_log_stage("vfs_init");

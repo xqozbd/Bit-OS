@@ -26,17 +26,20 @@
 - [x] SMP bring-up and per-CPU data.
 - [x] PCNet PCI probe + MAC read (VirtualBox card).
 - [x] RTC sync to system time.
-- [x] Preemptive scheduler with per-CPU run queues.
+- [x] Preemptive scheduler with per-CPU run queues (safe-point preemption).
 - [x] Proper sleep/timer queue (sleep ms).
 - [x] Basic kernel thread API (create/join/exit).
 - [x] Userspace syscall table + minimal libc stubs.
 - [x] ELF loader: relocations + stack setup with argv/envp.
 - [x] Initramfs unpacker (tar or cpio) into VFS.
 - [x] VFS: path normalization + mount points.
-
+- [x] Framebuffer cursor sprite (separate from text caret).
+- [x] Mouse cursor in framebuffer graphics mode.
+- [x] High-resolution timers (APIC / TSC calibration).
 ## Next
 - [ ] Memory protection: user/kernel page separation.
 - [ ] Page fault recovery + kill userspace task.
+- [ ] Interrupt-driven preemption (timer ISR context switch).
 - [ ] PCI enumeration: BAR sizing, MSI support, device driver registry.
 - [ ] PCNet TX/RX ring buffers + basic ARP.
 - [ ] Basic network stack (Ethernet + ARP + IPv4 + ICMP ping).
@@ -52,7 +55,6 @@
 - [ ] Driver registry (init order + status).
 - [ ] ACPI parsing stub (device discovery).
 - [ ] Kernel panic backtrace (stack walk).
-- [ ] Framebuffer cursor sprite (separate from text caret).
 - [ ] Configurable boot params (Limine cmdline).
 - [ ] File descriptor table per-process + basic `open/read/write/close`.
 - [ ] Userspace `fork/exec/exit` support.
@@ -147,7 +149,6 @@
 - [ ] Semaphore support in kernel and userspace.
 - [ ] Userland library: `libc` extensions (string, math, stdio).
 - [ ] CPU feature detection (CPUID-based).
-- [ ] High-resolution timers (APIC / TSC calibration).
 - [ ] Terminal line discipline: raw / cooked mode.
 - [ ] Kernel memory sanitizer hooks.
 - [ ] Kernel statistics (/proc/stat-like reporting).
@@ -156,7 +157,6 @@
 - [ ] Userspace history expansion (`!` command).
 - [ ] Basic scripting language in shell (variables, loops).
 - [ ] Virtual keyboard input support (HID).
-- [ ] Mouse cursor in framebuffer graphics mode.
 - [ ] Basic graphics API for userspace (pixel set, draw line/rect).
 - [ ] Double buffering for framebuffer graphics.
 - [ ] Color palette / 24-bit color support.
