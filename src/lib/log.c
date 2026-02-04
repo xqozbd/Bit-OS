@@ -3,6 +3,7 @@
 
 #include "lib/compat.h"
 #include "lib/log.h"
+#include "drivers/ps2/mouse.h"
 #include "drivers/video/fb_printf.h"
 
 /* Serial (COM1) logging */
@@ -99,10 +100,12 @@ void log_printf(const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
     if (fb_ready) {
+        ms_cursor_hide();
         va_list ap2;
         va_copy(ap2, ap);
         fb_vprintf(fmt, ap2);
         va_end(ap2);
+        ms_cursor_show();
     }
     serial_vprintf(fmt, ap);
     va_end(ap);

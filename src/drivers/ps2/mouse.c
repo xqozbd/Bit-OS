@@ -66,22 +66,34 @@ static volatile uint8_t pkt[3];
 static volatile uint8_t pkt_idx = 0;
 static volatile int32_t g_x = 0;
 static volatile int32_t g_y = 0;
+static volatile int32_t g_pending_dx = 0;
+static volatile int32_t g_pending_dy = 0;
 static volatile uint8_t g_buttons = 0;
 static volatile int g_event_ready = 0;
 static int g_inited = 0;
 static int g_cursor_drawn = 0;
+static int g_cursor_hidden = 0;
 static int32_t g_cur_x = 0;
 static int32_t g_cur_y = 0;
-static uint32_t g_cursor_w = 6;
-static uint32_t g_cursor_h = 6;
-static uint32_t g_saved[36];
+#define CURSOR_W 8
+#define CURSOR_H 12
+static const uint8_t g_cursor_mask[CURSOR_H] = {
+	0x01, 0x03, 0x07, 0x0F,
+	0x1F, 0x3F, 0x7F, 0xFF,
+	0xF8, 0xE0, 0xC0, 0x80
+};
+static uint32_t g_cursor_w = CURSOR_W;
+static uint32_t g_cursor_h = CURSOR_H;
+static uint32_t g_saved[CURSOR_W * CURSOR_H];
 
 int ms_poll_event(struct mouse_event *out) {
 	if (!out) return 0;
 	/* simple single-event model: return last accumulated delta when ready */
 	if (!g_event_ready) return 0;
-	out->dx = (int32_t)((int8_t)pkt[1]);
-	out->dy = -(int32_t)((int8_t)pkt[2]); /* invert Y to screen coords */
+	out->dx = g_pending_dx;
+	out->dy = g_pending_dy;
+	g_pending_dx = 0;
+	g_pending_dy = 0;
 	out->buttons = g_buttons;
 	out->x = g_x;
 	out->y = g_y;
@@ -120,7 +132,9 @@ static void restore_under_cursor(int32_t x, int32_t y) {
 
 static void draw_cursor_at(int32_t x, int32_t y, uint32_t color) {
 	for (uint32_t dy = 0; dy < g_cursor_h; ++dy) {
+		uint8_t mask = g_cursor_mask[dy];
 		for (uint32_t dx = 0; dx < g_cursor_w; ++dx) {
+			if ((mask & (1u << dx)) == 0) continue;
 			fb_write_pixel((uint32_t)(x + (int32_t)dx),
 			               (uint32_t)(y + (int32_t)dy),
 			               color);
@@ -137,8 +151,12 @@ void ms_draw_cursor(void) {
 	int32_t ny = g_cur_y + ev.dy;
 	clamp_cursor(&nx, &ny);
 
-	uint32_t fg = 0, bg = 0;
-	fb_get_colors(&fg, &bg);
+	if (g_cursor_hidden) {
+		g_cur_x = nx;
+		g_cur_y = ny;
+		return;
+	}
+
 	if (g_cursor_drawn) {
 		restore_under_cursor(g_cur_x, g_cur_y);
 	}
@@ -147,6 +165,22 @@ void ms_draw_cursor(void) {
 	save_under_cursor(g_cur_x, g_cur_y);
 	draw_cursor_at(g_cur_x, g_cur_y, 0xFFFFFF);
 	g_cursor_drawn = 1;
+	g_cursor_hidden = 0;
+}
+
+void ms_cursor_hide(void) {
+	if (!g_inited || !g_cursor_drawn || g_cursor_hidden) return;
+	restore_under_cursor(g_cur_x, g_cur_y);
+	g_cursor_drawn = 0;
+	g_cursor_hidden = 1;
+}
+
+void ms_cursor_show(void) {
+	if (!g_inited || !g_cursor_hidden) return;
+	save_under_cursor(g_cur_x, g_cur_y);
+	draw_cursor_at(g_cur_x, g_cur_y, 0xFFFFFF);
+	g_cursor_drawn = 1;
+	g_cursor_hidden = 0;
 }
 
 void ms_irq_handler(void) {
@@ -176,6 +210,8 @@ void ms_irq_handler(void) {
 			g_buttons = buttons;
 			g_x += (int32_t)dx;
 			g_y += -(int32_t)dy; /* invert Y to screen coords */
+			g_pending_dx += (int32_t)dx;
+			g_pending_dy += -(int32_t)dy;
 			g_event_ready = 1;
 		}
 	}
@@ -213,8 +249,12 @@ void ms_init(void) {
 	if (w && h) {
 		g_cur_x = (int32_t)(w / 2);
 		g_cur_y = (int32_t)(h / 2);
+		clamp_cursor(&g_cur_x, &g_cur_y);
+		g_x = g_cur_x;
+		g_y = g_cur_y;
 		save_under_cursor(g_cur_x, g_cur_y);
 		draw_cursor_at(g_cur_x, g_cur_y, 0xFFFFFF);
 		g_cursor_drawn = 1;
+		g_cursor_hidden = 0;
 	}
 }

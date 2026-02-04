@@ -17,11 +17,14 @@
 #include "arch/x86_64/smp.h"
 #include "lib/strutil.h"
 #include "lib/version.h"
+#include "boot/bootinfo.h"
+#include "drivers/net/pcnet.h"
 
 static const char *const g_commands[] = {
     "help", "clear", "time", "mem", "memtest", "cputest",
-    "ls", "cd", "pwd", "cat", "run", "echo", "ver", "restart"
+    "ls", "cd", "pwd", "cat", "run", "echo", "ver", "debug", "shutdown", "restart"
 };
+
 
 size_t commands_count(void) {
     return sizeof(g_commands) / sizeof(g_commands[0]);
@@ -39,6 +42,8 @@ static void cmd_help(void) {
     }
     log_printf("  memtest [--size N] [--time T] [--pages N]\n");
     log_printf("  run <path> (ELF64, higher-half)\n");
+    log_printf("  debug\n");
+    log_printf("  shutdown\n");
     log_printf("  restart\n");
     log_printf("  sizes: 1g 512m 256k (also gb/mb/kb/gig/meg)\n");
     log_printf("  time: 20s 1min 2minutes\n\n");
@@ -52,6 +57,40 @@ static void cmd_time(void) {
     else log_printf("RTC: unavailable (err=%d)\n", rc);
 }
 
+static void cmd_debug(void) {
+    log_printf("BitOS Debug Info\n");
+    log_printf("================\n");
+
+    char rtc_buf[20];
+    int rc = rtc_get_string(rtc_buf);
+    if (rc == 0) {
+        log_printf("RTC: %s\n", rtc_buf);
+    } else {
+        log_printf("RTC: unavailable (err=%d)\n", rc);
+    }
+
+    bootinfo_log();
+    systeminfo_log();
+    pcnet_log_status();
+    log_printf("\n");
+}
+
+static void cmd_shutdown(void) {
+    log_printf("Shutting down Bit-OS...\n");
+    log_printf("Goodbye\n");
+
+    
+    outw(0x604, 0x2000);
+    outw(0xB004, 0x2000);
+    outw(0x4004, 0x3400);
+    outw(0x4004, 0x2000);
+
+    // fallback is to stop the cpu
+    halt_forever();
+}
+
+
+
 static void cmd_mem(void) {
     uint64_t total = pmm_total_frames();
     uint64_t used = pmm_used_frames();
@@ -63,7 +102,6 @@ static void cmd_mem(void) {
 static void cmd_clear(void) {
     fb_clear();
     banner_draw();
-    log_printf("BitOS v%s\n", BITOS_VERSION);
 }
 
 static void cmd_ver(void) {
@@ -276,11 +314,37 @@ int commands_exec(int argc, char **argv, struct command_ctx *ctx) {
         if (argc < 2) {
             *ctx->cwd = fs_root();
         } else {
-            int target = fs_resolve(*ctx->cwd, argv[1]);
-            if (target < 0 || !fs_is_dir(target)) {
-                log_printf("cd: not a directory\n");
+            const char *target_path = argv[1];
+            if (target_path[0] == '~') {
+                int home = fs_resolve(fs_root(), "home");
+                if (home < 0) {
+                    if (target_path[1] == '\0' || (target_path[1] == '/' && target_path[2] == '\0')) {
+                        *ctx->cwd = fs_root();
+                    } else if (target_path[1] == '/' && target_path[2] != '\0') {
+                        int tgt = fs_resolve(fs_root(), &target_path[2]);
+                        if (tgt < 0 || !fs_is_dir(tgt)) log_printf("cd: not a directory\n");
+                        else *ctx->cwd = tgt;
+                    } else {
+                        *ctx->cwd = fs_root();
+                    }
+                } else {
+                    if (target_path[1] == '\0' || (target_path[1] == '/' && target_path[2] == '\0')) {
+                        *ctx->cwd = home;
+                    } else if (target_path[1] == '/' && target_path[2] != '\0') {
+                        int tgt = fs_resolve(home, &target_path[2]);
+                        if (tgt < 0 || !fs_is_dir(tgt)) log_printf("cd: not a directory\n");
+                        else *ctx->cwd = tgt;
+                    } else {
+                        *ctx->cwd = home;
+                    }
+                }
             } else {
-                *ctx->cwd = target;
+                int target = fs_resolve(*ctx->cwd, target_path);
+                if (target < 0 || !fs_is_dir(target)) {
+                    log_printf("cd: not a directory\n");
+                } else {
+                    *ctx->cwd = target;
+                }
             }
         }
     } else if (str_eq(argv[0], "cat")) {
@@ -304,6 +368,10 @@ int commands_exec(int argc, char **argv, struct command_ctx *ctx) {
         log_printf("\n");
     } else if (str_eq(argv[0], "ver")) {
         cmd_ver();
+    } else if (str_eq(argv[0], "debug")) {
+        cmd_debug();
+    } else if (str_eq(argv[0], "shutdown")) {
+        cmd_shutdown();
     } else if (str_eq(argv[0], "restart")) {
         cmd_restart();
     } else {

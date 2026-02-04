@@ -182,7 +182,6 @@ void fb_putc(char c) {
     if (c == '\b') {
         uint32_t step = char_w * char_scale + char_spacing;
         if (cursor_x >= margin_x + step) cursor_x -= step;
-        draw_char_px(cursor_x, cursor_y, ' ', cur_fg, cur_bg);
         return;
     }
 
