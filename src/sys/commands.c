@@ -22,11 +22,12 @@
 #include "boot/bootinfo.h"
 #include "drivers/net/pcnet.h"
 #include "kernel/power.h"
+#include "kernel/task.h"
 
 static const char *const g_commands[] = {
-    "help", "clear", "time", "mem", "memtest", "cputest",
+    "help", "clear", "time", "mem", "memtest", "cputest", "ps",
     "ls", "cd", "pwd", "cat", "run", "echo", "ver", "debug", "ping",
-    "shutdown", "restart", "s3", "s4", "thermal"
+    "shutdown", "restart", "s3", "s4", "thermal", "dmesg"
 };
 
 
@@ -47,12 +48,14 @@ static void cmd_help(void) {
     log_printf("  memtest [--size N] [--time T] [--pages N]\n");
     log_printf("  run <path> (ELF64, higher-half)\n");
     log_printf("  ping <ip>\n");
+    log_printf("  ps\n");
     log_printf("  debug\n");
     log_printf("  shutdown\n");
     log_printf("  restart\n");
     log_printf("  s3 (suspend to RAM)\n");
     log_printf("  s4 (hibernate)\n");
     log_printf("  thermal (ACPI thermal status)\n");
+    log_printf("  dmesg (dump ring buffer log)\n");
     log_printf("  sizes: 1g 512m 256k (also gb/mb/kb/gig/meg)\n");
     log_printf("  time: 20s 1min 2minutes\n\n");
 
@@ -170,6 +173,14 @@ static void cmd_s4(void) {
 
 static void cmd_thermal(void) {
     acpi_thermal_log();
+}
+
+static void cmd_dmesg(void) {
+    log_ring_dump();
+}
+
+static void cmd_ps(void) {
+    task_dump_list();
 }
 
 static void cmd_cat(const char *path, int cwd) {
@@ -361,6 +372,8 @@ int commands_exec(int argc, char **argv, struct command_ctx *ctx) {
         cmd_memtest(pages, bytes, seconds);
     } else if (str_eq(argv[0], "cputest")) {
         cmd_cputest();
+    } else if (str_eq(argv[0], "ps")) {
+        cmd_ps();
     } else if (str_eq(argv[0], "pwd")) {
         vfs_pwd(*ctx->cwd);
     } else if (str_eq(argv[0], "ls")) {
@@ -451,6 +464,8 @@ int commands_exec(int argc, char **argv, struct command_ctx *ctx) {
         cmd_s4();
     } else if (str_eq(argv[0], "thermal")) {
         cmd_thermal();
+    } else if (str_eq(argv[0], "dmesg")) {
+        cmd_dmesg();
     } else {
         return 0;
     }

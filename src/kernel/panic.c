@@ -4,6 +4,7 @@
 #include "drivers/video/fb_printf.h"
 #include "lib/log.h"
 #include "kernel/watchdog.h"
+#include "kernel/crash.h"
 
 void panic_screen(uint32_t code, const char *msg) {
     fb_clear();
@@ -14,5 +15,6 @@ void panic_screen(uint32_t code, const char *msg) {
     log_printf("Error code: 0x%x\n", (unsigned)code);
     log_printf("Stage: %s\n", watchdog_last_stage());
     if (msg) log_printf("%s\n", msg);
+    crash_panic(code, msg);
     halt_forever();
 }

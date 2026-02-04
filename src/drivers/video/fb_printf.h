@@ -18,6 +18,11 @@ void fb_clear(void);
 void fb_putc(char c);
 void fb_puts(const char *s);
 void fb_printf(const char *fmt, ...);
+void fb_scrollback_up(uint32_t lines);
+void fb_scrollback_down(uint32_t lines);
+void fb_scrollback_reset(void);
+uint32_t fb_scrollback_offset(void);
+void fb_scrollback_suspend(int suspend);
 void fb_vprintf(const char *fmt, va_list ap);
 
 /* Optional: change colors for next prints */

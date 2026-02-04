@@ -38,6 +38,11 @@
 - [x] ELF loader: relocations + stack setup with argv/envp.
 - [x] Initramfs unpacker (tar or cpio) into VFS.
 - [x] VFS: path normalization + mount points.
+- [x] Console output buffering + scrollback.
+- [x] PS/2 mouse packet sync + rate limiting improvements.
+- [x] Ring buffer logging + persistent crash dump to RAM.
+- [x] Shell history (up/down).
+- [x] Shell tab completion.
 - [x] Power management: suspend/resume (S3/S4).
 - [x] Basic network stack (Ethernet + ARP + IPv4 + ICMP ping).
 - [x] Power management: C-states (idle power saving).
@@ -47,16 +52,11 @@
 - [x] High-resolution timers (APIC / TSC calibration).
 - [x] Interrupt-driven preemption (timer ISR context switch).
 - [x] Power management: thermal zones + trip points.
+- [x] Process/task model (PID, state, kernel stack, page table).
+- [x] Userspace memory allocator (brk/sbrk syscall).
+- [x] Keyboard line discipline (canonical mode, Ctrl+C, Ctrl+V).
 
 ## Next
-- [ ] PS/2 mouse packet sync + rate limiting improvements.
-- [ ] Ring buffer logging + persistent crash dump to RAM.
-- [ ] Shell history (up/down).
-- [ ] Shell tab completion.
-- [ ] Process/task model (PID, state, kernel stack, page table).
-- [ ] Userspace memory allocator (brk/sbrk syscall).
-- [ ] Keyboard line discipline (canonical mode, Ctrl+C, Ctrl+V).
-- [ ] Console output buffering + scrollback.
 - [ ] Interrupt masking / IRQ priority routing.
 - [ ] Driver registry (init order + status).
 - [ ] ACPI parsing stub (device discovery).

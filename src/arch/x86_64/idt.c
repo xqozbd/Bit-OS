@@ -11,18 +11,11 @@
 #include "drivers/ps2/mouse.h"
 #include "sys/syscall.h"
 #include "kernel/watchdog.h"
+#include "kernel/crash.h"
 #include "kernel/sched.h"
 #include "kernel/thread.h"
 
 /* IDT + exceptions */
-struct interrupt_frame {
-    uint64_t rip;
-    uint64_t cs;
-    uint64_t rflags;
-    uint64_t rsp;
-    uint64_t ss;
-};
-
 struct idt_entry {
     uint16_t offset_low;
     uint16_t selector;
@@ -95,22 +88,24 @@ void idt_reload(void) {
     lidt(&idtp);
 }
 
-static void exception_common(uint8_t vec, uint64_t err, int has_err) {
-    log_printf("\nEXCEPTION %u", (unsigned)vec);
-    if (has_err) log_printf(" err=0x%x", (unsigned)err);
-    log_printf("\nstage: %s", watchdog_last_stage());
-    log_printf("\nSystem halted.\n");
+static void exception_common(uint8_t vec, uint64_t err, int has_err, struct interrupt_frame *frame) {
+    enum crash_action action = crash_handle_exception(vec, err, has_err, frame);
+    if (action == CRASH_CONTINUE) return;
+    if (action == CRASH_KILL_TASK) {
+        thread_exit();
+        __builtin_unreachable();
+    }
     halt_forever();
 }
 
 #define ISR_NOERR(n) \
     __attribute__((interrupt, target("general-regs-only"), used)) void isr_noerr_##n(struct interrupt_frame *frame) { \
-        (void)frame; exception_common((uint8_t)n, 0, 0); \
+        exception_common((uint8_t)n, 0, 0, frame); \
     }
 
 #define ISR_ERR(n) \
     __attribute__((interrupt, target("general-regs-only"), used)) void isr_err_##n(struct interrupt_frame *frame, uint64_t error_code) { \
-        (void)frame; exception_common((uint8_t)n, error_code, 1); \
+        exception_common((uint8_t)n, error_code, 1, frame); \
     }
 
 ISR_NOERR(0)  ISR_NOERR(1)  ISR_NOERR(2)  ISR_NOERR(3)

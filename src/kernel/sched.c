@@ -8,6 +8,7 @@
 #include "kernel/heap.h"
 #include "kernel/thread.h"
 #include "kernel/sleep.h"
+#include "kernel/task.h"
 #include "lib/log.h"
 
 extern void context_switch(struct cpu_context *prev, struct cpu_context *next);
@@ -149,6 +150,8 @@ void sched_init(void) {
     g_boot_thread.pml4_phys = paging_pml4_phys();
     g_boot_thread.is_user = 0;
     g_boot_thread.name = "bootstrap";
+    g_boot_thread.task = NULL;
+    task_init_bootstrap(&g_boot_thread);
     g_current[g_boot_thread.cpu] = &g_boot_thread;
 
     /* Create idle threads per CPU */
@@ -182,6 +185,7 @@ void sched_init(void) {
         idle->name = "idle";
         idle->pml4_phys = paging_pml4_phys();
         idle->is_user = 0;
+        idle->task = NULL;
         g_idle[i] = idle;
     }
 

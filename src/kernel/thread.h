@@ -6,6 +6,8 @@
 
 #include "lib/compat.h"
 
+struct task;
+
 enum thread_state {
     THREAD_READY = 0,
     THREAD_RUNNING = 1,
@@ -43,6 +45,7 @@ struct thread {
     uint64_t pml4_phys;
     uint8_t is_user;
     const char *name;
+    struct task *task;
 };
 
 struct thread *thread_current(void);

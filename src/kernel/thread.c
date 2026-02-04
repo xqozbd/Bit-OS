@@ -6,6 +6,7 @@
 #include "arch/x86_64/paging.h"
 #include "kernel/heap.h"
 #include "kernel/sched.h"
+#include "kernel/task.h"
 
 static void thread_trampoline(void) {
     struct thread *t = thread_current();
@@ -55,6 +56,8 @@ struct thread *thread_create(void (*entry)(void *), void *arg, size_t stack_size
     t->pml4_phys = paging_pml4_phys();
     t->is_user = 0;
     t->name = name;
+    t->task = NULL;
+    task_create_for_thread(t, name);
 
     sched_enqueue(t);
     return t;
@@ -64,6 +67,7 @@ void thread_exit(void) {
     struct thread *t = thread_current();
     if (t) {
         t->state = THREAD_DEAD;
+        task_on_thread_exit(t);
     }
     sched_yield();
     halt_forever();

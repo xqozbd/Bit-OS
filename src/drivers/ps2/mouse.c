@@ -71,6 +71,8 @@ static volatile int32_t g_pending_dy = 0;
 static volatile uint8_t g_buttons = 0;
 static volatile int g_event_ready = 0;
 static int g_inited = 0;
+static uint64_t g_last_event_tick = 0;
+static uint64_t g_min_event_ticks = 1;
 static int g_cursor_drawn = 0;
 static int g_cursor_hidden = 0;
 static int32_t g_cur_x = 0;
@@ -204,21 +206,38 @@ void ms_irq_handler(void) {
 		pkt[pkt_idx++] = b;
 		if (pkt_idx >= 3) {
 			pkt_idx = 0;
+			/* Validate packet: bit3 must be set, overflow bits must be clear. */
+			if ((pkt[0] & 0x08) == 0 || (pkt[0] & 0xC0)) {
+				continue;
+			}
 			uint8_t buttons = pkt[0] & 0x07; /* left/middle/right */
 			int8_t dx = (int8_t)pkt[1];
 			int8_t dy = (int8_t)pkt[2];
+			/* Validate sign bits (bit4/5 in first byte). */
+			if (((pkt[0] & 0x10) != 0) != (dx < 0)) continue;
+			if (((pkt[0] & 0x20) != 0) != (dy < 0)) continue;
 			g_buttons = buttons;
 			g_x += (int32_t)dx;
 			g_y += -(int32_t)dy; /* invert Y to screen coords */
 			g_pending_dx += (int32_t)dx;
 			g_pending_dy += -(int32_t)dy;
-			g_event_ready = 1;
+			uint64_t now = timer_uptime_ticks();
+			if (now - g_last_event_tick >= g_min_event_ticks) {
+				g_last_event_tick = now;
+				g_event_ready = 1;
+			}
 		}
 	}
 }
 
 void ms_init(void) {
 	g_inited = 1;
+	uint32_t hz = timer_pit_hz();
+	if (hz == 0) hz = 100;
+	/* Rate limit mouse events to ~120 Hz (or 1 tick minimum). */
+	g_min_event_ticks = hz / 120u;
+	if (g_min_event_ticks == 0) g_min_event_ticks = 1;
+	g_last_event_tick = timer_uptime_ticks();
 	/* Enable IRQ12 + IRQ1 in controller command byte */
 	uint8_t cmd = read_cmd_byte();
 	cmd |= 0x03; /* bit0=IRQ1, bit1=IRQ12 */
