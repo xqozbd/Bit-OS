@@ -31,10 +31,10 @@
 - [x] Basic kernel thread API (create/join/exit).
 - [x] Userspace syscall table + minimal libc stubs.
 - [x] ELF loader: relocations + stack setup with argv/envp.
+- [x] Initramfs unpacker (tar or cpio) into VFS.
+- [x] VFS: path normalization + mount points.
 
 ## Next
-- [ ] Initramfs unpacker (tar or cpio) into VFS.
-- [ ] VFS: path normalization + mount points.
 - [ ] Memory protection: user/kernel page separation.
 - [ ] Page fault recovery + kill userspace task.
 - [ ] PCI enumeration: BAR sizing, MSI support, device driver registry.

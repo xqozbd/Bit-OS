@@ -7,7 +7,7 @@
 #include "arch/x86_64/cpu_info.h"
 #include "arch/x86_64/cpu.h"
 #include "drivers/video/fb_printf.h"
-#include "sys/fs_mock.h"
+#include "sys/vfs.h"
 #include "lib/log.h"
 #include "arch/x86_64/io.h"
 #include "arch/x86_64/paging.h"
@@ -126,19 +126,19 @@ static void cmd_cat(const char *path, int cwd) {
         log_printf("cat: missing file\n");
         return;
     }
-    int node = fs_resolve(cwd, path);
+    int node = vfs_resolve(cwd, path);
     if (node < 0) {
         log_printf("cat: not found\n");
         return;
     }
-    if (fs_is_dir(node)) {
+    if (vfs_is_dir(node)) {
         log_printf("cat: is a directory\n");
         return;
     }
 
     const uint8_t *data = NULL;
     uint64_t size = 0;
-    if (!fs_read_file(node, &data, &size) || !data) {
+    if (!vfs_read_file(node, &data, &size) || !data) {
         log_printf("cat: unreadable\n");
         return;
     }
@@ -311,43 +311,43 @@ int commands_exec(int argc, char **argv, struct command_ctx *ctx) {
     } else if (str_eq(argv[0], "cputest")) {
         cmd_cputest();
     } else if (str_eq(argv[0], "pwd")) {
-        fs_pwd(*ctx->cwd);
+        vfs_pwd(*ctx->cwd);
     } else if (str_eq(argv[0], "ls")) {
         int target = *ctx->cwd;
-        if (argc > 1) target = fs_resolve(*ctx->cwd, argv[1]);
+        if (argc > 1) target = vfs_resolve(*ctx->cwd, argv[1]);
         if (target < 0) log_printf("ls: not found\n");
-        else fs_ls(target);
+        else vfs_ls(target);
     } else if (str_eq(argv[0], "cd")) {
         if (argc < 2) {
-            *ctx->cwd = fs_root();
+            *ctx->cwd = vfs_resolve(0, "/");
         } else {
             const char *target_path = argv[1];
             if (target_path[0] == '~') {
-                int home = fs_resolve(fs_root(), "home");
+                int home = vfs_resolve(vfs_resolve(0, "/"), "home");
                 if (home < 0) {
                     if (target_path[1] == '\0' || (target_path[1] == '/' && target_path[2] == '\0')) {
-                        *ctx->cwd = fs_root();
+                        *ctx->cwd = vfs_resolve(0, "/");
                     } else if (target_path[1] == '/' && target_path[2] != '\0') {
-                        int tgt = fs_resolve(fs_root(), &target_path[2]);
-                        if (tgt < 0 || !fs_is_dir(tgt)) log_printf("cd: not a directory\n");
+                        int tgt = vfs_resolve(vfs_resolve(0, "/"), &target_path[2]);
+                        if (tgt < 0 || !vfs_is_dir(tgt)) log_printf("cd: not a directory\n");
                         else *ctx->cwd = tgt;
                     } else {
-                        *ctx->cwd = fs_root();
+                        *ctx->cwd = vfs_resolve(0, "/");
                     }
                 } else {
                     if (target_path[1] == '\0' || (target_path[1] == '/' && target_path[2] == '\0')) {
                         *ctx->cwd = home;
                     } else if (target_path[1] == '/' && target_path[2] != '\0') {
-                        int tgt = fs_resolve(home, &target_path[2]);
-                        if (tgt < 0 || !fs_is_dir(tgt)) log_printf("cd: not a directory\n");
+                        int tgt = vfs_resolve(home, &target_path[2]);
+                        if (tgt < 0 || !vfs_is_dir(tgt)) log_printf("cd: not a directory\n");
                         else *ctx->cwd = tgt;
                     } else {
                         *ctx->cwd = home;
                     }
                 }
             } else {
-                int target = fs_resolve(*ctx->cwd, target_path);
-                if (target < 0 || !fs_is_dir(target)) {
+                int target = vfs_resolve(*ctx->cwd, target_path);
+                if (target < 0 || !vfs_is_dir(target)) {
                     log_printf("cd: not a directory\n");
                 } else {
                     *ctx->cwd = target;

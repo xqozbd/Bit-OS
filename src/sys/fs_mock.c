@@ -50,18 +50,15 @@ static const struct fs_node fs_nodes[FS_MAX_NODES] = {
 };
 
 int fs_root(void) {
-    if (initramfs_available()) return initramfs_root();
     return 0;
 }
 
 int fs_is_dir(int node) {
-    if (initramfs_available()) return initramfs_is_dir(node);
     if (node < 0 || node >= FS_MAX_NODES) return 0;
     return fs_nodes[node].is_dir != 0;
 }
 
 int fs_read_file(int node, const uint8_t **data, uint64_t *size) {
-    if (initramfs_available()) return initramfs_read_file(node, data, size);
     if (!data || !size) return 0;
     if (node < 0 || node >= FS_MAX_NODES) return 0;
     if (fs_nodes[node].is_dir) return 0;
@@ -109,7 +106,6 @@ static int fs_find_child(int dir, const char *name) {
 }
 
 int fs_resolve(int cwd, const char *path) {
-    if (initramfs_available()) return initramfs_resolve(cwd, path);
     if (!path || path[0] == '\0') return cwd;
     int cur = (path[0] == '/') ? 0 : cwd;
     size_t i = (path[0] == '/') ? 1 : 0;
@@ -142,10 +138,6 @@ int fs_resolve(int cwd, const char *path) {
 }
 
 void fs_pwd(int cwd) {
-    if (initramfs_available()) {
-        initramfs_pwd(cwd);
-        return;
-    }
     char buf[128];
     size_t len = 0;
     int cur = cwd;
@@ -171,10 +163,6 @@ void fs_pwd(int cwd) {
 }
 
 void fs_ls(int node) {
-    if (initramfs_available()) {
-        initramfs_ls(node);
-        return;
-    }
     if (node < 0 || node >= FS_MAX_NODES) return;
     const struct fs_node *d = &fs_nodes[node];
     if (!d->is_dir) {

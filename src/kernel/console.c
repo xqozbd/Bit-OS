@@ -3,7 +3,7 @@
 #include <stddef.h>
 
 #include "sys/commands.h"
-#include "sys/fs_mock.h"
+#include "sys/vfs.h"
 #include "drivers/ps2/keyboard.h"
 #include "drivers/ps2/mouse.h"
 #include "lib/log.h"
@@ -78,7 +78,7 @@ static void console_redraw(const char *line, int len, int cursor, int *last_len,
 }
 
 void console_run(void) {
-    int cwd = fs_root();
+    int cwd = vfs_resolve(0, "/");
     char line[128];
     int len = 0;
     int cursor = 0;

@@ -12,6 +12,7 @@
 #include "kernel/heap.h"
 #include "arch/x86_64/idt.h"
 #include "sys/initramfs.h"
+#include "sys/vfs.h"
 #include "lib/log.h"
 #include "kernel/monitor.h"
 #include "arch/x86_64/paging.h"
@@ -133,6 +134,18 @@ static void kmain_stage2(void) {
     watchdog_early_stage("initramfs");
     watchdog_log_stage("initramfs");
     log_printf("Boot: initramfs ready\n");
+    boot_screen_set_status("vfs");
+    log_printf("Boot: initializing VFS...\n");
+    vfs_init();
+    if (initramfs_available()) {
+        vfs_set_root(VFS_BACKEND_INITRAMFS, initramfs_root());
+        log_printf("Boot: VFS root set to initramfs\n");
+    } else {
+        vfs_set_root(VFS_BACKEND_MOCK, 0);
+        log_printf("Boot: VFS root set to mock FS\n");
+    }
+    watchdog_early_stage("vfs_init");
+    watchdog_log_stage("vfs_init");
     boot_screen_set_status("smp");
     log_printf("Boot: initializing SMP...\n");
     smp_init();

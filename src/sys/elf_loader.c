@@ -3,7 +3,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#include "sys/fs_mock.h"
+#include "sys/vfs.h"
 #include "lib/log.h"
 #include "arch/x86_64/paging.h"
 #include "kernel/pmm.h"
@@ -212,12 +212,12 @@ static void *build_stack(int argc, char **argv, char **envp, uint64_t *out_rsp, 
 int elf_load_and_run(const char *path, int argc, char **argv, char **envp) {
     const uint8_t *data = NULL;
     uint64_t size = 0;
-    int node = fs_resolve(fs_root(), path);
+    int node = vfs_resolve(vfs_resolve(0, "/"), path);
     if (node < 0) {
         log_printf("elf: not found\n");
         return -1;
     }
-    if (!fs_read_file(node, &data, &size) || !data || size < sizeof(struct elf64_ehdr)) {
+    if (!vfs_read_file(node, &data, &size) || !data || size < sizeof(struct elf64_ehdr)) {
         log_printf("elf: unreadable\n");
         return -2;
     }
