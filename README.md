@@ -17,6 +17,8 @@ Run `help` in the console to list available commands. Typical commands include:
 `help`, `clear`, `time`, `mem`, `memtest`, `cputest`, `ls`, `cd`, `pwd`, `cat`, `echo`, `ver`, `restart`.
 
 ## Build
+
+
 This project is built inside **WSL Ubuntu** on Windows. You need the x86_64 cross toolchain (`x86_64-linux-gnu-*`), `make`, and `xorriso`, plus Limine binaries.
 Use LF line endings (not CRLF) for scripts like `all` and `iso.sh`.
 
@@ -31,7 +33,7 @@ The build generates `BitOS.iso` for booting in a VM. If you see Limine missing e
 - Use a 64-bit VM.
 - Enable EFI or BIOS as needed by your Limine setup.
 - If you want PCNet to show up, set the VM NIC to **PCnet-FAST III (Am79C973)**.
-- Attach `BitOS.iso` as the VM’s optical drive and boot it.
+- Attach `BitOS.iso` as the VM's optical drive and boot it.
 
 ## Project Structure
 - `src/arch/x86_64` - CPU, IDT, paging, timer, SMP, APIC/PIT.
@@ -43,6 +45,13 @@ The build generates `BitOS.iso` for booting in a VM. If you see Limine missing e
 
 ## License
 See `LICENSE`.
+
+## TODO (Expandable)
+<details>
+<summary>Open TODO.md</summary>
+
+`TODO.md`
+</details>
 
 
 

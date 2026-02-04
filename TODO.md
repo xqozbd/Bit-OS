@@ -54,3 +54,121 @@
 - [ ] Kernel panic backtrace (stack walk).
 - [ ] Framebuffer cursor sprite (separate from text caret).
 - [ ] Configurable boot params (Limine cmdline).
+- [ ] File descriptor table per-process + basic `open/read/write/close`.
+- [ ] Userspace `fork/exec/exit` support.
+- [ ] Signals: basic delivery and default handlers.
+- [ ] Persistent root filesystem support (ext2/fat32 driver).
+- [ ] `/dev` and pseudo-filesystem (`/proc`, `/sys`) skeleton.
+- [ ] Simple TCP/UDP sockets and socket syscalls.
+- [ ] Block device layer abstraction + buffered IO.
+- [ ] AHCI / SATA / NVMe driver support (or virtio-blk for virtualization).
+- [ ] Simple init process + busybox-like shell spawn.
+- [ ] Per-CPU run queue load balancing.
+- [ ] Crash isolation: kernel survives user task faults.
+- [ ] Userland `mmap` / `munmap` support.
+- [ ] SLAB/SLUB kernel object allocator.
+- [ ] Copy-on-write `fork()` support.
+- [ ] Kernel SLAB object caches for vfs/inodes.
+- [ ] `/proc` and `/sys` pseudo-filesystem entries for processes and devices.
+- [ ] Kernel timer wheel or hierarchical timer for efficient timers.
+- [ ] TCP stack with three-way handshake and retransmission.
+- [ ] DHCP client to auto-configure IP addresses.
+- [ ] DNS resolver stub in userspace.
+- [ ] USB xHCI controller driver.
+- [ ] USB device manager (keyboard, mouse, storage support).
+- [ ] Terminal VT100 emulation + colors.
+- [ ] Scrollback buffer in console.
+- [ ] Userland `ps`, `top`, `ls`, `mount`, `umount`, `dd` utilities.
+- [ ] Simple init system with service units/dependencies.
+- [ ] Root filesystem journaling.
+- [ ] Basic firewall/netfilter rules.
+- [ ] IPv6 support (optional).
+- [ ] Namespaces: PID, mount, network isolation.
+- [ ] Resource limits / cgroup-like system.
+- [ ] Stack canaries / basic ASLR support.
+- [ ] NX bit enforcement for kernel/user separation.
+- [ ] Busybox-style userland command suite.
+- [ ] Crash dump persistence to reserved RAM or disk.
+- [ ] Userland ELF loader enhancements (dynamic linking).
+- [ ] Userspace library loading and symbol resolution.
+- [ ] `/tmp` temporary filesystem support.
+- [ ] Swap file / virtual memory paging.
+- [ ] Memory-mapped file support.
+- [ ] Kernel heap fragmentation reduction / compaction.
+- [ ] Kernel logging levels (info/warn/error/debug).
+- [ ] Sysctl-like tunable kernel parameters.
+- [ ] ACPI power states: suspend/resume (S3/S4).
+- [ ] ACPI thermal zone monitoring.
+- [ ] Bootloader command line parsing and config file support.
+- [ ] Userspace cron/task scheduling.
+- [ ] RTC alarms + timers for wakeups.
+- [ ] Multi-language keyboard layouts.
+- [ ] Keyboard key repeat rate configuration.
+- [ ] Userland shell scripting support.
+- [ ] Environment variable support in shell.
+- [ ] File permission enforcement (`chmod/chown`).
+- [ ] Sticky bit, SUID, SGID support.
+- [ ] File system caching / read-ahead.
+- [ ] Directory caching.
+- [ ] Inode reference counting.
+- [ ] Hard link support.
+- [ ] Symbolic link support.
+- [ ] Device node permissions.
+- [ ] Mounted device auto-detection.
+- [ ] Logging subsystem: persistent ring buffer + dump on panic.
+- [ ] Debug console over serial.
+- [ ] Kernel memory leak detection.
+- [ ] Kernel assertions / debug macros.
+- [ ] IRQ load balancing across CPUs.
+- [ ] Scheduler latency reduction.
+- [ ] Sleep / usleep / nanosleep system calls.
+- [ ] Userland process priority / nice values.
+- [ ] Per-task CPU affinity.
+- [ ] Kernel timer APIs for userspace.
+- [ ] Timezone support.
+- [ ] Userspace monotonic clocks.
+- [ ] `/etc` configuration filesystem support.
+- [ ] Syscall error codes standardized (POSIX-like).
+- [ ] Kernel module / driver load/unload support.
+- [ ] Hot-plug detection for PCI/USB devices.
+- [ ] Basic security: deny access to kernel memory from userspace.
+- [ ] Simple random number generator (RNG) for kernel/userspace.
+- [ ] Floating point context save/restore on task switch.
+- [ ] SSE/AVX context support.
+- [ ] Memory leak sanitizer for userspace processes.
+- [ ] Kernel profiling counters.
+- [ ] Kernel stack overflow detection.
+- [ ] ELF core dump generation for crashed processes.
+- [ ] Simple disk quota support.
+- [ ] File locking support.
+- [ ] Thread-local storage (TLS) support.
+- [ ] Atomic operations / spinlocks for SMP.
+- [ ] Condition variables / futexes for synchronization.
+- [ ] Semaphore support in kernel and userspace.
+- [ ] Userland library: `libc` extensions (string, math, stdio).
+- [ ] CPU feature detection (CPUID-based).
+- [ ] High-resolution timers (APIC / TSC calibration).
+- [ ] Terminal line discipline: raw / cooked mode.
+- [ ] Kernel memory sanitizer hooks.
+- [ ] Kernel statistics (/proc/stat-like reporting).
+- [ ] Userspace logging API.
+- [ ] Userspace shell completion for filenames/commands.
+- [ ] Userspace history expansion (`!` command).
+- [ ] Basic scripting language in shell (variables, loops).
+- [ ] Virtual keyboard input support (HID).
+- [ ] Mouse cursor in framebuffer graphics mode.
+- [ ] Basic graphics API for userspace (pixel set, draw line/rect).
+- [ ] Double buffering for framebuffer graphics.
+- [ ] Color palette / 24-bit color support.
+- [ ] Font rendering in graphics mode.
+- [ ] Kernel video mode setting (VBE/UEFI framebuffer).
+- [ ] Audio subsystem skeleton (sound output).
+- [ ] Timer-based audio playback.
+- [ ] Kernel threads for device polling.
+- [ ] Userspace process isolation with page tables.
+- [ ] Swap-backed anonymous memory.
+- [ ] Userland dynamic memory debugging.
+- [ ] Kernel-level mutexes.
+- [ ] Multi-CPU preemption testing.
+- [ ] Kernel crash recovery routines.
+- [ ] Basic sandboxing of user programs.
