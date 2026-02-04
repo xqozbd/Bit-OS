@@ -8,6 +8,7 @@
 #include "drivers/ps2/mouse.h"
 #include "lib/log.h"
 #include "kernel/monitor.h"
+#include "kernel/sched.h"
 #include "arch/x86_64/timer.h"
 #include "drivers/video/fb_printf.h"
 
@@ -153,6 +154,7 @@ void console_run(void) {
             }
         }
         monitor_tick();
+        sched_maybe_preempt();
         if (did_work) {
             caret_visible = 1;
             blink_last = timer_uptime_ticks();

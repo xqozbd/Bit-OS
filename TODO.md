@@ -26,9 +26,9 @@
 - [x] SMP bring-up and per-CPU data.
 - [x] PCNet PCI probe + MAC read (VirtualBox card).
 - [x] RTC sync to system time.
+- [x] Preemptive scheduler with per-CPU run queues.
 
 ## Next
-- [ ] Preemptive scheduler with per-CPU run queues.
 - [ ] Basic kernel thread API (create/join/exit).
 - [ ] Proper sleep/timer queue (sleep ms).
 - [ ] Userspace syscall table + minimal libc stubs.

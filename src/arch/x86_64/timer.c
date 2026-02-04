@@ -5,6 +5,7 @@
 #include "arch/x86_64/apic.h"
 #include "arch/x86_64/cpu.h"
 #include "kernel/monitor.h"
+#include "kernel/sched.h"
 #include "arch/x86_64/pic.h"
 #include "arch/x86_64/pit.h"
 #include "kernel/watchdog.h"
@@ -33,6 +34,7 @@ void timer_pit_tick(void) {
         monitor_tick();
         kb_tick();
         watchdog_tick();
+        sched_tick();
     }
 }
 
@@ -43,6 +45,7 @@ void timer_apic_tick(void) {
     monitor_tick();
     kb_tick();
     watchdog_tick();
+    sched_tick();
 }
 
 uint64_t timer_uptime_ticks(void) {
