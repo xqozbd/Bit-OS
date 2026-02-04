@@ -23,8 +23,8 @@
 - [x] Shell tab completion.
 - [x] Syscall ABI and userspace ELF loader.
 - [x] Add in a cursor.
+- [x] SMP bring-up and per-CPU data.
 
 ## Next
-- [ ] SMP bring-up and per-CPU data.
 - [ ] Add in networking. Write ethernet AMD PCNet PCI driver (VirtualBox supports this card)
  

@@ -87,6 +87,11 @@ static inline void lidt(const struct idt_ptr *p) {
 #endif
 }
 
+void idt_reload(void) {
+    struct idt_ptr idtp = { .limit = sizeof(idt) - 1, .base = (uint64_t)&idt };
+    lidt(&idtp);
+}
+
 static void exception_common(uint8_t vec, uint64_t err, int has_err) {
     log_printf("\nEXCEPTION %u", (unsigned)vec);
     if (has_err) log_printf(" err=0x%x", (unsigned)err);
@@ -215,6 +220,5 @@ void idt_init(void) {
     idt_set_gate(0x40, isr_apic_timer);
     idt_set_gate(0xFF, isr_spurious);
 
-    struct idt_ptr idtp = { .limit = sizeof(idt) - 1, .base = (uint64_t)&idt };
-    lidt(&idtp);
+    idt_reload();
 }
