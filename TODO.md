@@ -38,6 +38,7 @@
 - [x] ELF loader: relocations + stack setup with argv/envp.
 - [x] Initramfs unpacker (tar or cpio) into VFS.
 - [x] VFS: path normalization + mount points.
+- [x] Power management: suspend/resume (S3/S4).
 - [x] Basic network stack (Ethernet + ARP + IPv4 + ICMP ping).
 - [x] Power management: C-states (idle power saving).
 - [x] ACPI AML interpreter (minimal, enough for _PSS/_PCT).
@@ -45,9 +46,9 @@
 - [x] Mouse cursor in framebuffer graphics mode.
 - [x] High-resolution timers (APIC / TSC calibration).
 - [x] Interrupt-driven preemption (timer ISR context switch).
+- [x] Power management: thermal zones + trip points.
+
 ## Next
-- [ ] Power management: suspend/resume (S3/S4).
-- [ ] Power management: thermal zones + trip points.
 - [ ] PS/2 mouse packet sync + rate limiting improvements.
 - [ ] Ring buffer logging + persistent crash dump to RAM.
 - [ ] Shell history (up/down).

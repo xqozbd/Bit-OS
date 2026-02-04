@@ -29,6 +29,7 @@
 #include "kernel/time.h"
 #include "kernel/pstate.h"
 #include "sys/acpi.h"
+#include "kernel/power.h"
 
 /* Bootstrap stack: keep it inside the kernel image so it's mapped in our page tables. */
 #define KSTACK_SIZE (64 * 1024)
@@ -139,6 +140,7 @@ static void kmain_stage2(void) {
     watchdog_log_stage("acpi_init");
     acpi_log_status();
     log_printf("Boot: ACPI init complete\n");
+    power_init();
     boot_screen_set_status("pstate");
     log_printf("Boot: initializing P-states...\n");
     pstate_init();

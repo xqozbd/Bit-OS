@@ -5,6 +5,7 @@
 
 #include "boot/boot_requests.h"
 #include "arch/x86_64/paging.h"
+#include "arch/x86_64/io.h"
 #include "lib/log.h"
 #include "sys/aml.h"
 
@@ -94,6 +95,12 @@ static uint32_t g_pstate_count = 0;
 static struct acpi_gas g_pct_ctrl;
 static struct acpi_gas g_pct_stat;
 static int g_pct_valid = 0;
+static const struct acpi_fadt *g_fadt = NULL;
+
+#define ACPI_SLP_TYP_MASK 0x1C00u
+#define ACPI_SLP_EN_BIT   0x2000u
+
+static struct acpi_thermal_info g_thermal = {0};
 
 enum {
     ACPI_AML_SCAN_LIMIT = 256 * 1024
@@ -267,6 +274,163 @@ static int aml_parse_package_header(const uint8_t *p, uint32_t len, uint32_t *ou
     return 1;
 }
 
+static int aml_find_method_package(const uint8_t *aml, uint32_t len, const char *name, uint32_t *out_count);
+
+static int aml_contains_nameseg(const uint8_t *aml, uint32_t len, const char seg[4]) {
+    if (!aml || len < 4) return 0;
+    for (uint32_t i = 0; i + 3 < len; ++i) {
+        if (aml[i] == (uint8_t)seg[0] &&
+            aml[i + 1] == (uint8_t)seg[1] &&
+            aml[i + 2] == (uint8_t)seg[2] &&
+            aml[i + 3] == (uint8_t)seg[3]) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int aml_has_name_or_method(const char *name) {
+    if (!g_dsdt_aml || !g_dsdt_aml_len || !name) return 0;
+    uint32_t count = 0;
+    if (aml_find_name_package(g_dsdt_aml, g_dsdt_aml_len, name, &count)) return 1;
+    if (aml_find_method_package(g_dsdt_aml, g_dsdt_aml_len, name, &count)) return 1;
+    return 0;
+}
+
+static int aml_has_method_suffix(const char *suffix) {
+    uint32_t len = 0;
+    return aml_eval_method_return_suffix(suffix, &len) != NULL;
+}
+
+void acpi_thermal_init(void) {
+    g_thermal.has_tz = 0;
+    g_thermal.has_tmp = 0;
+    g_thermal.has_crt = 0;
+    g_thermal.has_psv = 0;
+    g_thermal.has_hot = 0;
+    g_thermal.has_tc1 = 0;
+    g_thermal.has_tc2 = 0;
+    g_thermal.has_tsp = 0;
+
+    if (!g_acpi_ready || !g_dsdt_aml || !g_dsdt_aml_len) return;
+
+    g_thermal.has_tz = aml_contains_nameseg(g_dsdt_aml, g_dsdt_aml_len, "_TZ_");
+    g_thermal.has_tmp = aml_has_method_suffix("._TMP") || aml_has_name_or_method("_TMP");
+    g_thermal.has_crt = aml_has_method_suffix("._CRT") || aml_has_name_or_method("_CRT");
+    g_thermal.has_psv = aml_has_method_suffix("._PSV") || aml_has_name_or_method("_PSV");
+    g_thermal.has_hot = aml_has_method_suffix("._HOT") || aml_has_name_or_method("_HOT");
+    g_thermal.has_tc1 = aml_has_method_suffix("._TC1") || aml_has_name_or_method("_TC1");
+    g_thermal.has_tc2 = aml_has_method_suffix("._TC2") || aml_has_name_or_method("_TC2");
+    g_thermal.has_tsp = aml_has_method_suffix("._TSP") || aml_has_name_or_method("_TSP");
+}
+
+void acpi_thermal_log(void) {
+    if (!g_acpi_ready) {
+        log_printf("ACPI: thermal not ready\n");
+        log_printf("ACPI: ready=%d fadt=%s dsdt_aml=%s len=%u\n",
+                   g_acpi_ready,
+                   g_fadt ? "yes" : "no",
+                   g_dsdt_aml ? "yes" : "no",
+                   (unsigned)g_dsdt_aml_len);
+        if (!g_dsdt_aml || g_dsdt_aml_len == 0) return;
+        acpi_thermal_init();
+    }
+    if (!g_thermal.has_tz) {
+        log_printf("ACPI: _TZ_ not present (VMs often omit thermal zones)\n");
+        return;
+    }
+    log_printf("ACPI: thermal zones present\n");
+    log_printf("ACPI: _TMP=%s _CRT=%s _PSV=%s _HOT=%s _TC1=%s _TC2=%s _TSP=%s\n",
+               g_thermal.has_tmp ? "yes" : "no",
+               g_thermal.has_crt ? "yes" : "no",
+               g_thermal.has_psv ? "yes" : "no",
+               g_thermal.has_hot ? "yes" : "no",
+               g_thermal.has_tc1 ? "yes" : "no",
+               g_thermal.has_tc2 ? "yes" : "no",
+               g_thermal.has_tsp ? "yes" : "no");
+}
+
+const struct acpi_thermal_info *acpi_thermal_info(void) {
+    return &g_thermal;
+}
+// Man fuck this shid - Void
+static int acpi_parse_sleep_pkg(const uint8_t *pkg, uint32_t pkg_len,
+                                struct acpi_sleep_state *out) {
+    if (!pkg || !out) return 0;
+    uint32_t elements = 0, hdr = 0, total = 0;
+    if (!aml_parse_package_header(pkg, pkg_len, &elements, &hdr, &total)) return 0;
+    if (elements < 2) return 0;
+    uint32_t idx = hdr;
+    uint64_t vals[2] = {0, 0};
+    for (uint32_t i = 0; i < 2; ++i) {
+        uint32_t cons = 0;
+        if (!aml_parse_integer(&pkg[idx], pkg_len - idx, &vals[i], &cons)) return 0;
+        idx += cons;
+    }
+    out->typ_a = (uint16_t)vals[0];
+    out->typ_b = (uint16_t)vals[1];
+    return 1;
+}
+
+static const uint8_t *acpi_find_sleep_pkg(const char *name, uint32_t *pkg_len, int *via_method) {
+    if (!name || !pkg_len) return NULL;
+    const uint8_t *pkg = NULL;
+    if (aml_locate_name_package(g_dsdt_aml, g_dsdt_aml_len, name, &pkg, pkg_len)) {
+        if (via_method) *via_method = 0;
+        return pkg;
+    }
+    if (via_method) *via_method = 1;
+    if (name) {
+        char path[20] = {0};
+        /* Try CPU0 scope first */
+        path[0] = '\\';
+        path[1] = '_';
+        path[2] = 'P';
+        path[3] = 'R';
+        path[4] = '.';
+        path[5] = 'C';
+        path[6] = 'P';
+        path[7] = 'U';
+        path[8] = '0';
+        path[9] = '.';
+        int idx = 10;
+        for (int i = 0; i < 4 && name[i]; ++i) path[idx++] = name[i];
+        path[idx] = '\0';
+        pkg = aml_eval_method_return(path, pkg_len);
+        if (!pkg) {
+            path[0] = '\\';
+            idx = 1;
+            for (int i = 0; i < 4 && name[i]; ++i) path[idx++] = name[i];
+            path[idx] = '\0';
+            pkg = aml_eval_method_return(path, pkg_len);
+        }
+    }
+    if (!pkg) {
+        char suffix[6] = {0};
+        if (name && name[0] == '_' && name[1] && name[2]) {
+            suffix[0] = '.';
+            suffix[1] = name[0];
+            suffix[2] = name[1];
+            suffix[3] = name[2];
+            suffix[4] = name[3];
+            suffix[5] = '\0';
+            pkg = aml_eval_method_return_suffix(suffix, pkg_len);
+        } else {
+            pkg = aml_eval_method_return_suffix(name, pkg_len);
+        }
+    }
+    return pkg;
+}
+
+static int acpi_get_sleep_pkg(const char *name, struct acpi_sleep_state *out) {
+    uint32_t pkg_len = 0;
+    int via_method = 0;
+    const uint8_t *pkg = acpi_find_sleep_pkg(name, &pkg_len, &via_method);
+    if (!pkg) return 0;
+    log_printf("ACPI: %s via %s\n", name, via_method ? "Method" : "Name");
+    return acpi_parse_sleep_pkg(pkg, pkg_len, out);
+}
+
 static void acpi_parse_pss(void) {
     g_pstate_count = 0;
     const uint8_t *pkg = NULL;
@@ -416,12 +580,8 @@ void acpi_init(void) {
         return;
     }
 
-    uint64_t rsdp_phys = (uint64_t)rsdp_request.response->address;
-    if (!acpi_phys_in_memmap(rsdp_phys, sizeof(struct acpi_rsdp))) {
-        log_printf("ACPI: RSDP not in memmap\n");
-        return;
-    }
-    const struct acpi_rsdp *rsdp = (const struct acpi_rsdp *)acpi_map_phys(rsdp_phys);
+    /* Limine provides a mapped pointer for RSDP when LIMINE_NO_POINTERS is not set. */
+    const struct acpi_rsdp *rsdp = (const struct acpi_rsdp *)rsdp_request.response->address;
     if (!rsdp || rsdp->signature[0] != 'R') {
         log_printf("ACPI: invalid RSDP\n");
         return;
@@ -477,6 +637,7 @@ void acpi_init(void) {
         log_printf("ACPI: FADT not found\n");
         return;
     }
+    g_fadt = fadt;
 
     uint64_t dsdt_phys = fadt->x_dsdt ? fadt->x_dsdt : (uint64_t)fadt->dsdt;
     if (!dsdt_phys) {
@@ -505,6 +666,7 @@ void acpi_init(void) {
     acpi_find_pss_pct();
     acpi_parse_pss();
     acpi_parse_pct();
+    acpi_thermal_init();
     g_acpi_ready = 1;
 }
 
@@ -545,5 +707,45 @@ int acpi_get_pct(struct acpi_gas *ctrl, struct acpi_gas *stat) {
     if (!g_pct_valid) return 0;
     if (ctrl) *ctrl = g_pct_ctrl;
     if (stat) *stat = g_pct_stat;
+    return 1;
+}
+
+int acpi_get_sleep_state(uint8_t state, struct acpi_sleep_state *out) {
+    if (!g_acpi_ready || !out) return 0;
+    if (state == 3) return acpi_get_sleep_pkg("_S3", out);
+    if (state == 4) return acpi_get_sleep_pkg("_S4", out);
+    if (state == 5) return acpi_get_sleep_pkg("_S5", out);
+    return 0;
+}
+
+static void acpi_enable_sci(void) {
+    if (!g_fadt) return;
+    if (g_fadt->smi_cmd && g_fadt->acpi_enable) {
+        outb((uint16_t)g_fadt->smi_cmd, g_fadt->acpi_enable);
+    }
+}
+
+int acpi_sleep(uint8_t state) {
+    if (!g_fadt) return 0;
+    if (!g_fadt->pm1a_cnt_blk) return 0;
+    struct acpi_sleep_state ss;
+    if (!acpi_get_sleep_state(state, &ss)) return 0;
+
+    acpi_enable_sci();
+
+    uint16_t pm1a = inw((uint16_t)g_fadt->pm1a_cnt_blk);
+    pm1a &= ~ACPI_SLP_TYP_MASK;
+    pm1a |= (uint16_t)((ss.typ_a & 0x7u) << 10);
+    outw((uint16_t)g_fadt->pm1a_cnt_blk, pm1a);
+    outw((uint16_t)g_fadt->pm1a_cnt_blk, (uint16_t)(pm1a | ACPI_SLP_EN_BIT));
+
+    if (g_fadt->pm1b_cnt_blk) {
+        uint16_t pm1b = inw((uint16_t)g_fadt->pm1b_cnt_blk);
+        pm1b &= ~ACPI_SLP_TYP_MASK;
+        pm1b |= (uint16_t)((ss.typ_b & 0x7u) << 10);
+        outw((uint16_t)g_fadt->pm1b_cnt_blk, pm1b);
+        outw((uint16_t)g_fadt->pm1b_cnt_blk, (uint16_t)(pm1b | ACPI_SLP_EN_BIT));
+    }
+
     return 1;
 }

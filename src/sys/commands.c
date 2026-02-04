@@ -21,10 +21,12 @@
 #include "lib/version.h"
 #include "boot/bootinfo.h"
 #include "drivers/net/pcnet.h"
+#include "kernel/power.h"
 
 static const char *const g_commands[] = {
     "help", "clear", "time", "mem", "memtest", "cputest",
-    "ls", "cd", "pwd", "cat", "run", "echo", "ver", "debug", "ping", "shutdown", "restart"
+    "ls", "cd", "pwd", "cat", "run", "echo", "ver", "debug", "ping",
+    "shutdown", "restart", "s3", "s4", "thermal"
 };
 
 
@@ -48,6 +50,9 @@ static void cmd_help(void) {
     log_printf("  debug\n");
     log_printf("  shutdown\n");
     log_printf("  restart\n");
+    log_printf("  s3 (suspend to RAM)\n");
+    log_printf("  s4 (hibernate)\n");
+    log_printf("  thermal (ACPI thermal status)\n");
     log_printf("  sizes: 1g 512m 256k (also gb/mb/kb/gig/meg)\n");
     log_printf("  time: 20s 1min 2minutes\n\n");
 
@@ -113,7 +118,10 @@ static void cmd_shutdown(void) {
     log_printf("Shutting down Bit-OS...\n");
     log_printf("Goodbye\n");
 
-    
+    if (power_shutdown_acpi()) {
+        halt_forever();
+    }
+
     outw(0x604, 0x2000);
     outw(0xB004, 0x2000);
     outw(0x4004, 0x3400);
@@ -146,6 +154,22 @@ static void cmd_restart(void) {
     log_printf("Restarting...\n");
     outb(0x64, 0xFE);
     halt_forever();
+}
+
+static void cmd_s3(void) {
+    if (!power_suspend_s3()) {
+        log_printf("S3: not supported or failed\n");
+    }
+}
+
+static void cmd_s4(void) {
+    if (!power_suspend_s4()) {
+        log_printf("S4: not supported or failed\n");
+    }
+}
+
+static void cmd_thermal(void) {
+    acpi_thermal_log();
 }
 
 static void cmd_cat(const char *path, int cwd) {
@@ -421,6 +445,12 @@ int commands_exec(int argc, char **argv, struct command_ctx *ctx) {
         cmd_shutdown();
     } else if (str_eq(argv[0], "restart")) {
         cmd_restart();
+    } else if (str_eq(argv[0], "s3")) {
+        cmd_s3();
+    } else if (str_eq(argv[0], "s4")) {
+        cmd_s4();
+    } else if (str_eq(argv[0], "thermal")) {
+        cmd_thermal();
     } else {
         return 0;
     }
