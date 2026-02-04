@@ -4,6 +4,7 @@
 #include "drivers/rtc/rtc_util.h"
 #include "drivers/net/pcnet.h"
 #include "drivers/video/fb_printf.h"
+#include "drivers/video/banner.h"
 #include "kernel/time.h"
 
 static uint32_t g_status_y = 0;
@@ -18,6 +19,8 @@ void boot_screen_print_loading(void) {
 }
 
 void boot_screen_print_main(void) {
+    banner_draw();
+    fb_set_cursor_px(fb_margin_x(), fb_margin_y() + banner_height());
     fb_printf("Hello BitOS!\n");
 
     char time_buf[20];

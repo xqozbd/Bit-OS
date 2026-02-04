@@ -1,5 +1,7 @@
 #include "drivers/pci/pci.h"
 
+#include <stddef.h>
+
 #include "arch/x86_64/io.h"
 #include "lib/log.h"
 
@@ -8,6 +10,15 @@
 
 static struct pci_driver *g_drivers[32];
 static uint32_t g_driver_count = 0;
+
+static struct pci_device g_devices[256];
+static uint32_t g_device_count = 0;
+
+enum {
+    PCI_BAR_IO = 1u << 0,
+    PCI_BAR_PREFETCH = 1u << 1,
+    PCI_BAR_64 = 1u << 2
+};
 
 static inline uint32_t pci_addr(uint8_t bus, uint8_t slot, uint8_t func, uint8_t offset) {
     return (1u << 31) | ((uint32_t)bus << 16) | ((uint32_t)slot << 11) |
@@ -75,6 +86,15 @@ void pci_register_driver(struct pci_driver *drv) {
     }
 }
 
+uint32_t pci_device_count(void) {
+    return g_device_count;
+}
+
+const struct pci_device *pci_device_at(uint32_t index) {
+    if (index >= g_device_count) return NULL;
+    return &g_devices[index];
+}
+
 static int match_driver(const struct pci_driver *drv, const struct pci_device *dev) {
     if (!drv) return 0;
     if (drv->vendor_id != PCI_VENDOR_ANY && drv->vendor_id != dev->vendor_id) return 0;
@@ -88,14 +108,107 @@ static void pci_probe_device(struct pci_device *dev) {
     for (uint32_t i = 0; i < g_driver_count; ++i) {
         struct pci_driver *drv = g_drivers[i];
         if (!match_driver(drv, dev)) continue;
-        if (drv->probe && drv->probe(dev)) break;
+        if (drv->probe) {
+            int handled = drv->probe(dev);
+            if (handled) {
+                log_printf("PCI: driver %s bound to %u:%u.%u\n",
+                           drv->name ? drv->name : "(unnamed)",
+                           dev->bus, dev->slot, dev->func);
+                break;
+            }
+        }
     }
 }
 
 static void pci_read_bars(struct pci_device *dev) {
     for (uint8_t i = 0; i < 6; ++i) {
-        dev->bar[i] = pci_read_config32(dev->bus, dev->slot, dev->func, 0x10 + (uint8_t)(i * 4));
+        dev->bar[i] = 0;
+        dev->bar_size[i] = 0;
+        dev->bar_hi[i] = 0;
+        dev->bar_flags[i] = 0;
     }
+
+    for (uint8_t i = 0; i < 6; ++i) {
+        uint8_t off = (uint8_t)(0x10 + (i * 4));
+        uint32_t orig = pci_read_config32(dev->bus, dev->slot, dev->func, off);
+        dev->bar[i] = orig;
+
+        if (orig == 0) continue;
+
+        pci_write_config32(dev->bus, dev->slot, dev->func, off, 0xFFFFFFFFu);
+        uint32_t mask = pci_read_config32(dev->bus, dev->slot, dev->func, off);
+        pci_write_config32(dev->bus, dev->slot, dev->func, off, orig);
+
+        if (orig & 0x1u) {
+            uint32_t size_mask = mask & ~0x3u;
+            if (size_mask) {
+                dev->bar_size[i] = (~size_mask) + 1u;
+            }
+            dev->bar_flags[i] = PCI_BAR_IO;
+        } else {
+            uint8_t type = (uint8_t)((orig >> 1) & 0x3);
+            uint32_t size_mask = mask & ~0xFu;
+            if (type == 0x2) {
+                uint32_t orig_hi = pci_read_config32(dev->bus, dev->slot, dev->func,
+                                                     (uint8_t)(off + 4));
+                pci_write_config32(dev->bus, dev->slot, dev->func, (uint8_t)(off + 4), 0xFFFFFFFFu);
+                uint32_t mask_hi = pci_read_config32(dev->bus, dev->slot, dev->func,
+                                                     (uint8_t)(off + 4));
+                pci_write_config32(dev->bus, dev->slot, dev->func, (uint8_t)(off + 4), orig_hi);
+
+                uint64_t size64 = ((uint64_t)mask_hi << 32) | (uint64_t)(size_mask);
+                if (size64) {
+                    uint64_t sz = (~size64) + 1ull;
+                    if (sz > 0xFFFFFFFFu) {
+                        dev->bar_size[i] = 0xFFFFFFFFu;
+                    } else {
+                        dev->bar_size[i] = (uint32_t)sz;
+                    }
+                }
+                dev->bar_hi[i] = orig_hi;
+                dev->bar_flags[i] = PCI_BAR_64;
+                if (orig & (1u << 3)) dev->bar_flags[i] |= PCI_BAR_PREFETCH;
+                i++; /* skip upper BAR */
+            } else {
+                if (size_mask) {
+                    dev->bar_size[i] = (~size_mask) + 1u;
+                }
+                dev->bar_flags[i] = 0;
+                if (orig & (1u << 3)) dev->bar_flags[i] |= PCI_BAR_PREFETCH;
+            }
+        }
+    }
+}
+
+static uint8_t pci_find_cap(uint8_t bus, uint8_t slot, uint8_t func, uint8_t cap_id) {
+    uint16_t status = pci_read_config16(bus, slot, func, 0x06);
+    if ((status & 0x10u) == 0) return 0;
+    uint8_t ptr = pci_read_config8(bus, slot, func, 0x34);
+    for (uint8_t i = 0; i < 48 && ptr; ++i) {
+        uint8_t id = pci_read_config8(bus, slot, func, ptr);
+        if (id == cap_id) return ptr;
+        ptr = pci_read_config8(bus, slot, func, (uint8_t)(ptr + 1));
+    }
+    return 0;
+}
+
+int pci_msi_enable(const struct pci_device *dev, uint8_t vector, uint8_t apic_id) {
+    if (!dev || dev->msi_cap == 0) return 0;
+    uint8_t cap = dev->msi_cap;
+    uint16_t ctrl = pci_read_config16(dev->bus, dev->slot, dev->func, (uint8_t)(cap + 2));
+    uint8_t is_64 = (uint8_t)((ctrl >> 7) & 1u);
+
+    uint32_t msg_addr = 0xFEE00000u | ((uint32_t)apic_id << 12);
+    pci_write_config32(dev->bus, dev->slot, dev->func, (uint8_t)(cap + 4), msg_addr);
+    if (is_64) {
+        pci_write_config32(dev->bus, dev->slot, dev->func, (uint8_t)(cap + 8), 0u);
+        pci_write_config16(dev->bus, dev->slot, dev->func, (uint8_t)(cap + 12), vector);
+    } else {
+        pci_write_config16(dev->bus, dev->slot, dev->func, (uint8_t)(cap + 8), vector);
+    }
+    ctrl |= 1u;
+    pci_write_config16(dev->bus, dev->slot, dev->func, (uint8_t)(cap + 2), ctrl);
+    return 1;
 }
 
 static void pci_scan_function(uint8_t bus, uint8_t slot, uint8_t func) {
@@ -115,12 +228,23 @@ static void pci_scan_function(uint8_t bus, uint8_t slot, uint8_t func) {
     dev.header_type = pci_read_config8(bus, slot, func, 0x0E);
     dev.irq_line = pci_read_config8(bus, slot, func, 0x3C);
     dev.irq_pin = pci_read_config8(bus, slot, func, 0x3D);
+    dev.msi_cap = pci_find_cap(bus, slot, func, 0x05);
+    dev.msi_enabled = 0;
     pci_read_bars(&dev);
 
     log_printf("PCI %u:%u.%u vendor=0x%x device=0x%x class=%u/%u\n",
                dev.bus, dev.slot, dev.func,
                (unsigned)dev.vendor_id, (unsigned)dev.device_id,
                (unsigned)dev.class_code, (unsigned)dev.subclass);
+
+    if (dev.msi_cap) {
+        log_printf("PCI %u:%u.%u MSI cap=0x%x\n",
+                   dev.bus, dev.slot, dev.func, (unsigned)dev.msi_cap);
+    }
+
+    if (g_device_count < (uint32_t)(sizeof(g_devices) / sizeof(g_devices[0]))) {
+        g_devices[g_device_count++] = dev;
+    }
 
     pci_probe_device(&dev);
 }

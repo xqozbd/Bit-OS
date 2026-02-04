@@ -10,6 +10,7 @@
 #include "arch/x86_64/pit.h"
 #include "kernel/watchdog.h"
 #include "drivers/ps2/keyboard.h"
+#include "drivers/net/pcnet.h"
 #include "lib/log.h"
 
 static volatile uint64_t g_ticks = 0;
@@ -33,6 +34,7 @@ void timer_pit_tick(void) {
         g_ticks++;
         monitor_tick();
         kb_tick();
+        pcnet_tick();
         watchdog_tick();
         sched_tick();
     }
@@ -44,6 +46,7 @@ void timer_apic_tick(void) {
     g_pit_ticks++;
     monitor_tick();
     kb_tick();
+    pcnet_tick();
     watchdog_tick();
     sched_tick();
 }

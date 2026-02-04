@@ -34,8 +34,7 @@ static struct thread g_boot_thread;
 static void idle_thread(void *arg) {
     (void)arg;
     for (;;) {
-        cpu_enable_interrupts();
-        HALT();
+        cpu_idle();
     }
 }
 
@@ -263,4 +262,43 @@ void sched_yield(void) {
     }
     context_switch(&prev->ctx, &next->ctx);
     cpu_enable_interrupts();
+}
+
+void sched_preempt_from_isr(void) {
+    if (!g_sched_ready) return;
+    uint32_t cpu = sched_cpu_index();
+    if (!g_need_resched[cpu]) return;
+
+    struct thread *prev = g_current[cpu];
+    struct thread *next = runq_pick(&g_runq[cpu]);
+    if (!next) {
+        if (prev && (prev->state == THREAD_BLOCKED || prev->state == THREAD_DEAD)) {
+            next = g_idle[cpu];
+        } else {
+            g_need_resched[cpu] = 0;
+            return;
+        }
+    }
+    if (!next) return;
+
+    g_need_resched[cpu] = 0;
+
+    if (prev == next) return;
+
+    if (prev && prev->state == THREAD_RUNNING && prev != g_idle[cpu]) {
+        prev->state = THREAD_READY;
+        prev->last_run_tick = g_sched_ticks;
+        prev->dyn_prio = prev->base_prio;
+        runq_push(&g_runq[cpu], prev);
+    }
+
+    next->state = (next->state == THREAD_IDLE) ? THREAD_IDLE : THREAD_RUNNING;
+    next->last_run_tick = g_sched_ticks;
+    g_current[cpu] = next;
+
+    if (!prev) return;
+    if (next->pml4_phys && prev->pml4_phys != next->pml4_phys) {
+        paging_switch_to(next->pml4_phys);
+    }
+    context_switch(&prev->ctx, &next->ctx);
 }

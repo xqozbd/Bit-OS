@@ -27,6 +27,8 @@
 #include "drivers/pci/pci.h"
 #include "drivers/net/pcnet.h"
 #include "kernel/time.h"
+#include "kernel/pstate.h"
+#include "sys/acpi.h"
 
 /* Bootstrap stack: keep it inside the kernel image so it's mapped in our page tables. */
 #define KSTACK_SIZE (64 * 1024)
@@ -129,6 +131,20 @@ static void kmain_stage2(void) {
     watchdog_early_stage("pci_init");
     watchdog_log_stage("pci_init");
     log_printf("Boot: PCI scan complete\n");
+    pcnet_log_status();
+    boot_screen_set_status("acpi");
+    log_printf("Boot: initializing ACPI...\n");
+    acpi_init();
+    watchdog_early_stage("acpi_init");
+    watchdog_log_stage("acpi_init");
+    acpi_log_status();
+    log_printf("Boot: ACPI init complete\n");
+    boot_screen_set_status("pstate");
+    log_printf("Boot: initializing P-states...\n");
+    pstate_init();
+    watchdog_early_stage("pstate_init");
+    watchdog_log_stage("pstate_init");
+    log_printf("Boot: P-states ready\n");
     boot_screen_set_status("initramfs");
     log_printf("Boot: initializing initramfs...\n");
     initramfs_init_from_limine();
@@ -200,7 +216,7 @@ static void kmain_stage2(void) {
     fb_clear();
     banner_draw();
     log_set_fb_ready(1);
-    boot_screen_print_debug();
+    boot_screen_print_main();
     log_printf("Boot: initializing console...\n");
     console_init();
     watchdog_checkpoint_boot_ok();

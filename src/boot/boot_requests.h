@@ -13,5 +13,6 @@ extern volatile struct limine_bootloader_info_request bootloader_request;
 extern volatile struct limine_executable_file_request exec_file_request;
 extern volatile struct limine_executable_address_request exec_addr_request;
 extern volatile struct limine_module_request module_request;
+extern volatile struct limine_rsdp_request rsdp_request;
 
 #endif /* BOOT_REQUESTS_H */

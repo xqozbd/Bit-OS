@@ -10,6 +10,7 @@ void sched_init(void);
 void sched_tick(void);
 void sched_maybe_preempt(void);
 void sched_yield(void);
+void sched_preempt_from_isr(void);
 
 /* Internal helpers used by thread creation */
 uint32_t sched_cpu_index(void);

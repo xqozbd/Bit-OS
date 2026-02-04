@@ -27,7 +27,10 @@
 - [x] Add in a cursor.
 - [x] SMP bring-up and per-CPU data.
 - [x] PCNet PCI probe + MAC read (VirtualBox card).
+- [x] PCI enumeration: BAR sizing, MSI support, device driver registry.
+- [x] PCNet TX/RX ring buffers + basic ARP.
 - [x] RTC sync to system time.
+- [x] Power management: P-states (CPU frequency scaling).
 - [x] Preemptive scheduler with per-CPU run queues (safe-point preemption).
 - [x] Proper sleep/timer queue (sleep ms).
 - [x] Basic kernel thread API (create/join/exit).
@@ -35,14 +38,16 @@
 - [x] ELF loader: relocations + stack setup with argv/envp.
 - [x] Initramfs unpacker (tar or cpio) into VFS.
 - [x] VFS: path normalization + mount points.
+- [x] Basic network stack (Ethernet + ARP + IPv4 + ICMP ping).
+- [x] Power management: C-states (idle power saving).
+- [x] ACPI AML interpreter (minimal, enough for _PSS/_PCT).
 - [x] Framebuffer cursor sprite (separate from text caret).
 - [x] Mouse cursor in framebuffer graphics mode.
 - [x] High-resolution timers (APIC / TSC calibration).
+- [x] Interrupt-driven preemption (timer ISR context switch).
 ## Next
-- [ ] Interrupt-driven preemption (timer ISR context switch).
-- [ ] PCI enumeration: BAR sizing, MSI support, device driver registry.
-- [ ] PCNet TX/RX ring buffers + basic ARP.
-- [ ] Basic network stack (Ethernet + ARP + IPv4 + ICMP ping).
+- [ ] Power management: suspend/resume (S3/S4).
+- [ ] Power management: thermal zones + trip points.
 - [ ] PS/2 mouse packet sync + rate limiting improvements.
 - [ ] Ring buffer logging + persistent crash dump to RAM.
 - [ ] Shell history (up/down).

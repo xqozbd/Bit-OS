@@ -1,6 +1,7 @@
 #include "sys/commands.h"
 
 #include <stddef.h>
+#include <stdint.h>
 
 #include "drivers/video/banner.h"
 #include "sys/elf_loader.h"
@@ -23,7 +24,7 @@
 
 static const char *const g_commands[] = {
     "help", "clear", "time", "mem", "memtest", "cputest",
-    "ls", "cd", "pwd", "cat", "run", "echo", "ver", "debug", "shutdown", "restart"
+    "ls", "cd", "pwd", "cat", "run", "echo", "ver", "debug", "ping", "shutdown", "restart"
 };
 
 
@@ -43,12 +44,38 @@ static void cmd_help(void) {
     }
     log_printf("  memtest [--size N] [--time T] [--pages N]\n");
     log_printf("  run <path> (ELF64, higher-half)\n");
+    log_printf("  ping <ip>\n");
     log_printf("  debug\n");
     log_printf("  shutdown\n");
     log_printf("  restart\n");
     log_printf("  sizes: 1g 512m 256k (also gb/mb/kb/gig/meg)\n");
     log_printf("  time: 20s 1min 2minutes\n\n");
 
+}
+
+static int parse_ipv4(const char *s, uint8_t out[4]) {
+    if (!s || !out) return 0;
+    uint32_t acc = 0;
+    int octet = 0;
+    int digit = 0;
+    for (const char *p = s; ; ++p) {
+        char c = *p;
+        if (c >= '0' && c <= '9') {
+            acc = acc * 10u + (uint32_t)(c - '0');
+            if (acc > 255u) return 0;
+            digit = 1;
+        } else if (c == '.' || c == '\0') {
+            if (!digit) return 0;
+            if (octet >= 4) return 0;
+            out[octet++] = (uint8_t)acc;
+            acc = 0;
+            digit = 0;
+            if (c == '\0') break;
+        } else {
+            return 0;
+        }
+    }
+    return octet == 4;
 }
 
 static void cmd_time(void) {
@@ -379,6 +406,17 @@ int commands_exec(int argc, char **argv, struct command_ctx *ctx) {
         cmd_ver();
     } else if (str_eq(argv[0], "debug")) {
         cmd_debug();
+    } else if (str_eq(argv[0], "ping")) {
+        if (argc < 2) {
+            log_printf("ping: missing ip\n");
+        } else {
+            uint8_t ip[4];
+            if (!parse_ipv4(argv[1], ip)) {
+                log_printf("ping: invalid ip\n");
+            } else {
+                pcnet_ping(ip);
+            }
+        }
     } else if (str_eq(argv[0], "shutdown")) {
         cmd_shutdown();
     } else if (str_eq(argv[0], "restart")) {

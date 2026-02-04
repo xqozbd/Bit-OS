@@ -11,6 +11,7 @@
 #include "drivers/ps2/mouse.h"
 #include "sys/syscall.h"
 #include "kernel/watchdog.h"
+#include "kernel/sched.h"
 #include "kernel/thread.h"
 
 /* IDT + exceptions */
@@ -152,6 +153,7 @@ void isr_irq0(struct interrupt_frame *frame) {
     (void)frame;
     timer_pit_tick();
     pic_send_eoi(0);
+    sched_preempt_from_isr();
 }
 
 __attribute__((interrupt, target("general-regs-only"), used))
@@ -173,6 +175,7 @@ void isr_apic_timer(struct interrupt_frame *frame) {
     (void)frame;
     timer_apic_tick();
     apic_eoi();
+    sched_preempt_from_isr();
 }
 
 __attribute__((interrupt, target("general-regs-only"), used))
