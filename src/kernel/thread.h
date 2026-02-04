@@ -40,6 +40,8 @@ struct thread {
     uint64_t last_run_tick;
     uint64_t mem_current;
     uint64_t mem_peak;
+    uint64_t pml4_phys;
+    uint8_t is_user;
     const char *name;
 };
 

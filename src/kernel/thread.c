@@ -3,6 +3,7 @@
 #include <stddef.h>
 
 #include "arch/x86_64/cpu.h"
+#include "arch/x86_64/paging.h"
 #include "kernel/heap.h"
 #include "kernel/sched.h"
 
@@ -51,6 +52,8 @@ struct thread *thread_create(void (*entry)(void *), void *arg, size_t stack_size
     t->last_run_tick = 0;
     t->mem_current = 0;
     t->mem_peak = 0;
+    t->pml4_phys = paging_pml4_phys();
+    t->is_user = 0;
     t->name = name;
 
     sched_enqueue(t);

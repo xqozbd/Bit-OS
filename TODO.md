@@ -7,6 +7,7 @@
 - [x] Implement physical memory map parsing (Limine memmap request).
 - [x] Build a simple physical frame allocator (bitmap).
 - [x] Add paging + higher-half mapping.
+- [x] Memory protection: user/kernel page separation.
 - [x] Create a minimal kernel heap allocator.
 - [x] Add a framebuffer status banner (BitOS version/build info).
 - [x] Add keyboard input (PS/2 or HID later).
@@ -16,6 +17,7 @@
 - [x] PIT timer + uptime ticks.
 - [x] APIC timer calibration and switch from PIT to APIC timer for scheduling.
 - [x] Page fault handler with fault reason logging.
+- [x] Page fault recovery + kill userspace task.
 - [x] Limine module loading as an initramfs.
 - [x] Basic VFS layer and in-memory FS for `ls/cd/cat`.
 - [x] Line editing (backspace, left/right).
@@ -37,8 +39,6 @@
 - [x] Mouse cursor in framebuffer graphics mode.
 - [x] High-resolution timers (APIC / TSC calibration).
 ## Next
-- [ ] Memory protection: user/kernel page separation.
-- [ ] Page fault recovery + kill userspace task.
 - [ ] Interrupt-driven preemption (timer ISR context switch).
 - [ ] PCI enumeration: BAR sizing, MSI support, device driver registry.
 - [ ] PCNet TX/RX ring buffers + basic ARP.

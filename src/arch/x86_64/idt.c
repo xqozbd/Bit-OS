@@ -11,6 +11,7 @@
 #include "drivers/ps2/mouse.h"
 #include "sys/syscall.h"
 #include "kernel/watchdog.h"
+#include "kernel/thread.h"
 
 /* IDT + exceptions */
 struct interrupt_frame {
@@ -123,6 +124,8 @@ ISR_NOERR(28) ISR_NOERR(29) ISR_NOERR(30) ISR_NOERR(31)
 __attribute__((interrupt, target("general-regs-only"), used))
 void isr_err_14(struct interrupt_frame *frame, uint64_t error_code) {
     uint64_t cr2 = read_cr2();
+    struct thread *t = thread_current();
+    int is_user = (((frame->cs & 0x3u) == 0x3u) || (t && t->is_user));
     log_printf("\nEXCEPTION 14 err=0x%x", (unsigned)error_code);
     log_printf(" cr2=%p rip=%p cs=0x%x rflags=0x%x rsp=%p ss=0x%x\n",
                (void *)cr2, (void *)frame->rip, (unsigned)frame->cs,
@@ -134,6 +137,12 @@ void isr_err_14(struct interrupt_frame *frame, uint64_t error_code) {
                (unsigned)((error_code >> 2) & 1),
                (unsigned)((error_code >> 3) & 1),
                (unsigned)((error_code >> 4) & 1));
+    if (is_user && t) {
+        log_printf("PF: killing userspace task tid=%u name=%s\n",
+                   (unsigned)t->id, t->name ? t->name : "(null)");
+        thread_exit();
+        __builtin_unreachable();
+    }
     log_printf("System halted.\n");
     halt_forever();
 }

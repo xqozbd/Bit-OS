@@ -3,6 +3,7 @@
 #include <stddef.h>
 
 #include "arch/x86_64/cpu.h"
+#include "arch/x86_64/paging.h"
 #include "arch/x86_64/smp.h"
 #include "kernel/heap.h"
 #include "kernel/thread.h"
@@ -146,6 +147,8 @@ void sched_init(void) {
     g_boot_thread.last_run_tick = 0;
     g_boot_thread.mem_current = 0;
     g_boot_thread.mem_peak = 0;
+    g_boot_thread.pml4_phys = paging_pml4_phys();
+    g_boot_thread.is_user = 0;
     g_boot_thread.name = "bootstrap";
     g_current[g_boot_thread.cpu] = &g_boot_thread;
 
@@ -178,6 +181,8 @@ void sched_init(void) {
         idle->id = sched_next_tid();
         idle->state = THREAD_IDLE;
         idle->name = "idle";
+        idle->pml4_phys = paging_pml4_phys();
+        idle->is_user = 0;
         g_idle[i] = idle;
     }
 
@@ -252,6 +257,9 @@ void sched_yield(void) {
     if (!prev) {
         cpu_enable_interrupts();
         return;
+    }
+    if (next->pml4_phys && prev->pml4_phys != next->pml4_phys) {
+        paging_switch_to(next->pml4_phys);
     }
     context_switch(&prev->ctx, &next->ctx);
     cpu_enable_interrupts();
