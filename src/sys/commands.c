@@ -13,6 +13,7 @@
 #include "arch/x86_64/paging.h"
 #include "kernel/pmm.h"
 #include "drivers/rtc/rtc_util.h"
+#include "kernel/time.h"
 #include "kernel/heap.h"
 #include "arch/x86_64/smp.h"
 #include "lib/strutil.h"
@@ -51,10 +52,16 @@ static void cmd_help(void) {
 }
 
 static void cmd_time(void) {
+    char time_buf[20];
+    int rc = time_get_string(time_buf);
+    if (rc == 0) {
+        log_printf("%s\n", time_buf);
+        return;
+    }
     char rtc_buf[20];
-    int rc = rtc_get_string(rtc_buf);
-    if (rc == 0) log_printf("%s\n", rtc_buf);
-    else log_printf("RTC: unavailable (err=%d)\n", rc);
+    int rrc = rtc_get_string(rtc_buf);
+    if (rrc == 0) log_printf("%s\n", rtc_buf);
+    else log_printf("RTC: unavailable (err=%d)\n", rrc);
 }
 
 static void cmd_debug(void) {

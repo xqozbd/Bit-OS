@@ -22,6 +22,7 @@
 #include "drivers/ps2/mouse.h"
 #include "drivers/pci/pci.h"
 #include "drivers/net/pcnet.h"
+#include "kernel/time.h"
 
 /* Bootstrap stack: keep it inside the kernel image so it's mapped in our page tables. */
 #define KSTACK_SIZE (64 * 1024)
@@ -165,6 +166,7 @@ static void kmain_stage2(void) {
     watchdog_checkpoint("apic_calibrate");
     timer_switch_to_apic(100);
     watchdog_checkpoint("apic_done");
+    time_init();
     log_printf("Boot: preparing console screen...\n");
     boot_delay_ms(1000);
     fb_clear();

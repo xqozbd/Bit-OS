@@ -4,6 +4,7 @@
 #include "drivers/rtc/rtc_util.h"
 #include "drivers/net/pcnet.h"
 #include "drivers/video/fb_printf.h"
+#include "kernel/time.h"
 
 static uint32_t g_status_y = 0;
 static uint32_t g_status_x = 0;
@@ -19,12 +20,15 @@ void boot_screen_print_loading(void) {
 void boot_screen_print_main(void) {
     fb_printf("Hello BitOS!\n");
 
-    char rtc_buf[20];
-    int rc = rtc_get_string(rtc_buf);
+    char time_buf[20];
+    int rc = time_get_string(time_buf);
     if (rc == 0) {
-        fb_printf("RTC: %s\n", rtc_buf);
+        fb_printf("Time: %s\n", time_buf);
     } else {
-        fb_printf("RTC: unavailable (err=%d)\n", rc);
+        char rtc_buf[20];
+        int rrc = rtc_get_string(rtc_buf);
+        if (rrc == 0) fb_printf("RTC: %s\n", rtc_buf);
+        else fb_printf("RTC: unavailable (err=%d)\n", rrc);
     }
 
     bootinfo_log();
