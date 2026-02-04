@@ -40,7 +40,7 @@ static uint64_t alloc_table(uint64_t *out_phys) {
     *out_phys = phys;
     return virt;
 }
-
+// man page these fucking balls. this shit sucks -xqozbd
 static uint64_t *table_from_entry(uint64_t entry) {
     uint64_t phys = entry & 0x000ffffffffff000ull;
     return (uint64_t *)(uintptr_t)(g_hhdm_offset + phys);
@@ -119,6 +119,10 @@ static inline void load_cr3(uint64_t phys) {
 
 uint64_t paging_hhdm_offset(void) {
     return g_hhdm_offset;
+}
+
+uint64_t paging_pml4_phys(void) {
+    return g_pml4_phys;
 }
 
 int paging_init(void) {

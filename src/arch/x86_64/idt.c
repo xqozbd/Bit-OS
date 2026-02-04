@@ -10,6 +10,7 @@
 #include "drivers/ps2/keyboard.h"
 #include "drivers/ps2/mouse.h"
 #include "sys/syscall.h"
+#include "kernel/watchdog.h"
 
 /* IDT + exceptions */
 struct interrupt_frame {
@@ -95,6 +96,7 @@ void idt_reload(void) {
 static void exception_common(uint8_t vec, uint64_t err, int has_err) {
     log_printf("\nEXCEPTION %u", (unsigned)vec);
     if (has_err) log_printf(" err=0x%x", (unsigned)err);
+    log_printf("\nstage: %s", watchdog_last_stage());
     log_printf("\nSystem halted.\n");
     halt_forever();
 }
@@ -125,6 +127,7 @@ void isr_err_14(struct interrupt_frame *frame, uint64_t error_code) {
     log_printf(" cr2=%p rip=%p cs=0x%x rflags=0x%x rsp=%p ss=0x%x\n",
                (void *)cr2, (void *)frame->rip, (unsigned)frame->cs,
                (unsigned)frame->rflags, (void *)frame->rsp, (unsigned)frame->ss);
+    log_printf("stage: %s\n", watchdog_last_stage());
     log_printf("PF: P=%u W=%u U=%u R=%u I=%u\n",
                (unsigned)(error_code & 1),
                (unsigned)((error_code >> 1) & 1),

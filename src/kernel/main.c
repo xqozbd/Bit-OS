@@ -19,6 +19,7 @@
 #include "arch/x86_64/timer.h"
 #include "kernel/watchdog.h"
 #include "drivers/ps2/mouse.h"
+#include "drivers/pci/pci.h"
 
 /* Bootstrap stack: keep it inside the kernel image so it's mapped in our page tables. */
 #define KSTACK_SIZE (64 * 1024)
@@ -53,9 +54,10 @@ void kmain(void) {
 
 static void kmain_stage2(void) {
     log_init_serial();
+    watchdog_early_stage("kmain_start");
     cpu_enable_sse();
     idt_init();
-    watchdog_checkpoint("idt_init");
+    watchdog_early_stage("idt_init");
     watchdog_log_stage("idt_init");
 
     if (LIMINE_BASE_REVISION_SUPPORTED(limine_base_revision) == false) {
@@ -67,26 +69,29 @@ static void kmain_stage2(void) {
     }
 
     pmm_init();
-    watchdog_checkpoint("pmm_init");
+    watchdog_early_stage("pmm_init");
     watchdog_log_stage("pmm_init");
     paging_init();
-    watchdog_checkpoint("paging_init");
+    watchdog_early_stage("paging_init");
     watchdog_log_stage("paging_init");
     heap_init();
-    watchdog_checkpoint("heap_init");
+    watchdog_early_stage("heap_init");
     watchdog_log_stage("heap_init");
+    pci_init();
+    watchdog_early_stage("pci_init");
+    watchdog_log_stage("pci_init");
     initramfs_init_from_limine();
-    watchdog_checkpoint("initramfs");
+    watchdog_early_stage("initramfs");
     watchdog_log_stage("initramfs");
     smp_init();
-    watchdog_checkpoint("smp_init");
+    watchdog_early_stage("smp_init");
     watchdog_log_stage("smp_init");
 
     struct limine_framebuffer *fb = framebuffer_request.response->framebuffers[0];
     fb_init(fb, 0xE6E6E6, 0x0B0F14);
     fb_set_layout_ex(3, 4, 24, 24, 4, 2);
     log_set_fb_ready(1);
-    watchdog_checkpoint("fb_ready");
+    watchdog_early_stage("fb_ready");
     watchdog_log_stage("fb_ready");
     banner_init(fb);
     banner_draw();

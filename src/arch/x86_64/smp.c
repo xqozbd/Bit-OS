@@ -6,16 +6,20 @@
 #include "boot/boot_requests.h"
 #include "arch/x86_64/cpu.h"
 #include "arch/x86_64/idt.h"
+#include "arch/x86_64/paging.h"
 #include "kernel/heap.h"
+#include "kernel/pmm.h"
 #include "lib/log.h"
 
-enum { AP_STACK_SIZE = 16 * 1024 };
+enum { AP_STACK_SIZE = 0x1000 };
 
 static volatile uint32_t g_online = 1; /* BSP */
 static uint32_t g_cpu_count = 1;
 static int g_initialized = 0;
 static uint32_t g_bsp_index = 0;
 static struct smp_percpu *g_percpu = 0;
+__attribute__((used))
+static uint64_t g_boot_cr3 = 0;
 
 static inline void atomic_inc_u32(volatile uint32_t *p) {
 #if defined(__GNUC__) || defined(__clang__)
@@ -34,25 +38,37 @@ static void ap_main(struct limine_mp_info *info) {
     __builtin_unreachable();
 }
 
-__attribute__((noreturn))
-static void ap_entry(struct limine_mp_info *info) {
-    cpu_disable_interrupts();
-    struct smp_percpu *pc = (struct smp_percpu *)(uintptr_t)info->extra_argument;
-    uintptr_t stack_top = pc ? pc->stack_top : 0;
-    if (stack_top != 0) {
-        stack_top &= ~0xFull; /* 16-byte align */
-        stack_top -= 8;       /* SysV ABI: entry RSP%16 == 8 */
-#if defined(__GNUC__) || defined(__clang__)
-        __asm__ volatile(
-            "mov %0, %%rsp\n"
-            "xor %%rbp, %%rbp\n"
-            :
-            : "r"(stack_top)
-            : "memory");
-#endif
-    }
+__attribute__((noreturn, used))
+static void ap_entry_c(struct limine_mp_info *info) {
     idt_reload();
     ap_main(info);
+}
+
+__attribute__((naked, noreturn, used))
+static void ap_entry(struct limine_mp_info *info) {
+#if defined(__GNUC__) || defined(__clang__)
+    __asm__ volatile(
+        ".intel_syntax noprefix\n"
+        "cli\n"
+        "mov rax, qword ptr [rdi + 32]\n" /* info->extra_argument (stack_top) */
+        "mov rcx, qword ptr [rip + g_boot_cr3]\n"
+        "test rcx, rcx\n"
+        "jz 0f\n"
+        "mov cr3, rcx\n"
+        "0:\n"
+        "test rax, rax\n"
+        "jz 1f\n"
+        "mov rsp, rax\n"
+        "and rsp, -16\n"
+        "sub rsp, 8\n"
+        "1:\n"
+        "xor rbp, rbp\n"
+        "jmp ap_entry_c\n"
+        ".att_syntax\n");
+#else
+    (void)info;
+    ap_entry_c(info);
+#endif
 }
 
 void smp_init(void) {
@@ -61,6 +77,7 @@ void smp_init(void) {
     g_cpu_count = 1;
     g_bsp_index = 0;
     g_percpu = 0;
+    g_boot_cr3 = paging_pml4_phys();
 
     if (!mp_request.response) return;
     struct limine_mp_response *resp = mp_request.response;
@@ -100,16 +117,16 @@ void smp_init(void) {
         if (!info) continue;
         if (info->lapic_id == resp->bsp_lapic_id) continue;
 
-        void *stack = kmalloc(AP_STACK_SIZE);
-        if (!stack) {
-            log_printf("SMP: failed to allocate AP stack\n");
+        uint64_t phys = pmm_alloc_frame();
+        if (phys == 0) {
+            log_printf("SMP: failed to allocate AP stack frame\n");
             continue;
         }
-        uintptr_t stack_top = (uintptr_t)stack + AP_STACK_SIZE;
-        stack_top &= ~0xFull;
+        uint64_t hhdm = paging_hhdm_offset();
+        uintptr_t stack_top = (uintptr_t)(hhdm + phys + AP_STACK_SIZE);
 
         g_percpu[i].stack_top = stack_top;
-        info->extra_argument = (uint64_t)(uintptr_t)&g_percpu[i];
+        info->extra_argument = (uint64_t)stack_top;
         info->goto_address = ap_entry;
         launched++;
     }

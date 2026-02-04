@@ -12,6 +12,16 @@ static const char *g_last_stage = "start";
 static volatile uint64_t g_last_tick = 0;
 static volatile uint32_t g_timeout_s = 1;
 
+void watchdog_early_stage(const char *stage) {
+    if (!stage) stage = "(null)";
+    g_last_stage = stage;
+    g_last_tick = 0;
+}
+
+const char *watchdog_last_stage(void) {
+    return g_last_stage ? g_last_stage : "(null)";
+}
+
 void watchdog_init(uint32_t timeout_seconds) {
     g_boot_ok = 0;
     if (timeout_seconds == 0) timeout_seconds = 1;
