@@ -29,6 +29,8 @@ From WSL (Ubuntu), in the project directory:
 
 The build generates `BitOS.iso` for booting in a VM. If you see Limine missing errors, place Limine release binaries in `./limine/` as required by `iso.sh`.
 
+(Side note from xqozbd, I'm in the process of making a script (once inside WSL) that will grab all the tools and the limine binaries required to build the OS and build it for you.)
+
 ## Run (VirtualBox)
 - Use a 64-bit VM.
 - Enable EFI or BIOS as needed by your Limine setup.
