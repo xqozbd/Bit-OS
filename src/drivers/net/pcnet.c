@@ -164,7 +164,7 @@ static void pcnet_send_raw(const uint8_t *data, uint16_t len) {
     pcnet_write_csr(g_pcnet_io, 0, pcnet_read_csr(g_pcnet_io, 0) | PCNET_CSR0_STRT);
 }
 
-static void pcnet_send_arp_request_to(const uint8_t target_ip[4]) {
+static void pcnet_send_arp_request_to(const uint8_t target_ip[4], int log_it) {
     uint8_t pkt[42];
     for (uint8_t i = 0; i < 6; ++i) pkt[i] = 0xFF;
     for (uint8_t i = 0; i < 6; ++i) pkt[6 + i] = g_pcnet_mac[i];
@@ -180,8 +180,10 @@ static void pcnet_send_arp_request_to(const uint8_t target_ip[4]) {
     for (uint8_t i = 0; i < 6; ++i) pkt[32 + i] = 0x00;
     for (uint8_t i = 0; i < 4; ++i) pkt[38 + i] = target_ip[i];
     pcnet_send_raw(pkt, sizeof(pkt));
-    log_printf("PCNet: ARP who-has %u.%u.%u.%u\n",
-               target_ip[0], target_ip[1], target_ip[2], target_ip[3]);
+    if (log_it) {
+        log_printf("PCNet: ARP who-has %u.%u.%u.%u\n",
+                   target_ip[0], target_ip[1], target_ip[2], target_ip[3]);
+    }
 }
 
 static void pcnet_send_arp_reply(const uint8_t *dst_mac, const uint8_t *dst_ip) {
@@ -444,7 +446,7 @@ void pcnet_tick(void) {
     pcnet_poll_rx();
     if (++g_last_arp_tick >= 500) {
         g_last_arp_tick = 0;
-        pcnet_send_arp_request_to(g_gw_addr);
+        pcnet_send_arp_request_to(g_gw_addr, 0);
     }
 }
 
@@ -462,7 +464,7 @@ void pcnet_ping(const uint8_t ip[4]) {
         have_mac = 1;
     }
     if (!have_mac) {
-        pcnet_send_arp_request_to(ip);
+        pcnet_send_arp_request_to(ip, 1);
         log_printf("ping: ARP resolving %u.%u.%u.%u\n",
                    ip[0], ip[1], ip[2], ip[3]);
         return;
