@@ -10,5 +10,6 @@ void watchdog_tick(void);
 void watchdog_checkpoint_boot_ok(void);
 void watchdog_checkpoint(const char *stage);
 void watchdog_log_stage(const char *stage);
+void watchdog_set_mode(const char *mode);
 
 #endif /* WATCHDOG_H */

@@ -24,6 +24,8 @@ struct task {
     uint64_t brk_base;
     uint64_t brk;
     uint64_t brk_limit;
+    uint64_t user_stack_top;
+    uint64_t user_stack_size;
     const char *name;
     struct task_fd *fds;
     struct task *next;
@@ -40,6 +42,9 @@ void task_fd_init(struct task *t);
 struct task_fd *task_fd_get(struct task *t, int fd);
 int task_fd_alloc(struct task *t, int node, uint32_t flags);
 int task_fd_close(struct task *t, int fd);
+void task_set_user_layout(struct task *t, uint64_t brk_base, uint64_t brk_limit,
+                          uint64_t stack_top, uint64_t stack_size);
+void task_clone_from(struct task *dst, const struct task *src);
 
 struct task *task_current(void);
 struct task *task_create_for_thread(struct thread *t, const char *name);

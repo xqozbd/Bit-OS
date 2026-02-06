@@ -11,6 +11,16 @@ int paging_map_4k(uint64_t virt, uint64_t phys, uint64_t flags);
 int paging_map_4k_in_pml4(uint64_t pml4_phys, uint64_t virt, uint64_t phys, uint64_t flags);
 int paging_map_user_4k(uint64_t pml4_phys, uint64_t virt, uint64_t phys, uint64_t flags);
 uint64_t paging_new_user_pml4(void);
+uint64_t paging_clone_user_pml4(uint64_t src_pml4_phys);
 void paging_switch_to(uint64_t pml4_phys);
+
+struct user_addr_space {
+    uint64_t heap_base;
+    uint64_t heap_limit;
+    uint64_t stack_top;
+    uint64_t stack_size;
+};
+
+void paging_user_layout_default(struct user_addr_space *out);
 
 #endif /* PAGING_H */

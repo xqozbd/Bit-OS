@@ -11,6 +11,8 @@ enum {
     SYS_OPEN  = 5,
     SYS_READ  = 6,
     SYS_CLOSE = 7,
+    SYS_FORK  = 8,
+    SYS_EXEC  = 9,
     SYS_MAX
 };
 

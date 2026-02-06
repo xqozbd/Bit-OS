@@ -5,6 +5,7 @@
 #include "lib/compat.h"
 #include "lib/log.h"
 #include "kernel/heap.h"
+#include "arch/x86_64/paging.h"
 #include "kernel/thread.h"
 #include "kernel/sched.h"
 
@@ -13,11 +14,6 @@ static struct task g_boot_task;
 static struct task *g_task_head = NULL;
 static struct task *g_task_tail = NULL;
 static struct task_fd g_boot_fds[16];
-
-enum {
-    USER_HEAP_BASE  = 0x0000000040000000ull,
-    USER_HEAP_LIMIT = 0x0000000080000000ull
-};
 
 static uint32_t next_pid(void) {
     return __atomic_fetch_add(&g_next_pid, 1u, __ATOMIC_SEQ_CST);
@@ -87,6 +83,8 @@ void task_init_bootstrap(struct thread *t) {
     g_boot_task.brk_base = 0;
     g_boot_task.brk = 0;
     g_boot_task.brk_limit = 0;
+    g_boot_task.user_stack_top = 0;
+    g_boot_task.user_stack_size = 0;
     g_boot_task.name = t->name ? t->name : "bootstrap";
     g_boot_task.fds = g_boot_fds;
     g_boot_task.next = NULL;
@@ -108,14 +106,18 @@ struct task *task_create_for_thread(struct thread *t, const char *name) {
     task->kstack_size = t->stack_size;
     task->pml4_phys = t->pml4_phys;
     if (task->is_user) {
-        task->brk_base = USER_HEAP_BASE;
-        task->brk = USER_HEAP_BASE;
-        task->brk_limit = USER_HEAP_LIMIT;
+        struct user_addr_space layout;
+        paging_user_layout_default(&layout);
+        task->brk_base = layout.heap_base;
+        task->brk = layout.heap_base;
+        task->brk_limit = layout.heap_limit;
     } else {
         task->brk_base = 0;
         task->brk = 0;
         task->brk_limit = 0;
     }
+    task->user_stack_top = 0;
+    task->user_stack_size = 0;
     task->name = name ? name : "task";
     task->fds = NULL;
     task_fd_init(task);
@@ -128,6 +130,36 @@ struct task *task_create_for_thread(struct thread *t, const char *name) {
         g_task_tail = task;
     }
     return task;
+}
+
+void task_set_user_layout(struct task *t, uint64_t brk_base, uint64_t brk_limit,
+                          uint64_t stack_top, uint64_t stack_size) {
+    if (!t) return;
+    t->is_user = 1;
+    t->brk_base = brk_base;
+    t->brk = brk_base;
+    t->brk_limit = brk_limit;
+    t->user_stack_top = stack_top;
+    t->user_stack_size = stack_size;
+}
+
+void task_clone_from(struct task *dst, const struct task *src) {
+    if (!dst || !src) return;
+    dst->is_user = src->is_user;
+    dst->pml4_phys = src->pml4_phys;
+    dst->brk_base = src->brk_base;
+    dst->brk = src->brk;
+    dst->brk_limit = src->brk_limit;
+    dst->user_stack_top = src->user_stack_top;
+    dst->user_stack_size = src->user_stack_size;
+    if (!dst->fds) {
+        dst->fds = (struct task_fd *)kmalloc(sizeof(struct task_fd) * 16);
+    }
+    if (dst->fds && src->fds) {
+        for (int i = 0; i < 16; ++i) {
+            dst->fds[i] = src->fds[i];
+        }
+    }
 }
 
 void task_on_thread_exit(struct thread *t) {

@@ -52,6 +52,8 @@ Configurable boot params (Limine cmdline).
 Proper shutdown/restart (ACPI S5 + reset fallback).
 Per-process file descriptor table + basic open/read/close syscalls.
 Ring-3 entry path (GDT/TSS + iretq user entry + user stack mapper).
+Userspace fork/exec/exit support (basic user ELF exec + vfork-style fork).
+User address space layout defaults + page-table clone helpers.
 
 ## Features Removed:
 None
@@ -59,3 +61,4 @@ None
 ## Features Changed:
 Build warnings cleaned up (log/acpi prototypes).
 Driver registry output: show "not found" directly for skipped devices.
+Watchdog behavior now configurable via cmdline (watchdog=off/log/reboot/halt) and verbose logging toggle (log=verbose).

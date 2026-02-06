@@ -42,4 +42,12 @@ static inline long sys_close(int fd) {
     return __syscall6(7, (long)fd, 0, 0, 0, 0, 0);
 }
 
+static inline long sys_fork(void) {
+    return __syscall6(8, 0, 0, 0, 0, 0, 0);
+}
+
+static inline long sys_exec(const char *path, int argc, char **argv) {
+    return __syscall6(9, (long)path, (long)argc, (long)argv, 0, 0, 0);
+}
+
 #endif /* SYS_LIBC_H */

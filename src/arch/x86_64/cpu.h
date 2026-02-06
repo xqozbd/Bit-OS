@@ -33,6 +33,11 @@ static inline void cpu_write_msr(uint32_t msr, uint64_t val) {
     uint32_t hi = (uint32_t)(val >> 32);
     __asm__ volatile("wrmsr" : : "c"(msr), "a"(lo), "d"(hi));
 }
+static inline uint64_t cpu_read_cr3(void) {
+    uint64_t val;
+    __asm__ volatile("mov %%cr3, %0" : "=r"(val));
+    return val;
+}
 #else
 static inline void cpu_enable_interrupts(void) {}
 static inline void cpu_disable_interrupts(void) {}
@@ -40,6 +45,7 @@ static inline void cpu_pause(void) {}
 static inline void cpu_idle(void) {}
 static inline uint64_t cpu_read_msr(uint32_t msr) { (void)msr; return 0; }
 static inline void cpu_write_msr(uint32_t msr, uint64_t val) { (void)msr; (void)val; }
+static inline uint64_t cpu_read_cr3(void) { return 0; }
 #endif
 
 #endif /* CPU_H */

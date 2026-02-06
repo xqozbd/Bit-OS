@@ -29,6 +29,13 @@ static uint64_t g_hhdm_offset = 0;
 static uint64_t *g_pml4 = 0;
 static uint64_t g_pml4_phys = 0;
 
+enum {
+    USER_HEAP_BASE  = 0x0000000040000000ull,
+    USER_HEAP_LIMIT = 0x0000000080000000ull,
+    USER_STACK_TOP  = 0x00000000fffff000ull,
+    USER_STACK_SIZE = 0x0000000000100000ull
+};
+
 static inline uint64_t align_up_u64(uint64_t v, uint64_t a) {
     return (v + a - 1) & ~(a - 1);
 }
@@ -157,6 +164,81 @@ uint64_t paging_new_user_pml4(void) {
         new_pml4[i] = g_pml4[i];
     }
     return new_phys;
+}
+
+static uint64_t clone_table(uint64_t src_entry, int level) {
+    if ((src_entry & PTE_P) == 0) return 0;
+    if (level == 1 && (src_entry & PTE_PS)) {
+        /* 2MiB page at PD level, share mapping. */
+        return src_entry;
+    }
+
+    uint64_t src_phys = src_entry & 0x000ffffffffff000ull;
+    uint64_t *src_tbl = (uint64_t *)(uintptr_t)(g_hhdm_offset + src_phys);
+    uint64_t new_phys = 0;
+    uint64_t new_virt = alloc_table(&new_phys);
+    if (new_virt == 0) return 0;
+    uint64_t *dst_tbl = (uint64_t *)(uintptr_t)new_virt;
+
+    for (uint32_t i = 0; i < 512; ++i) {
+        uint64_t ent = src_tbl[i];
+        if ((ent & PTE_P) == 0) {
+            dst_tbl[i] = 0;
+            continue;
+        }
+        if (level == 1 && (ent & PTE_PS)) {
+            dst_tbl[i] = ent;
+            continue;
+        }
+        if (level == 0) {
+            dst_tbl[i] = ent;
+            continue;
+        }
+        uint64_t child = clone_table(ent, level - 1);
+        if (child == 0) {
+            dst_tbl[i] = 0;
+            continue;
+        }
+        dst_tbl[i] = (child & 0x000ffffffffff000ull) | (ent & 0xFFF);
+    }
+    return new_phys | (src_entry & 0xFFF);
+}
+
+uint64_t paging_clone_user_pml4(uint64_t src_pml4_phys) {
+    if (src_pml4_phys == 0 || g_hhdm_offset == 0) return 0;
+    uint64_t *src = (uint64_t *)(uintptr_t)(g_hhdm_offset + src_pml4_phys);
+
+    uint64_t new_phys = 0;
+    uint64_t new_virt = alloc_table(&new_phys);
+    if (new_virt == 0) return 0;
+    uint64_t *dst = (uint64_t *)(uintptr_t)new_virt;
+
+    /* Clone user half (0..255), copy kernel half (256..511). */
+    for (uint32_t i = 0; i < 256; ++i) {
+        uint64_t ent = src[i];
+        if ((ent & PTE_P) == 0) {
+            dst[i] = 0;
+            continue;
+        }
+        uint64_t child = clone_table(ent, 2);
+        if (child == 0) {
+            dst[i] = 0;
+            continue;
+        }
+        dst[i] = (child & 0x000ffffffffff000ull) | (ent & 0xFFF);
+    }
+    for (uint32_t i = 256; i < 512; ++i) {
+        dst[i] = src[i];
+    }
+    return new_phys;
+}
+
+void paging_user_layout_default(struct user_addr_space *out) {
+    if (!out) return;
+    out->heap_base = USER_HEAP_BASE;
+    out->heap_limit = USER_HEAP_LIMIT;
+    out->stack_top = USER_STACK_TOP;
+    out->stack_size = USER_STACK_SIZE;
 }
 
 int paging_init(void) {

@@ -114,6 +114,15 @@ static void kmain_stage2(void) {
     } else {
         boot_params_init(NULL);
     }
+    const char *log_mode = boot_param_get("log");
+    if (log_mode && log_mode[0] == 'v' && log_mode[1] == 'e' && log_mode[2] == 'r'
+        && log_mode[3] == 'b' && log_mode[4] == 'o' && log_mode[5] == 's' && log_mode[6] == 'e'
+        && log_mode[7] == '\0') {
+        log_set_verbose(1);
+        log_printf("Boot: verbose logging enabled\n");
+    }
+    watchdog_set_mode(boot_param_get("watchdog"));
+    log_printf_verbose("Boot: watchdog mode=%s\n", boot_param_get("watchdog"));
 
     log_printf("Boot: checking framebuffer availability...\n");
     if (!framebuffer_request.response || framebuffer_request.response->framebuffer_count < 1) {

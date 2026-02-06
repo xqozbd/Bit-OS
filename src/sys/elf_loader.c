@@ -8,6 +8,7 @@
 #include "arch/x86_64/paging.h"
 #include "kernel/pmm.h"
 #include "arch/x86_64/cpu.h"
+#include "arch/x86_64/usermode.h"
 
 /* From memutils.c */
 void *memset(void *s, int c, size_t n);
@@ -209,6 +210,57 @@ static void *build_stack(int argc, char **argv, char **envp, uint64_t *out_rsp, 
     return (void *)(uintptr_t)stack_base;
 }
 
+static int build_user_stack(uint64_t pml4_phys, uint64_t top, uint64_t size,
+                            int argc, char **argv, char **envp, uint64_t *out_rsp) {
+    uint64_t rsp = 0;
+    if (user_stack_build(pml4_phys, top, size, &rsp) != 0) return -1;
+
+    uint64_t sp = top;
+    uint64_t str_top = sp;
+
+    for (int i = argc - 1; i >= 0; --i) {
+        const char *s = argv ? argv[i] : NULL;
+        if (!s) continue;
+        size_t len = 0;
+        while (s[len]) len++;
+        str_top -= (len + 1);
+        memcpy((void *)(uintptr_t)str_top, s, len + 1);
+        argv[i] = (char *)(uintptr_t)str_top;
+    }
+    if (envp) {
+        for (int i = 0; envp[i]; ++i) {
+            size_t len = 0;
+            while (envp[i][len]) len++;
+            str_top -= (len + 1);
+            memcpy((void *)(uintptr_t)str_top, envp[i], len + 1);
+            envp[i] = (char *)(uintptr_t)str_top;
+        }
+    }
+
+    uint64_t ptr = (str_top & ~0xFULL);
+    ptr -= 8;
+    *(uint64_t *)(uintptr_t)ptr = 0;
+    if (envp) {
+        int envc = 0;
+        while (envp[envc]) envc++;
+        for (int i = envc - 1; i >= 0; --i) {
+            ptr -= 8;
+            *(uint64_t *)(uintptr_t)ptr = (uint64_t)(uintptr_t)envp[i];
+        }
+    }
+    ptr -= 8;
+    *(uint64_t *)(uintptr_t)ptr = 0;
+    for (int i = argc - 1; i >= 0; --i) {
+        ptr -= 8;
+        *(uint64_t *)(uintptr_t)ptr = (uint64_t)(uintptr_t)argv[i];
+    }
+    ptr -= 8;
+    *(uint64_t *)(uintptr_t)ptr = (uint64_t)argc;
+
+    if (out_rsp) *out_rsp = ptr;
+    return 0;
+}
+
 int elf_load_and_run(const char *path, int argc, char **argv, char **envp) {
     const uint8_t *data = NULL;
     uint64_t size = 0;
@@ -296,5 +348,86 @@ int elf_load_and_run(const char *path, int argc, char **argv, char **envp) {
     (void)rsp; (void)argv_ptr; (void)envp_ptr;
     entry(argc, argv, envp);
 #endif
+    return 0;
+}
+
+int elf_load_user(const char *path, int argc, char **argv, char **envp,
+                  uint64_t *out_entry, uint64_t *out_pml4, uint64_t *out_rsp,
+                  uint64_t *out_stack_top, uint64_t *out_stack_size) {
+    const uint8_t *data = NULL;
+    uint64_t size = 0;
+    int node = vfs_resolve(vfs_resolve(0, "/"), path);
+    if (node < 0) return -1;
+    if (!vfs_read_file(node, &data, &size) || !data || size < sizeof(struct elf64_ehdr)) {
+        return -2;
+    }
+
+    const struct elf64_ehdr *eh = (const struct elf64_ehdr *)data;
+    uint32_t magic = *(const uint32_t *)&eh->e_ident[0];
+    if (magic != ELF_MAGIC || eh->e_ident[4] != 2 || eh->e_ident[5] != 1) return -3;
+    if (eh->e_phoff == 0 || eh->e_phnum == 0 || eh->e_phentsize != sizeof(struct elf64_phdr)) return -4;
+    if (eh->e_phoff + (uint64_t)eh->e_phnum * sizeof(struct elf64_phdr) > size) return -5;
+    if (eh->e_entry >= 0x0000800000000000ull) return -6;
+
+    uint64_t new_pml4 = paging_new_user_pml4();
+    if (new_pml4 == 0) return -7;
+
+    uint64_t old_cr3 = cpu_read_cr3();
+    paging_switch_to(new_pml4);
+
+    const struct elf64_phdr *ph = (const struct elf64_phdr *)(data + eh->e_phoff);
+    for (uint16_t i = 0; i < eh->e_phnum; ++i) {
+        if (ph[i].p_type != PT_LOAD) continue;
+        if (ph[i].p_offset + ph[i].p_filesz > size) {
+            paging_switch_to(old_cr3);
+            return -8;
+        }
+        if (ph[i].p_vaddr >= 0x0000800000000000ull) {
+            paging_switch_to(old_cr3);
+            return -9;
+        }
+        uint64_t start = ph[i].p_vaddr & ~0xFFFull;
+        uint64_t end = (ph[i].p_vaddr + ph[i].p_memsz + 0xFFF) & ~0xFFFull;
+        for (uint64_t va = start; va < end; va += 0x1000ull) {
+            uint64_t phys = pmm_alloc_frame();
+            if (phys == 0) {
+                paging_switch_to(old_cr3);
+                return -10;
+            }
+            if (paging_map_user_4k(new_pml4, va, phys, 0) != 0) {
+                paging_switch_to(old_cr3);
+                return -11;
+            }
+        }
+        if (ph[i].p_filesz > 0) {
+            memcpy((void *)(uintptr_t)ph[i].p_vaddr, data + ph[i].p_offset, (size_t)ph[i].p_filesz);
+        }
+        if (ph[i].p_memsz > ph[i].p_filesz) {
+            uint64_t bss = ph[i].p_vaddr + ph[i].p_filesz;
+            uint64_t bss_len = ph[i].p_memsz - ph[i].p_filesz;
+            memset((void *)(uintptr_t)bss, 0, (size_t)bss_len);
+        }
+    }
+
+    if (apply_relocations(data, size, eh) != 0) {
+        paging_switch_to(old_cr3);
+        return -12;
+    }
+
+    uint64_t stack_top = 0x0000000070000000ull;
+    uint64_t stack_size = 0x0000000000020000ull;
+    uint64_t user_rsp = 0;
+    if (build_user_stack(new_pml4, stack_top, stack_size, argc, argv, envp, &user_rsp) != 0) {
+        paging_switch_to(old_cr3);
+        return -13;
+    }
+
+    paging_switch_to(old_cr3);
+
+    if (out_entry) *out_entry = eh->e_entry;
+    if (out_pml4) *out_pml4 = new_pml4;
+    if (out_rsp) *out_rsp = user_rsp;
+    if (out_stack_top) *out_stack_top = stack_top;
+    if (out_stack_size) *out_stack_size = stack_size;
     return 0;
 }
