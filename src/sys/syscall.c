@@ -13,6 +13,7 @@
 #include "sys/elf_loader.h"
 #include "sys/vfs.h"
 #include "arch/x86_64/usermode.h"
+#include "kernel/socket.h"
 
 extern void *memcpy(void *restrict dest, const void *restrict src, size_t n);
 
@@ -257,6 +258,124 @@ static uint64_t sys_kill_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4
     return 0;
 }
 
+static int fd_to_socket(struct task *t, int fd) {
+    if (!t) return -1;
+    struct task_fd *ent = task_fd_get(t, fd);
+    if (!ent) return -1;
+    if (ent->type != 2 || ent->sock_id < 0) return -1;
+    return ent->sock_id;
+}
+
+static uint64_t sys_socket_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a3; (void)a4; (void)a5; (void)a6;
+    int domain = (int)a1;
+    int type = (int)a2;
+    struct task *t = task_current();
+    if (!t) return (uint64_t)-1;
+    int sid = socket_create(domain, type);
+    if (sid < 0) return (uint64_t)-1;
+    int fd = task_fd_alloc_socket(t, sid);
+    if (fd < 0) {
+        socket_close(sid);
+        return (uint64_t)-1;
+    }
+    return (uint64_t)fd;
+}
+
+static uint64_t sys_bind_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a3; (void)a4; (void)a5; (void)a6;
+    int fd = (int)a1;
+    uint16_t port = (uint16_t)a2;
+    struct task *t = task_current();
+    int sid = fd_to_socket(t, fd);
+    if (sid < 0) return (uint64_t)-1;
+    return (uint64_t)socket_bind(sid, port);
+}
+
+static uint64_t sys_connect_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a4; (void)a5; (void)a6;
+    int fd = (int)a1;
+    const uint8_t *ip = (const uint8_t *)a2;
+    uint16_t port = (uint16_t)a3;
+    struct task *t = task_current();
+    int sid = fd_to_socket(t, fd);
+    if (sid < 0) return (uint64_t)-1;
+    return (uint64_t)socket_connect(sid, ip, port);
+}
+
+static uint64_t sys_sendto_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a6;
+    int fd = (int)a1;
+    const uint8_t *buf = (const uint8_t *)a2;
+    uint16_t len = (uint16_t)a3;
+    const uint8_t *ip = (const uint8_t *)a4;
+    uint16_t port = (uint16_t)a5;
+    struct task *t = task_current();
+    int sid = fd_to_socket(t, fd);
+    if (sid < 0) return (uint64_t)-1;
+    return (uint64_t)socket_sendto(sid, buf, len, ip, port);
+}
+
+static uint64_t sys_recvfrom_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a6;
+    int fd = (int)a1;
+    uint8_t *buf = (uint8_t *)a2;
+    uint16_t len = (uint16_t)a3;
+    uint8_t *out_ip = (uint8_t *)a4;
+    uint16_t *out_port = (uint16_t *)a5;
+    struct task *t = task_current();
+    int sid = fd_to_socket(t, fd);
+    if (sid < 0) return (uint64_t)-1;
+    return (uint64_t)socket_recvfrom(sid, buf, len, out_ip, out_port);
+}
+
+static uint64_t sys_listen_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    int fd = (int)a1;
+    struct task *t = task_current();
+    int sid = fd_to_socket(t, fd);
+    if (sid < 0) return (uint64_t)-1;
+    return (uint64_t)socket_listen(sid);
+}
+
+static uint64_t sys_accept_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    int fd = (int)a1;
+    struct task *t = task_current();
+    int sid = fd_to_socket(t, fd);
+    if (sid < 0) return (uint64_t)-1;
+    int new_sid = socket_accept(sid);
+    if (new_sid < 0) return (uint64_t)-1;
+    int new_fd = task_fd_alloc_socket(t, new_sid);
+    if (new_fd < 0) {
+        socket_close(new_sid);
+        return (uint64_t)-1;
+    }
+    return (uint64_t)new_fd;
+}
+
+static uint64_t sys_send_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a4; (void)a5; (void)a6;
+    int fd = (int)a1;
+    const uint8_t *buf = (const uint8_t *)a2;
+    uint16_t len = (uint16_t)a3;
+    struct task *t = task_current();
+    int sid = fd_to_socket(t, fd);
+    if (sid < 0) return (uint64_t)-1;
+    return (uint64_t)socket_sendto(sid, buf, len, NULL, 0);
+}
+
+static uint64_t sys_recv_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a4; (void)a5; (void)a6;
+    int fd = (int)a1;
+    uint8_t *buf = (uint8_t *)a2;
+    uint16_t len = (uint16_t)a3;
+    struct task *t = task_current();
+    int sid = fd_to_socket(t, fd);
+    if (sid < 0) return (uint64_t)-1;
+    return (uint64_t)socket_recvfrom(sid, buf, len, NULL, NULL);
+}
+
 static syscall_fn g_syscalls[SYS_MAX] = {
     0,
     sys_write_impl,
@@ -269,7 +388,16 @@ static syscall_fn g_syscalls[SYS_MAX] = {
     0,
     0,
     sys_signal_impl,
-    sys_kill_impl
+    sys_kill_impl,
+    sys_socket_impl,
+    sys_bind_impl,
+    sys_connect_impl,
+    sys_sendto_impl,
+    sys_recvfrom_impl,
+    sys_listen_impl,
+    sys_accept_impl,
+    sys_send_impl,
+    sys_recv_impl
 };
 
 uint64_t syscall_dispatch(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3,

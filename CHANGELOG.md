@@ -62,6 +62,8 @@ Disk driver for VMware (ATA PIO).
 VFS: mount root from block device.
 Persistent root filesystem support (FAT32 read-only).
 Pseudo-filesystem skeletons for /dev, /proc, /sys.
+UDP sockets + socket syscalls (TCP returns not supported).
+TCP sockets (connect/listen/accept + basic retransmit).
 
 ## Features Removed:
 None

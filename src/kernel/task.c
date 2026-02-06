@@ -8,6 +8,7 @@
 #include "arch/x86_64/paging.h"
 #include "kernel/thread.h"
 #include "kernel/sched.h"
+#include "kernel/socket.h"
 
 static uint32_t g_next_pid = 2;
 static struct task g_boot_task;
@@ -33,7 +34,9 @@ void task_fd_init(struct task *t) {
     if (!t->fds) return;
     for (int i = 0; i < 16; ++i) {
         t->fds[i].used = 0;
+        t->fds[i].type = 0;
         t->fds[i].node = -1;
+        t->fds[i].sock_id = -1;
         t->fds[i].offset = 0;
         t->fds[i].flags = 0;
     }
@@ -51,9 +54,27 @@ int task_fd_alloc(struct task *t, int node, uint32_t flags) {
     for (int i = 0; i < 16; ++i) {
         if (!t->fds[i].used) {
             t->fds[i].used = 1;
+            t->fds[i].type = 1;
             t->fds[i].node = node;
+            t->fds[i].sock_id = -1;
             t->fds[i].offset = 0;
             t->fds[i].flags = flags;
+            return i;
+        }
+    }
+    return -1;
+}
+
+int task_fd_alloc_socket(struct task *t, int sock_id) {
+    if (!t || !t->fds) return -1;
+    for (int i = 0; i < 16; ++i) {
+        if (!t->fds[i].used) {
+            t->fds[i].used = 1;
+            t->fds[i].type = 2;
+            t->fds[i].node = -1;
+            t->fds[i].sock_id = sock_id;
+            t->fds[i].offset = 0;
+            t->fds[i].flags = 0;
             return i;
         }
     }
@@ -64,8 +85,13 @@ int task_fd_close(struct task *t, int fd) {
     if (!t || !t->fds) return -1;
     if (fd < 0 || fd >= 16) return -1;
     if (!t->fds[fd].used) return -1;
+    if (t->fds[fd].type == 2 && t->fds[fd].sock_id >= 0) {
+        socket_close(t->fds[fd].sock_id);
+    }
     t->fds[fd].used = 0;
+    t->fds[fd].type = 0;
     t->fds[fd].node = -1;
+    t->fds[fd].sock_id = -1;
     t->fds[fd].offset = 0;
     t->fds[fd].flags = 0;
     return 0;

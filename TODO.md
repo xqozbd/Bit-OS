@@ -73,9 +73,10 @@
 - [x] VFS: mount root from block device.
 - [x] Persistent root filesystem support (ext2/fat32 driver).
 - [x] `/dev` and pseudo-filesystem (`/proc`, `/sys`) skeleton.
+- [x] UDP sockets + socket syscalls (TCP stub).
+- [x] TCP sockets (connect/listen/accept + retransmit).
 
 ## Next
-- [ ] Simple TCP/UDP sockets and socket syscalls.
 - [ ] AHCI / SATA / NVMe driver support (or virtio-blk for virtualization).
 - [ ] Simple init process + busybox-like shell spawn.
 - [ ] Per-CPU run queue load balancing.

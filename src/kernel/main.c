@@ -37,6 +37,7 @@
 #include "kernel/pstate.h"
 #include "sys/acpi.h"
 #include "kernel/power.h"
+#include "kernel/socket.h"
 #include "kernel/driver_registry.h"
 #include "sys/boot_params.h"
 
@@ -222,6 +223,8 @@ static void kmain_stage2(void) {
     } else {
         driver_set_status_idx(drv_pcnet, DRIVER_STATUS_OK, NULL);
     }
+    socket_init();
+    log_printf("Boot: socket layer ready\n");
     boot_screen_set_status("acpi");
     log_printf("Boot: initializing ACPI...\n");
     acpi_init();

@@ -58,6 +58,42 @@ static inline long sys_kill(int pid, int sig) {
     return __syscall6(11, (long)pid, (long)sig, 0, 0, 0, 0);
 }
 
+static inline long sys_socket(int domain, int type) {
+    return __syscall6(12, (long)domain, (long)type, 0, 0, 0, 0);
+}
+
+static inline long sys_bind(int fd, uint16_t port) {
+    return __syscall6(13, (long)fd, (long)port, 0, 0, 0, 0);
+}
+
+static inline long sys_connect(int fd, const uint8_t ip[4], uint16_t port) {
+    return __syscall6(14, (long)fd, (long)ip, (long)port, 0, 0, 0);
+}
+
+static inline long sys_sendto(int fd, const void *buf, size_t len, const uint8_t ip[4], uint16_t port) {
+    return __syscall6(15, (long)fd, (long)buf, (long)len, (long)ip, (long)port, 0);
+}
+
+static inline long sys_recvfrom(int fd, void *buf, size_t len, uint8_t ip[4], uint16_t *port) {
+    return __syscall6(16, (long)fd, (long)buf, (long)len, (long)ip, (long)port, 0);
+}
+
+static inline long sys_listen(int fd) {
+    return __syscall6(17, (long)fd, 0, 0, 0, 0, 0);
+}
+
+static inline long sys_accept(int fd) {
+    return __syscall6(18, (long)fd, 0, 0, 0, 0, 0);
+}
+
+static inline long sys_send(int fd, const void *buf, size_t len) {
+    return __syscall6(19, (long)fd, (long)buf, (long)len, 0, 0, 0);
+}
+
+static inline long sys_recv(int fd, void *buf, size_t len) {
+    return __syscall6(20, (long)fd, (long)buf, (long)len, 0, 0, 0);
+}
+
 enum {
     SIG_DFL = 0,
     SIG_IGN = 1,

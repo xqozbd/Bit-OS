@@ -8,6 +8,8 @@
 #include "arch/x86_64/paging.h"
 #include "drivers/pci/pci.h"
 #include "kernel/pmm.h"
+#include "kernel/socket.h"
+#include "kernel/tcp.h"
 #include "lib/log.h"
 
 void *memset(void *s, int c, size_t n);
@@ -241,6 +243,24 @@ static uint16_t net_checksum(const void *data, uint16_t len) {
     return (uint16_t)(~sum);
 }
 
+static uint16_t net_tcp_checksum(const uint8_t src_ip[4], const uint8_t dst_ip[4],
+                                 const uint8_t *tcp, uint16_t tcp_len) {
+    uint32_t sum = 0;
+    sum += (uint16_t)((src_ip[0] << 8) | src_ip[1]);
+    sum += (uint16_t)((src_ip[2] << 8) | src_ip[3]);
+    sum += (uint16_t)((dst_ip[0] << 8) | dst_ip[1]);
+    sum += (uint16_t)((dst_ip[2] << 8) | dst_ip[3]);
+    sum += (uint16_t)0x0006u;
+    sum += tcp_len;
+    const uint8_t *p = tcp;
+    for (uint16_t i = 0; i + 1 < tcp_len; i += 2) {
+        sum += (uint16_t)((p[i] << 8) | p[i + 1]);
+    }
+    if (tcp_len & 1) sum += (uint16_t)(p[tcp_len - 1] << 8);
+    while (sum >> 16) sum = (sum & 0xFFFFu) + (sum >> 16);
+    return (uint16_t)(~sum);
+}
+
 static void pcnet_send_ipv4_icmp(uint8_t type, uint8_t code,
                                  const uint8_t dst_ip[4],
                                  const uint8_t dst_mac[6],
@@ -289,6 +309,108 @@ static void pcnet_send_ipv4_icmp(uint8_t type, uint8_t code,
     pcnet_send_raw(pkt, frame_len);
 }
 
+static void pcnet_send_ipv4_udp(const uint8_t dst_ip[4], const uint8_t dst_mac[6],
+                                uint16_t src_port, uint16_t dst_port,
+                                const uint8_t *payload, uint16_t payload_len) {
+    if (payload_len > 1200) payload_len = 1200;
+    uint16_t ip_len = (uint16_t)(20 + 8 + payload_len);
+    uint16_t frame_len = (uint16_t)(14 + ip_len);
+    uint8_t pkt[14 + 20 + 8 + 1200];
+
+    for (uint8_t i = 0; i < 6; ++i) pkt[i] = dst_mac[i];
+    for (uint8_t i = 0; i < 6; ++i) pkt[6 + i] = g_pcnet_mac[i];
+    pkt[12] = 0x08; pkt[13] = 0x00;
+
+    uint8_t *ip = &pkt[14];
+    ip[0] = 0x45;
+    ip[1] = 0x00;
+    ip[2] = (uint8_t)(ip_len >> 8);
+    ip[3] = (uint8_t)(ip_len & 0xFF);
+    ip[4] = (uint8_t)(g_ip_ident >> 8);
+    ip[5] = (uint8_t)(g_ip_ident & 0xFF);
+    ip[6] = 0x00; ip[7] = 0x00;
+    ip[8] = 64;
+    ip[9] = 17;
+    ip[10] = 0x00; ip[11] = 0x00;
+    for (uint8_t i = 0; i < 4; ++i) ip[12 + i] = g_ip_addr[i];
+    for (uint8_t i = 0; i < 4; ++i) ip[16 + i] = dst_ip[i];
+    uint16_t ip_ck = net_checksum(ip, 20);
+    ip[10] = (uint8_t)(ip_ck >> 8);
+    ip[11] = (uint8_t)(ip_ck & 0xFF);
+
+    uint8_t *udp = &ip[20];
+    udp[0] = (uint8_t)(src_port >> 8);
+    udp[1] = (uint8_t)(src_port & 0xFF);
+    udp[2] = (uint8_t)(dst_port >> 8);
+    udp[3] = (uint8_t)(dst_port & 0xFF);
+    udp[4] = (uint8_t)((payload_len + 8) >> 8);
+    udp[5] = (uint8_t)((payload_len + 8) & 0xFF);
+    udp[6] = 0x00;
+    udp[7] = 0x00;
+    for (uint16_t i = 0; i < payload_len; ++i) udp[8 + i] = payload ? payload[i] : 0;
+
+    g_ip_ident++;
+    pcnet_send_raw(pkt, frame_len);
+}
+
+static void pcnet_send_ipv4_tcp(const uint8_t dst_ip[4], const uint8_t dst_mac[6],
+                                uint16_t src_port, uint16_t dst_port,
+                                uint32_t seq, uint32_t ack, uint8_t flags,
+                                const uint8_t *payload, uint16_t payload_len) {
+    if (payload_len > 1200) payload_len = 1200;
+    uint16_t tcp_len = (uint16_t)(20 + payload_len);
+    uint16_t ip_len = (uint16_t)(20 + tcp_len);
+    uint16_t frame_len = (uint16_t)(14 + ip_len);
+    uint8_t pkt[14 + 20 + 20 + 1200];
+
+    for (uint8_t i = 0; i < 6; ++i) pkt[i] = dst_mac[i];
+    for (uint8_t i = 0; i < 6; ++i) pkt[6 + i] = g_pcnet_mac[i];
+    pkt[12] = 0x08; pkt[13] = 0x00;
+
+    uint8_t *ip = &pkt[14];
+    ip[0] = 0x45;
+    ip[1] = 0x00;
+    ip[2] = (uint8_t)(ip_len >> 8);
+    ip[3] = (uint8_t)(ip_len & 0xFF);
+    ip[4] = (uint8_t)(g_ip_ident >> 8);
+    ip[5] = (uint8_t)(g_ip_ident & 0xFF);
+    ip[6] = 0x00; ip[7] = 0x00;
+    ip[8] = 64;
+    ip[9] = 6;
+    ip[10] = 0x00; ip[11] = 0x00;
+    for (uint8_t i = 0; i < 4; ++i) ip[12 + i] = g_ip_addr[i];
+    for (uint8_t i = 0; i < 4; ++i) ip[16 + i] = dst_ip[i];
+    uint16_t ip_ck = net_checksum(ip, 20);
+    ip[10] = (uint8_t)(ip_ck >> 8);
+    ip[11] = (uint8_t)(ip_ck & 0xFF);
+
+    uint8_t *tcp = &ip[20];
+    tcp[0] = (uint8_t)(src_port >> 8);
+    tcp[1] = (uint8_t)(src_port & 0xFF);
+    tcp[2] = (uint8_t)(dst_port >> 8);
+    tcp[3] = (uint8_t)(dst_port & 0xFF);
+    tcp[4] = (uint8_t)(seq >> 24);
+    tcp[5] = (uint8_t)(seq >> 16);
+    tcp[6] = (uint8_t)(seq >> 8);
+    tcp[7] = (uint8_t)(seq & 0xFF);
+    tcp[8] = (uint8_t)(ack >> 24);
+    tcp[9] = (uint8_t)(ack >> 16);
+    tcp[10] = (uint8_t)(ack >> 8);
+    tcp[11] = (uint8_t)(ack & 0xFF);
+    tcp[12] = 0x50; /* data offset = 5 */
+    tcp[13] = flags;
+    tcp[14] = 0x10; tcp[15] = 0x00; /* window */
+    tcp[16] = 0x00; tcp[17] = 0x00; /* checksum */
+    tcp[18] = 0x00; tcp[19] = 0x00; /* urgent */
+    for (uint16_t i = 0; i < payload_len; ++i) tcp[20 + i] = payload ? payload[i] : 0;
+    uint16_t tcp_ck = net_tcp_checksum(g_ip_addr, dst_ip, tcp, tcp_len);
+    tcp[16] = (uint8_t)(tcp_ck >> 8);
+    tcp[17] = (uint8_t)(tcp_ck & 0xFF);
+
+    g_ip_ident++;
+    pcnet_send_raw(pkt, frame_len);
+}
+
 static void pcnet_handle_ipv4(const uint8_t *pkt, uint16_t len) {
     if (len < 14 + 20) return;
     const uint8_t *ip = &pkt[14];
@@ -302,18 +424,50 @@ static void pcnet_handle_ipv4(const uint8_t *pkt, uint16_t len) {
         ip[18] != g_ip_addr[2] || ip[19] != g_ip_addr[3]) {
         return;
     }
-    if (ip[9] != 1) return;
-    const uint8_t *icmp = ip + ihl * 4;
-    uint16_t icmp_len = (uint16_t)(ip_len - ihl * 4);
-    if (icmp_len < 8) return;
-    uint8_t type = icmp[0];
-    if (type == 8) {
-        uint16_t id = (uint16_t)((icmp[4] << 8) | icmp[5]);
-        uint16_t seq = (uint16_t)((icmp[6] << 8) | icmp[7]);
-        pcnet_send_ipv4_icmp(0, 0, &ip[12], &pkt[6], id, seq,
-                             &icmp[8], (uint16_t)(icmp_len - 8));
-    } else if (type == 0) {
-        log_printf("PCNet: ICMP echo reply\n");
+    if (ip[9] == 1) {
+        const uint8_t *icmp = ip + ihl * 4;
+        uint16_t icmp_len = (uint16_t)(ip_len - ihl * 4);
+        if (icmp_len < 8) return;
+        uint8_t type = icmp[0];
+        if (type == 8) {
+            uint16_t id = (uint16_t)((icmp[4] << 8) | icmp[5]);
+            uint16_t seq = (uint16_t)((icmp[6] << 8) | icmp[7]);
+            pcnet_send_ipv4_icmp(0, 0, &ip[12], &pkt[6], id, seq,
+                                 &icmp[8], (uint16_t)(icmp_len - 8));
+        } else if (type == 0) {
+            log_printf("PCNet: ICMP echo reply\n");
+        }
+        return;
+    }
+    if (ip[9] == 17) {
+        const uint8_t *udp = ip + ihl * 4;
+        uint16_t udp_len = (uint16_t)((udp[4] << 8) | udp[5]);
+        if (udp_len < 8) return;
+        if (udp_len > (uint16_t)(ip_len - ihl * 4)) return;
+        uint16_t src_port = (uint16_t)((udp[0] << 8) | udp[1]);
+        uint16_t dst_port = (uint16_t)((udp[2] << 8) | udp[3]);
+        const uint8_t *payload = udp + 8;
+        uint16_t payload_len = (uint16_t)(udp_len - 8);
+        socket_net_rx(&ip[12], src_port, dst_port, payload, payload_len);
+        return;
+    }
+    if (ip[9] == 6) {
+        const uint8_t *tcp = ip + ihl * 4;
+        uint16_t tcp_len = (uint16_t)(ip_len - ihl * 4);
+        if (tcp_len < 20) return;
+        uint16_t src_port = (uint16_t)((tcp[0] << 8) | tcp[1]);
+        uint16_t dst_port = (uint16_t)((tcp[2] << 8) | tcp[3]);
+        uint32_t seq = ((uint32_t)tcp[4] << 24) | ((uint32_t)tcp[5] << 16) |
+                       ((uint32_t)tcp[6] << 8) | (uint32_t)tcp[7];
+        uint32_t ack = ((uint32_t)tcp[8] << 24) | ((uint32_t)tcp[9] << 16) |
+                       ((uint32_t)tcp[10] << 8) | (uint32_t)tcp[11];
+        uint8_t data_off = (uint8_t)(tcp[12] >> 4);
+        uint16_t hdr_len = (uint16_t)(data_off * 4);
+        if (hdr_len < 20 || hdr_len > tcp_len) return;
+        uint8_t flags = tcp[13];
+        const uint8_t *payload = tcp + hdr_len;
+        uint16_t payload_len = (uint16_t)(tcp_len - hdr_len);
+        tcp_on_rx(&ip[12], &ip[16], src_port, dst_port, seq, ack, flags, payload, payload_len);
     }
 }
 
@@ -456,10 +610,50 @@ int pcnet_has_error(void) {
 void pcnet_tick(void) {
     if (!g_pcnet_ready) return;
     pcnet_poll_rx();
+    tcp_tick();
     if (++g_last_arp_tick >= 500) {
         g_last_arp_tick = 0;
         pcnet_send_arp_request_to(g_gw_addr, 0);
     }
+}
+
+int pcnet_udp_send(const uint8_t dst_ip[4], uint16_t src_port, uint16_t dst_port,
+                   const uint8_t *data, uint16_t len) {
+    if (!g_pcnet_ready || !dst_ip || !data || len == 0) return -1;
+    uint8_t dst_mac[6];
+    int have_mac = 0;
+    if (g_arp_valid &&
+        g_arp_ip[0] == dst_ip[0] && g_arp_ip[1] == dst_ip[1] &&
+        g_arp_ip[2] == dst_ip[2] && g_arp_ip[3] == dst_ip[3]) {
+        for (uint8_t i = 0; i < 6; ++i) dst_mac[i] = g_arp_mac[i];
+        have_mac = 1;
+    }
+    if (!have_mac) {
+        pcnet_send_arp_request_to(dst_ip, 1);
+        return -1;
+    }
+    pcnet_send_ipv4_udp(dst_ip, dst_mac, src_port, dst_port, data, len);
+    return 0;
+}
+
+int pcnet_tcp_send(const uint8_t dst_ip[4], uint16_t src_port, uint16_t dst_port,
+                   uint32_t seq, uint32_t ack, uint8_t flags,
+                   const uint8_t *data, uint16_t len) {
+    if (!g_pcnet_ready || !dst_ip) return -1;
+    uint8_t dst_mac[6];
+    int have_mac = 0;
+    if (g_arp_valid &&
+        g_arp_ip[0] == dst_ip[0] && g_arp_ip[1] == dst_ip[1] &&
+        g_arp_ip[2] == dst_ip[2] && g_arp_ip[3] == dst_ip[3]) {
+        for (uint8_t i = 0; i < 6; ++i) dst_mac[i] = g_arp_mac[i];
+        have_mac = 1;
+    }
+    if (!have_mac) {
+        pcnet_send_arp_request_to(dst_ip, 1);
+        return -1;
+    }
+    pcnet_send_ipv4_tcp(dst_ip, dst_mac, src_port, dst_port, seq, ack, flags, data, len);
+    return 0;
 }
 
 void pcnet_ping(const uint8_t ip[4]) {

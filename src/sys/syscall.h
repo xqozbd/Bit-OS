@@ -15,6 +15,15 @@ enum {
     SYS_EXEC  = 9,
     SYS_SIGNAL = 10,
     SYS_KILL   = 11,
+    SYS_SOCKET = 12,
+    SYS_BIND   = 13,
+    SYS_CONNECT = 14,
+    SYS_SENDTO = 15,
+    SYS_RECVFROM = 16,
+    SYS_LISTEN = 17,
+    SYS_ACCEPT = 18,
+    SYS_SEND = 19,
+    SYS_RECV = 20,
     SYS_MAX
 };
 

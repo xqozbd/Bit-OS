@@ -35,7 +35,9 @@ struct task {
 
 struct task_fd {
     int used;
+    int type;
     int node;
+    int sock_id;
     uint64_t offset;
     uint32_t flags;
 };
@@ -43,6 +45,7 @@ struct task_fd {
 void task_fd_init(struct task *t);
 struct task_fd *task_fd_get(struct task *t, int fd);
 int task_fd_alloc(struct task *t, int node, uint32_t flags);
+int task_fd_alloc_socket(struct task *t, int sock_id);
 int task_fd_close(struct task *t, int fd);
 void task_set_user_layout(struct task *t, uint64_t brk_base, uint64_t brk_limit,
                           uint64_t stack_top, uint64_t stack_size);
