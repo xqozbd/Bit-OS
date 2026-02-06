@@ -26,6 +26,8 @@ struct task {
     uint64_t brk_limit;
     uint64_t user_stack_top;
     uint64_t user_stack_size;
+    uint32_t pending_signals;
+    uint64_t sig_handlers[32];
     const char *name;
     struct task_fd *fds;
     struct task *next;
@@ -45,6 +47,10 @@ int task_fd_close(struct task *t, int fd);
 void task_set_user_layout(struct task *t, uint64_t brk_base, uint64_t brk_limit,
                           uint64_t stack_top, uint64_t stack_size);
 void task_clone_from(struct task *dst, const struct task *src);
+int task_signal_set_handler(struct task *t, int sig, uint64_t handler);
+void task_signal_raise(struct task *t, int sig);
+int task_signal_handle_pending(struct task *t);
+struct task *task_find_pid(uint32_t pid);
 
 struct task *task_current(void);
 struct task *task_create_for_thread(struct thread *t, const char *name);

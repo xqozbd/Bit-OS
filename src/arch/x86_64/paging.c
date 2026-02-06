@@ -9,6 +9,7 @@
 
 /* From memutils.c */
 void *memset(void *s, int c, size_t n);
+void *memcpy(void *restrict dest, const void *restrict src, size_t n);
 
 extern char __kernel_start;
 extern char __kernel_end;
@@ -22,7 +23,8 @@ enum {
     PTE_P  = 1ull << 0,
     PTE_RW = 1ull << 1,
     PTE_US = 1ull << 2,
-    PTE_PS = 1ull << 7
+    PTE_PS = 1ull << 7,
+    PTE_COW = 1ull << 9
 };
 
 static uint64_t g_hhdm_offset = 0;
@@ -191,7 +193,12 @@ static uint64_t clone_table(uint64_t src_entry, int level) {
             continue;
         }
         if (level == 0) {
-            dst_tbl[i] = ent;
+            /* PT level: mark COW and clear write in both tables */
+            uint64_t phys = ent & 0x000ffffffffff000ull;
+            uint64_t cow_ent = (ent | PTE_COW) & ~PTE_RW;
+            src_tbl[i] = cow_ent;
+            dst_tbl[i] = cow_ent;
+            pmm_inc_ref(phys);
             continue;
         }
         uint64_t child = clone_table(ent, level - 1);
@@ -239,6 +246,55 @@ void paging_user_layout_default(struct user_addr_space *out) {
     out->heap_limit = USER_HEAP_LIMIT;
     out->stack_top = USER_STACK_TOP;
     out->stack_size = USER_STACK_SIZE;
+}
+
+static uint64_t *walk_pt(uint64_t pml4_phys, uint64_t virt) {
+    uint64_t pml4_i = (virt >> 39) & 0x1FF;
+    uint64_t pdpt_i = (virt >> 30) & 0x1FF;
+    uint64_t pd_i   = (virt >> 21) & 0x1FF;
+    uint64_t pt_i   = (virt >> 12) & 0x1FF;
+
+    uint64_t *pml4 = (uint64_t *)(uintptr_t)(g_hhdm_offset + pml4_phys);
+    if ((pml4[pml4_i] & PTE_P) == 0) return NULL;
+    uint64_t *pdpt = table_from_entry(pml4[pml4_i]);
+    if ((pdpt[pdpt_i] & PTE_P) == 0) return NULL;
+    if (pdpt[pdpt_i] & PTE_PS) return NULL;
+    uint64_t *pd = table_from_entry(pdpt[pdpt_i]);
+    if ((pd[pd_i] & PTE_P) == 0) return NULL;
+    if (pd[pd_i] & PTE_PS) return NULL;
+    uint64_t *pt = table_from_entry(pd[pd_i]);
+    return &pt[pt_i];
+}
+
+int paging_handle_cow(uint64_t fault_addr) {
+    if (!g_pml4 || g_hhdm_offset == 0) return 0;
+    uint64_t *pte = walk_pt(g_pml4_phys, fault_addr);
+    if (!pte) return 0;
+    uint64_t ent = *pte;
+    if ((ent & PTE_P) == 0) return 0;
+    if ((ent & PTE_COW) == 0) return 0;
+
+    uint64_t phys = ent & 0x000ffffffffff000ull;
+    uint16_t refs = pmm_refcount(phys);
+    if (refs <= 1) {
+        ent = (ent | PTE_RW) & ~PTE_COW;
+        *pte = ent;
+    } else {
+        uint64_t new_phys = pmm_alloc_frame();
+        if (new_phys == 0) return 0;
+        void *src = (void *)(uintptr_t)(g_hhdm_offset + phys);
+        void *dst = (void *)(uintptr_t)(g_hhdm_offset + new_phys);
+        memcpy(dst, src, PMM_PAGE_SIZE);
+        pmm_dec_ref(phys);
+        ent = (new_phys & 0x000ffffffffff000ull) | (ent & 0xFFF);
+        ent |= PTE_RW;
+        ent &= ~PTE_COW;
+        *pte = ent;
+    }
+#if defined(__GNUC__) || defined(__clang__)
+    __asm__ volatile ("invlpg (%0)" : : "r"(fault_addr) : "memory");
+#endif
+    return 1;
 }
 
 int paging_init(void) {

@@ -50,4 +50,22 @@ static inline long sys_exec(const char *path, int argc, char **argv) {
     return __syscall6(9, (long)path, (long)argc, (long)argv, 0, 0, 0);
 }
 
+static inline long sys_signal(int sig, void *handler) {
+    return __syscall6(10, (long)sig, (long)handler, 0, 0, 0, 0);
+}
+
+static inline long sys_kill(int pid, int sig) {
+    return __syscall6(11, (long)pid, (long)sig, 0, 0, 0, 0);
+}
+
+enum {
+    SIG_DFL = 0,
+    SIG_IGN = 1,
+    SIGINT  = 2,
+    SIGKILL = 9,
+    SIGSEGV = 11,
+    SIGTERM = 15,
+    SIGCHLD = 17
+};
+
 #endif /* SYS_LIBC_H */

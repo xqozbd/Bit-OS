@@ -14,6 +14,7 @@
 #include "kernel/crash.h"
 #include "kernel/sched.h"
 #include "kernel/thread.h"
+#include "arch/x86_64/paging.h"
 
 /* IDT + exceptions */
 struct idt_entry {
@@ -133,6 +134,11 @@ void isr_err_14(struct interrupt_frame *frame, uint64_t error_code) {
                (unsigned)((error_code >> 2) & 1),
                (unsigned)((error_code >> 3) & 1),
                (unsigned)((error_code >> 4) & 1));
+    if ((error_code & 1) && (error_code & 2)) {
+        if (paging_handle_cow(cr2)) {
+            return;
+        }
+    }
     if (is_user && t) {
         log_printf("PF: killing userspace task tid=%u name=%s\n",
                    (unsigned)t->id, t->name ? t->name : "(null)");

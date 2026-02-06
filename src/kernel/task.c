@@ -85,6 +85,8 @@ void task_init_bootstrap(struct thread *t) {
     g_boot_task.brk_limit = 0;
     g_boot_task.user_stack_top = 0;
     g_boot_task.user_stack_size = 0;
+    g_boot_task.pending_signals = 0;
+    for (int i = 0; i < 32; ++i) g_boot_task.sig_handlers[i] = 0;
     g_boot_task.name = t->name ? t->name : "bootstrap";
     g_boot_task.fds = g_boot_fds;
     g_boot_task.next = NULL;
@@ -118,6 +120,8 @@ struct task *task_create_for_thread(struct thread *t, const char *name) {
     }
     task->user_stack_top = 0;
     task->user_stack_size = 0;
+    task->pending_signals = 0;
+    for (int i = 0; i < 32; ++i) task->sig_handlers[i] = 0;
     task->name = name ? name : "task";
     task->fds = NULL;
     task_fd_init(task);
@@ -152,6 +156,10 @@ void task_clone_from(struct task *dst, const struct task *src) {
     dst->brk_limit = src->brk_limit;
     dst->user_stack_top = src->user_stack_top;
     dst->user_stack_size = src->user_stack_size;
+    dst->pending_signals = 0;
+    for (int i = 0; i < 32; ++i) {
+        dst->sig_handlers[i] = src->sig_handlers[i];
+    }
     if (!dst->fds) {
         dst->fds = (struct task_fd *)kmalloc(sizeof(struct task_fd) * 16);
     }
@@ -169,6 +177,61 @@ void task_on_thread_exit(struct thread *t) {
 
 uint32_t task_pid(struct task *t) {
     return t ? t->pid : 0;
+}
+
+struct task *task_find_pid(uint32_t pid) {
+    struct task *cur = g_task_head;
+    while (cur) {
+        if (cur->pid == pid) return cur;
+        cur = cur->next;
+    }
+    return NULL;
+}
+
+int task_signal_set_handler(struct task *t, int sig, uint64_t handler) {
+    if (!t) return -1;
+    if (sig <= 0 || sig >= 32) return -1;
+    /* Only allow default or ignore for now. */
+    if (handler > 1) return -1;
+    t->sig_handlers[sig] = handler;
+    return 0;
+}
+
+void task_signal_raise(struct task *t, int sig) {
+    if (!t) return;
+    if (sig <= 0 || sig >= 32) return;
+    t->pending_signals |= (1u << (uint32_t)sig);
+}
+
+static int default_action(int sig) {
+    switch (sig) {
+        case 2:  /* SIGINT */
+        case 9:  /* SIGKILL */
+        case 11: /* SIGSEGV */
+        case 15: /* SIGTERM */
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+int task_signal_handle_pending(struct task *t) {
+    if (!t || !t->pending_signals) return 0;
+    for (int sig = 1; sig < 32; ++sig) {
+        uint32_t mask = 1u << (uint32_t)sig;
+        if (!(t->pending_signals & mask)) continue;
+        t->pending_signals &= ~mask;
+        uint64_t handler = t->sig_handlers[sig];
+        if (handler == 1) {
+            return 0; /* SIG_IGN */
+        }
+        if (default_action(sig)) {
+            log_printf("signal %d default: terminate pid=%u\n", sig, (unsigned)t->pid);
+            return 1;
+        }
+        return 0;
+    }
+    return 0;
 }
 
 static const char *task_state_name(uint32_t st) {

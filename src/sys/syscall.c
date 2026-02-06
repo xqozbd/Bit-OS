@@ -177,6 +177,7 @@ static uint64_t sys_fork_impl(struct syscall_frame *f) {
         task_clone_from(child->task, ptask);
         child->task->pml4_phys = ctx->pml4_phys;
     }
+    paging_switch_to(parent->pml4_phys);
     return (uint64_t)task_pid(child->task);
 }
 
@@ -237,6 +238,25 @@ static uint64_t sys_exec_impl(uint64_t a1, uint64_t a2, uint64_t a3) {
     __builtin_unreachable();
 }
 
+static uint64_t sys_signal_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a3; (void)a4; (void)a5; (void)a6;
+    int sig = (int)a1;
+    uint64_t handler = a2;
+    struct task *t = task_current();
+    if (!t) return (uint64_t)-1;
+    return (uint64_t)task_signal_set_handler(t, sig, handler);
+}
+
+static uint64_t sys_kill_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a3; (void)a4; (void)a5; (void)a6;
+    uint32_t pid = (uint32_t)a1;
+    int sig = (int)a2;
+    struct task *t = task_find_pid(pid);
+    if (!t) return (uint64_t)-1;
+    task_signal_raise(t, sig);
+    return 0;
+}
+
 static syscall_fn g_syscalls[SYS_MAX] = {
     0,
     sys_write_impl,
@@ -247,7 +267,9 @@ static syscall_fn g_syscalls[SYS_MAX] = {
     sys_read_impl,
     sys_close_impl,
     0,
-    0
+    0,
+    sys_signal_impl,
+    sys_kill_impl
 };
 
 uint64_t syscall_dispatch(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3,
@@ -260,13 +282,27 @@ uint64_t syscall_dispatch(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3,
 
 uint64_t syscall_handler(struct syscall_frame *f) {
     if (!f) return (uint64_t)-1;
+    uint64_t ret = 0;
     if (f->rax == SYS_FORK) {
-        return sys_fork_impl(f);
+        ret = sys_fork_impl(f);
+        goto signal_check;
     }
     if (f->rax == SYS_EXEC) {
-        return sys_exec_impl(f->rdi, f->rsi, f->rdx);
+        ret = sys_exec_impl(f->rdi, f->rsi, f->rdx);
+        goto signal_check;
     }
-    return syscall_dispatch(f->rax, f->rdi, f->rsi, f->rdx, f->r10, f->r8, f->r9);
+    ret = syscall_dispatch(f->rax, f->rdi, f->rsi, f->rdx, f->r10, f->r8, f->r9);
+
+signal_check:
+    {
+        struct thread *t = thread_current();
+        if (t && t->is_user && t->task) {
+            if (task_signal_handle_pending(t->task)) {
+                thread_exit();
+            }
+        }
+    }
+    return ret;
 }
 
 __attribute__((naked))

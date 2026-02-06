@@ -4,6 +4,7 @@
 
 #include "sys/initramfs.h"
 #include "sys/fs_mock.h"
+#include "sys/blockfs.h"
 #include "lib/strutil.h"
 #include "lib/log.h"
 enum { VFS_MAX_NODES = 512 };
@@ -74,16 +75,19 @@ int vfs_mount(const char *path, int backend, int root_node) {
 
 static int backend_is_dir(int backend, int node) {
     if (backend == VFS_BACKEND_INITRAMFS) return initramfs_is_dir(node);
+    if (backend == VFS_BACKEND_BLOCK) return blockfs_is_dir(node);
     return fs_is_dir(node);
 }
 
 static int backend_read_file(int backend, int node, const uint8_t **data, uint64_t *size) {
     if (backend == VFS_BACKEND_INITRAMFS) return initramfs_read_file(node, data, size);
+    if (backend == VFS_BACKEND_BLOCK) return blockfs_read_file(node, data, size);
     return fs_read_file(node, data, size);
 }
 
 static int backend_resolve(int backend, int cwd, const char *path) {
     if (backend == VFS_BACKEND_INITRAMFS) return initramfs_resolve(cwd, path);
+    if (backend == VFS_BACKEND_BLOCK) return blockfs_resolve(cwd, path);
     return fs_resolve(cwd, path);
 }
 
@@ -200,6 +204,10 @@ void vfs_pwd(int cwd) {
         initramfs_pwd(n->node);
         return;
     }
+    if (n->backend == VFS_BACKEND_BLOCK) {
+        blockfs_pwd(n->node);
+        return;
+    }
     fs_pwd(n->node);
 }
 
@@ -221,6 +229,10 @@ void vfs_ls(int node) {
     }
     if (n->backend == VFS_BACKEND_INITRAMFS) {
         initramfs_ls(n->node);
+        return;
+    }
+    if (n->backend == VFS_BACKEND_BLOCK) {
+        blockfs_ls(n->node);
         return;
     }
     fs_ls(n->node);

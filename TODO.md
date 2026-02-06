@@ -65,14 +65,17 @@
 - [x] Proper shutdown/restart (ACPI + fallback reset).
 - [x] File descriptor table per-process + basic `open/read/write/close`.
 - [x] User address space layout + page-table clone helpers.
+- [x] Copy-on-write (COW) for fork with refcounted frames.
+- [x] Signals: basic delivery and default handlers.
+- [x] Block device layer abstraction + buffered IO.
+- [x] Partition table parsing (MBR/GPT).
+- [x] Disk driver for VMware (ATA PIO or AHCI).
+- [x] VFS: mount root from block device.
 
 ## Next
-- [ ] Copy-on-write (COW) for fork with refcounted frames.
-- [ ] Signals: basic delivery and default handlers.
 - [ ] Persistent root filesystem support (ext2/fat32 driver).
 - [ ] `/dev` and pseudo-filesystem (`/proc`, `/sys`) skeleton.
 - [ ] Simple TCP/UDP sockets and socket syscalls.
-- [ ] Block device layer abstraction + buffered IO.
 - [ ] AHCI / SATA / NVMe driver support (or virtio-blk for virtualization).
 - [ ] Simple init process + busybox-like shell spawn.
 - [ ] Per-CPU run queue load balancing.

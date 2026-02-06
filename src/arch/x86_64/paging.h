@@ -13,6 +13,7 @@ int paging_map_user_4k(uint64_t pml4_phys, uint64_t virt, uint64_t phys, uint64_
 uint64_t paging_new_user_pml4(void);
 uint64_t paging_clone_user_pml4(uint64_t src_pml4_phys);
 void paging_switch_to(uint64_t pml4_phys);
+int paging_handle_cow(uint64_t fault_addr);
 
 struct user_addr_space {
     uint64_t heap_base;

@@ -54,6 +54,12 @@ Per-process file descriptor table + basic open/read/close syscalls.
 Ring-3 entry path (GDT/TSS + iretq user entry + user stack mapper).
 Userspace fork/exec/exit support (basic user ELF exec + vfork-style fork).
 User address space layout defaults + page-table clone helpers.
+Copy-on-write (COW) fork with refcounted frames.
+Signals: basic delivery (kill/ignore) with default handlers and sys_signal/sys_kill.
+Block device layer abstraction + buffered IO.
+Partition table parsing (MBR/GPT).
+Disk driver for VMware (ATA PIO).
+VFS: mount root from block device.
 
 ## Features Removed:
 None

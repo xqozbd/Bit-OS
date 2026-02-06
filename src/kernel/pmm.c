@@ -15,6 +15,8 @@ static uint64_t g_total_frames = 0;
 static uint64_t g_used_frames = 0;
 static uint64_t g_hhdm_offset = 0;
 static uint64_t g_last_alloc = 0;
+static uint16_t *g_refcount = 0;
+static uint64_t g_refcount_bytes = 0;
 
 static inline uint64_t align_up_u64(uint64_t v, uint64_t a) {
     return (v + a - 1) & ~(a - 1);
@@ -79,6 +81,7 @@ void pmm_init(void) {
     }
     g_total_frames = align_up_u64(max_addr, PMM_PAGE_SIZE) / PMM_PAGE_SIZE;
     g_bitmap_bytes = align_up_u64((g_total_frames + 7) / 8, 8);
+    g_refcount_bytes = align_up_u64(g_total_frames * sizeof(uint16_t), 8);
 
     /* Place bitmap in a usable region (prefer highest base). */
     uint64_t bitmap_phys = 0;
@@ -87,7 +90,7 @@ void pmm_init(void) {
         struct limine_memmap_entry *e = resp->entries[i];
         if (!e || e->type != LIMINE_MEMMAP_USABLE) continue;
         uint64_t base = align_up_u64(e->base, 8);
-        if (base + g_bitmap_bytes > e->base + e->length) continue;
+        if (base + g_bitmap_bytes + g_refcount_bytes > e->base + e->length) continue;
         if (!bitmap_found || base >= bitmap_phys) {
             bitmap_phys = base;
             bitmap_found = 1;
@@ -99,7 +102,9 @@ void pmm_init(void) {
     }
 
     g_bitmap = (uint8_t *)(uintptr_t)(g_hhdm_offset + bitmap_phys);
+    g_refcount = (uint16_t *)(uintptr_t)(g_hhdm_offset + bitmap_phys + g_bitmap_bytes);
     memset(g_bitmap, 0xFF, (size_t)g_bitmap_bytes);
+    memset(g_refcount, 0, (size_t)g_refcount_bytes);
     g_used_frames = g_total_frames;
 
     /* Mark usable frames as free. */
@@ -110,10 +115,15 @@ void pmm_init(void) {
     }
 
     /* Reserve the bitmap storage itself. */
-    mark_range_used(bitmap_phys, g_bitmap_bytes);
+    mark_range_used(bitmap_phys, g_bitmap_bytes + g_refcount_bytes);
 
     /* Keep frame 0 reserved (null pointer protection). */
     mark_range_used(0, PMM_PAGE_SIZE);
+
+    /* Initialize refcounts from bitmap state. */
+    for (uint64_t f = 0; f < g_total_frames; ++f) {
+        g_refcount[f] = bitmap_test(f) ? 1u : 0u;
+    }
 
     log_printf("PMM: %u frames total, %u free\n",
                (unsigned)g_total_frames,
@@ -128,6 +138,7 @@ uint64_t pmm_alloc_frame(void) {
             bitmap_set(f);
             g_used_frames++;
             g_last_alloc = f + 1;
+            if (g_refcount) g_refcount[f] = 1;
             return f * PMM_PAGE_SIZE;
         }
     }
@@ -136,6 +147,7 @@ uint64_t pmm_alloc_frame(void) {
             bitmap_set(f);
             g_used_frames++;
             g_last_alloc = f + 1;
+            if (g_refcount) g_refcount[f] = 1;
             return f * PMM_PAGE_SIZE;
         }
     }
@@ -150,6 +162,32 @@ void pmm_free_frame(uint64_t phys_addr) {
         bitmap_clear(frame);
         if (g_used_frames > 0) g_used_frames--;
     }
+    if (g_refcount) g_refcount[frame] = 0;
+}
+
+void pmm_inc_ref(uint64_t phys_addr) {
+    if (!g_refcount || phys_addr == 0) return;
+    uint64_t frame = phys_addr / PMM_PAGE_SIZE;
+    if (frame >= g_total_frames) return;
+    if (g_refcount[frame] < UINT16_MAX) g_refcount[frame]++;
+}
+
+void pmm_dec_ref(uint64_t phys_addr) {
+    if (!g_refcount || phys_addr == 0) return;
+    uint64_t frame = phys_addr / PMM_PAGE_SIZE;
+    if (frame >= g_total_frames) return;
+    if (g_refcount[frame] == 0) return;
+    g_refcount[frame]--;
+    if (g_refcount[frame] == 0) {
+        pmm_free_frame(phys_addr);
+    }
+}
+
+uint16_t pmm_refcount(uint64_t phys_addr) {
+    if (!g_refcount || phys_addr == 0) return 0;
+    uint64_t frame = phys_addr / PMM_PAGE_SIZE;
+    if (frame >= g_total_frames) return 0;
+    return g_refcount[frame];
 }
 
 uint64_t pmm_total_frames(void) { return g_total_frames; }

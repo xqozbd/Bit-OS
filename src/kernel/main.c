@@ -21,6 +21,10 @@
 #include "kernel/pmm.h"
 #include "kernel/sched.h"
 #include "kernel/sleep.h"
+#include "kernel/block.h"
+#include "kernel/partition.h"
+#include "drivers/storage/ata.h"
+#include "sys/blockfs.h"
 #include "arch/x86_64/smp.h"
 #include "arch/x86_64/timer.h"
 #include "kernel/watchdog.h"
@@ -77,6 +81,9 @@ static void kmain_stage2(void) {
     int drv_pmm = driver_register("pmm", drv_order++);
     int drv_paging = driver_register("paging", drv_order++);
     int drv_heap = driver_register("heap", drv_order++);
+    int drv_block = driver_register("block", drv_order++);
+    int drv_ata = driver_register("ata", drv_order++);
+    int drv_partition = driver_register("partition", drv_order++);
     int drv_pcnet = driver_register("pcnet", drv_order++);
     int drv_pci = driver_register("pci", drv_order++);
     int drv_acpi = driver_register("acpi", drv_order++);
@@ -168,6 +175,30 @@ static void kmain_stage2(void) {
     watchdog_log_stage("heap_init");
     log_printf("Boot: heap ready\n");
     driver_set_status_idx(drv_heap, DRIVER_STATUS_OK, NULL);
+    boot_screen_set_status("block");
+    log_printf("Boot: initializing block layer...\n");
+    block_init();
+    if (block_device_count() == 0) {
+        driver_set_status_idx(drv_block, DRIVER_STATUS_OK, "0 devices");
+    } else {
+        driver_set_status_idx(drv_block, DRIVER_STATUS_OK, NULL);
+    }
+    boot_screen_set_status("ata");
+    log_printf("Boot: initializing ATA...\n");
+    ata_init();
+    if (ata_has_device()) {
+        driver_set_status_idx(drv_ata, DRIVER_STATUS_OK, NULL);
+    } else {
+        driver_set_status_idx(drv_ata, DRIVER_STATUS_SKIPPED, "not found");
+    }
+    boot_screen_set_status("partition");
+    log_printf("Boot: parsing partitions...\n");
+    partition_init();
+    if (partition_count() == 0) {
+        driver_set_status_idx(drv_partition, DRIVER_STATUS_SKIPPED, "none");
+    } else {
+        driver_set_status_idx(drv_partition, DRIVER_STATUS_OK, NULL);
+    }
     boot_screen_set_status("pcnet");
     log_printf("Boot: initializing PCNet driver...\n");
     pcnet_init();
@@ -223,14 +254,23 @@ static void kmain_stage2(void) {
     boot_screen_set_status("vfs");
     log_printf("Boot: initializing VFS...\n");
     vfs_init();
+    if (block_device_count() > 0 && partition_count() > 0) {
+        vfs_mount("/block", VFS_BACKEND_BLOCK, blockfs_root());
+        log_printf("Boot: mounted block devices at /block\n");
+    }
     if (initramfs_available()) {
         vfs_set_root(VFS_BACKEND_INITRAMFS, initramfs_root());
         log_printf("Boot: VFS root set to initramfs\n");
         vfs_mount("/mock", VFS_BACKEND_MOCK, fs_root());
         log_printf("Boot: mounted mock FS at /mock\n");
     } else {
-        vfs_set_root(VFS_BACKEND_MOCK, fs_root());
-        log_printf("Boot: VFS root set to mock FS\n");
+        if (block_device_count() > 0 && partition_count() > 0) {
+            vfs_set_root(VFS_BACKEND_BLOCK, blockfs_root());
+            log_printf("Boot: VFS root set to block device\n");
+        } else {
+            vfs_set_root(VFS_BACKEND_MOCK, fs_root());
+            log_printf("Boot: VFS root set to mock FS\n");
+        }
     }
     if (initramfs_available()) {
         vfs_mount("/initramfs", VFS_BACKEND_INITRAMFS, initramfs_root());
