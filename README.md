@@ -50,7 +50,11 @@ The build generates `BitOS.iso` for booting in a VM. If you see Limine missing e
 - `src/sys` - syscalls, initramfs, VFS, commands.
 
 ## License
-See `LICENSE`.
+<details>
+<summary>Open LICENSE</summary>
+
+See `LICENSE` in the repo.
+</details>
 
 ## TODO (Expandable)
 <details>
