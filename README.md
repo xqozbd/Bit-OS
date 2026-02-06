@@ -17,8 +17,6 @@ Run `help` in the console to list available commands. Typical commands include:
 `help`, `clear`, `time`, `mem`, `memtest`, `cputest`, `ls`, `cd`, `pwd`, `cat`, `echo`, `ver`, `restart`.
 
 ## Build
-
-
 This project is built inside **WSL Ubuntu** on Windows. You need the x86_64 cross toolchain (`x86_64-linux-gnu-*`), `make`, and `xorriso`, plus Limine binaries.
 Use LF line endings (not CRLF) for scripts like `all` and `iso.sh`.
 
@@ -37,6 +35,12 @@ The build generates `BitOS.iso` for booting in a VM. If you see Limine missing e
 - If you want PCNet to show up, set the VM NIC to **PCnet-FAST III (Am79C973)**.
 - Attach `BitOS.iso` as the VM's optical drive and boot it.
 
+## Run (VMware Workstation)
+- Use a 64-bit VM.
+- Attach `BitOS.iso` as the CD/DVD drive and set it to connect at power on.
+- If you want PCNet to show up, set the VM NIC to **PCnet-PCI II (Am79C970A)** or **PCnet-FAST III (Am79C973)**.
+- If you see "Could not determine boot drive", double-check the ISO is attached as CD/DVD (SATA is fine).
+
 ## Project Structure
 - `src/arch/x86_64` - CPU, IDT, paging, timer, SMP, APIC/PIT.
 - `src/boot` - boot requests and boot screen.
@@ -52,9 +56,5 @@ See `LICENSE`.
 <details>
 <summary>Open TODO.md</summary>
 
-`TODO.md`
+See `TODO.md` in the repo.
 </details>
-
-
-
-this project is the reason i wanna blow my brains out everynight - xqozbd 2/4/26
