@@ -94,6 +94,14 @@ static inline long sys_recv(int fd, void *buf, size_t len) {
     return __syscall6(20, (long)fd, (long)buf, (long)len, 0, 0, 0);
 }
 
+static inline void *sys_mmap(void *addr, size_t len, uint32_t prot, uint32_t flags, int fd, uint64_t offset) {
+    return (void *)__syscall6(21, (long)addr, (long)len, (long)prot, (long)flags, (long)fd, (long)offset);
+}
+
+static inline long sys_munmap(void *addr, size_t len) {
+    return __syscall6(22, (long)addr, (long)len, 0, 0, 0, 0);
+}
+
 enum {
     SIG_DFL = 0,
     SIG_IGN = 1,

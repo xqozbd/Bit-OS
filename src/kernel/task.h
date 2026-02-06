@@ -26,10 +26,13 @@ struct task {
     uint64_t brk_limit;
     uint64_t user_stack_top;
     uint64_t user_stack_size;
+    uint64_t mmap_base;
+    uint64_t mmap_limit;
     uint32_t pending_signals;
     uint64_t sig_handlers[32];
     const char *name;
     struct task_fd *fds;
+    struct task_map *maps;
     struct task *next;
 };
 
@@ -40,6 +43,14 @@ struct task_fd {
     int sock_id;
     uint64_t offset;
     uint32_t flags;
+};
+
+struct task_map {
+    uint64_t base;
+    uint64_t size;
+    uint32_t prot;
+    uint32_t flags;
+    struct task_map *next;
 };
 
 void task_fd_init(struct task *t);
@@ -54,6 +65,8 @@ int task_signal_set_handler(struct task *t, int sig, uint64_t handler);
 void task_signal_raise(struct task *t, int sig);
 int task_signal_handle_pending(struct task *t);
 struct task *task_find_pid(uint32_t pid);
+uint64_t task_mmap_anonymous(struct task *t, uint64_t addr, uint64_t len, uint32_t prot, uint32_t flags);
+int task_munmap(struct task *t, uint64_t addr, uint64_t len);
 
 struct task *task_current(void);
 struct task *task_create_for_thread(struct thread *t, const char *name);

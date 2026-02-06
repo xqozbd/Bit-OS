@@ -59,11 +59,16 @@ Signals: basic delivery (kill/ignore) with default handlers and sys_signal/sys_k
 Block device layer abstraction + buffered IO.
 Partition table parsing (MBR/GPT).
 Disk driver for VMware (ATA PIO).
+AHCI SATA driver (basic DMA for virtualization).
 VFS: mount root from block device.
 Persistent root filesystem support (FAT32 read-only).
 Pseudo-filesystem skeletons for /dev, /proc, /sys.
 UDP sockets + socket syscalls (TCP returns not supported).
 TCP sockets (connect/listen/accept + basic retransmit).
+Simple init process that spawns a user shell (init/busybox/sh).
+Per-CPU run queue load balancing.
+Userland mmap/munmap support (anonymous mappings).
+Crash isolation: user task faults no longer halt the kernel.
 
 ## Features Removed:
 None

@@ -24,6 +24,8 @@ enum {
     SYS_ACCEPT = 18,
     SYS_SEND = 19,
     SYS_RECV = 20,
+    SYS_MMAP = 21,
+    SYS_MUNMAP = 22,
     SYS_MAX
 };
 

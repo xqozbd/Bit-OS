@@ -579,6 +579,15 @@ void pcnet_init(void) {
 void pcnet_log_status(void) {
     if (!g_pcnet_found) {
         log_printf("PCNet: not found\n");
+        uint32_t count = pci_device_count();
+        for (uint32_t i = 0; i < count; ++i) {
+            const struct pci_device *dev = pci_device_at(i);
+            if (!dev || dev->class_code != 0x02) continue;
+            if (dev->vendor_id == PCNET_VENDOR_ID) continue;
+            log_printf("PCNet: detected other NIC vendor=0x%x device=0x%x\n",
+                       (unsigned)dev->vendor_id, (unsigned)dev->device_id);
+        }
+        log_printf("PCNet: hint: set VMware NIC to \"PCnet-PCI II (Am79C970A)\".\n");
         return;
     }
     if (g_pcnet_error) {

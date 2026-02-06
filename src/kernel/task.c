@@ -6,6 +6,7 @@
 #include "lib/log.h"
 #include "kernel/heap.h"
 #include "arch/x86_64/paging.h"
+#include "kernel/pmm.h"
 #include "kernel/thread.h"
 #include "kernel/sched.h"
 #include "kernel/socket.h"
@@ -15,6 +16,8 @@ static struct task g_boot_task;
 static struct task *g_task_head = NULL;
 static struct task *g_task_tail = NULL;
 static struct task_fd g_boot_fds[16];
+static const uint64_t g_mmap_base_default = 0x0000000080000000ull;
+static const uint64_t g_mmap_limit_default = 0x00000000F0000000ull;
 
 static uint32_t next_pid(void) {
     return __atomic_fetch_add(&g_next_pid, 1u, __ATOMIC_SEQ_CST);
@@ -111,10 +114,13 @@ void task_init_bootstrap(struct thread *t) {
     g_boot_task.brk_limit = 0;
     g_boot_task.user_stack_top = 0;
     g_boot_task.user_stack_size = 0;
+    g_boot_task.mmap_base = g_mmap_base_default;
+    g_boot_task.mmap_limit = g_mmap_limit_default;
     g_boot_task.pending_signals = 0;
     for (int i = 0; i < 32; ++i) g_boot_task.sig_handlers[i] = 0;
     g_boot_task.name = t->name ? t->name : "bootstrap";
     g_boot_task.fds = g_boot_fds;
+    g_boot_task.maps = NULL;
     g_boot_task.next = NULL;
     task_fd_init(&g_boot_task);
     t->task = &g_boot_task;
@@ -146,10 +152,13 @@ struct task *task_create_for_thread(struct thread *t, const char *name) {
     }
     task->user_stack_top = 0;
     task->user_stack_size = 0;
+    task->mmap_base = g_mmap_base_default;
+    task->mmap_limit = g_mmap_limit_default;
     task->pending_signals = 0;
     for (int i = 0; i < 32; ++i) task->sig_handlers[i] = 0;
     task->name = name ? name : "task";
     task->fds = NULL;
+    task->maps = NULL;
     task_fd_init(task);
     task->next = NULL;
     t->task = task;
@@ -171,6 +180,15 @@ void task_set_user_layout(struct task *t, uint64_t brk_base, uint64_t brk_limit,
     t->brk_limit = brk_limit;
     t->user_stack_top = stack_top;
     t->user_stack_size = stack_size;
+    t->mmap_base = g_mmap_base_default;
+    if (stack_top && stack_size) {
+        uint64_t guard = 0x00100000ull;
+        uint64_t top = stack_top;
+        if (top > guard) {
+            uint64_t limit = top - guard;
+            if (limit > g_mmap_base_default) t->mmap_limit = limit;
+        }
+    }
 }
 
 void task_clone_from(struct task *dst, const struct task *src) {
@@ -182,6 +200,8 @@ void task_clone_from(struct task *dst, const struct task *src) {
     dst->brk_limit = src->brk_limit;
     dst->user_stack_top = src->user_stack_top;
     dst->user_stack_size = src->user_stack_size;
+    dst->mmap_base = src->mmap_base;
+    dst->mmap_limit = src->mmap_limit;
     dst->pending_signals = 0;
     for (int i = 0; i < 32; ++i) {
         dst->sig_handlers[i] = src->sig_handlers[i];
@@ -194,6 +214,114 @@ void task_clone_from(struct task *dst, const struct task *src) {
             dst->fds[i] = src->fds[i];
         }
     }
+    dst->maps = NULL;
+    if (src->maps) {
+        struct task_map *cur = src->maps;
+        struct task_map *tail = NULL;
+        while (cur) {
+            struct task_map *m = (struct task_map *)kmalloc(sizeof(*m));
+            if (!m) break;
+            *m = *cur;
+            m->next = NULL;
+            if (!dst->maps) dst->maps = m;
+            else tail->next = m;
+            tail = m;
+            cur = cur->next;
+        }
+    }
+}
+
+static int map_overlaps(const struct task_map *m, uint64_t base, uint64_t size) {
+    uint64_t end = base + size;
+    uint64_t m_end = m->base + m->size;
+    return (base < m_end) && (end > m->base);
+}
+
+static int range_free(const struct task *t, uint64_t base, uint64_t size) {
+    if (!t) return 0;
+    if (size == 0) return 0;
+    if (base < t->mmap_base || base + size > t->mmap_limit) return 0;
+    const struct task_map *cur = t->maps;
+    while (cur) {
+        if (map_overlaps(cur, base, size)) return 0;
+        cur = cur->next;
+    }
+    return 1;
+}
+
+static void insert_map_sorted(struct task *t, struct task_map *m) {
+    if (!t || !m) return;
+    if (!t->maps || m->base < t->maps->base) {
+        m->next = t->maps;
+        t->maps = m;
+        return;
+    }
+    struct task_map *cur = t->maps;
+    while (cur->next && cur->next->base < m->base) {
+        cur = cur->next;
+    }
+    m->next = cur->next;
+    cur->next = m;
+}
+
+uint64_t task_mmap_anonymous(struct task *t, uint64_t addr, uint64_t len, uint32_t prot, uint32_t flags) {
+    if (!t || !t->is_user) return 0;
+    if (len == 0) return 0;
+    uint64_t size = (len + 0xFFFull) & ~0xFFFull;
+    uint64_t base = addr & ~0xFFFull;
+
+    if (base != 0) {
+        if (!range_free(t, base, size)) return 0;
+    } else {
+        base = t->mmap_base;
+        while (base + size <= t->mmap_limit) {
+            if (range_free(t, base, size)) break;
+            base += 0x1000ull;
+        }
+        if (base + size > t->mmap_limit) return 0;
+    }
+
+    for (uint64_t va = base; va < base + size; va += 0x1000ull) {
+        uint64_t phys = pmm_alloc_frame();
+        if (phys == 0) return 0;
+        if (paging_map_user_4k(t->pml4_phys, va, phys, 0) != 0) return 0;
+    }
+
+    struct task_map *m = (struct task_map *)kmalloc(sizeof(*m));
+    if (!m) return 0;
+    m->base = base;
+    m->size = size;
+    m->prot = prot;
+    m->flags = flags;
+    m->next = NULL;
+    insert_map_sorted(t, m);
+    return base;
+}
+
+int task_munmap(struct task *t, uint64_t addr, uint64_t len) {
+    if (!t || !t->is_user) return -1;
+    if (len == 0) return -1;
+    uint64_t size = (len + 0xFFFull) & ~0xFFFull;
+    uint64_t base = addr & ~0xFFFull;
+
+    struct task_map *prev = NULL;
+    struct task_map *cur = t->maps;
+    while (cur) {
+        if (cur->base == base && cur->size == size) break;
+        prev = cur;
+        cur = cur->next;
+    }
+    if (!cur) return -1;
+
+    for (uint64_t va = base; va < base + size; va += 0x1000ull) {
+        uint64_t phys = paging_unmap_user_4k(t->pml4_phys, va);
+        if (phys) pmm_dec_ref(phys);
+    }
+
+    if (prev) prev->next = cur->next;
+    else t->maps = cur->next;
+    kfree(cur);
+    return 0;
 }
 
 void task_on_thread_exit(struct thread *t) {

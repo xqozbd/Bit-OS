@@ -31,6 +31,8 @@ static uint64_t g_hhdm_offset = 0;
 static uint64_t *g_pml4 = 0;
 static uint64_t g_pml4_phys = 0;
 
+static uint64_t *walk_pt(uint64_t pml4_phys, uint64_t virt);
+
 enum {
     USER_HEAP_BASE  = 0x0000000040000000ull,
     USER_HEAP_LIMIT = 0x0000000080000000ull,
@@ -133,6 +135,21 @@ int paging_map_4k_in_pml4(uint64_t pml4_phys, uint64_t virt, uint64_t phys, uint
 
 int paging_map_user_4k(uint64_t pml4_phys, uint64_t virt, uint64_t phys, uint64_t flags) {
     return paging_map_4k_in_pml4(pml4_phys, virt, phys, flags | PTE_US);
+}
+
+uint64_t paging_unmap_user_4k(uint64_t pml4_phys, uint64_t virt) {
+    if (pml4_phys == 0 || g_hhdm_offset == 0) return 0;
+    uint64_t *pte = walk_pt(pml4_phys, virt);
+    if (!pte) return 0;
+    uint64_t ent = *pte;
+    if ((ent & PTE_P) == 0) return 0;
+    *pte = 0;
+#if defined(__GNUC__) || defined(__clang__)
+    __asm__ volatile ("invlpg (%0)" : : "r"(virt) : "memory");
+#else
+    (void)virt;
+#endif
+    return ent & 0x000ffffffffff000ull;
 }
 
 static inline void load_cr3(uint64_t phys) {

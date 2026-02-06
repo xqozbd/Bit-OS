@@ -30,6 +30,7 @@ static int g_sched_ready = 0;
 static volatile uint64_t g_sched_ticks = 0;
 static const uint32_t g_max_prio = 4;
 static const uint32_t g_age_step = 20;
+static const uint32_t g_balance_interval = 50;
 
 static struct thread g_boot_thread;
 
@@ -59,6 +60,25 @@ static void runq_push(struct runqueue *rq, struct thread *t) {
     rq->tail = t;
 }
 
+static struct thread *runq_pop_head(struct runqueue *rq) {
+    if (!rq || !rq->head) return NULL;
+    struct thread *t = rq->head;
+    rq->head = t->next;
+    if (!rq->head) rq->tail = NULL;
+    t->next = NULL;
+    return t;
+}
+
+static uint32_t runq_len(const struct runqueue *rq) {
+    uint32_t n = 0;
+    const struct thread *cur = rq ? rq->head : NULL;
+    while (cur) {
+        n++;
+        cur = cur->next;
+    }
+    return n;
+}
+
 static struct thread *runq_pick(struct runqueue *rq) {
     struct thread *best = NULL;
     struct thread *best_prev = NULL;
@@ -82,6 +102,31 @@ static struct thread *runq_pick(struct runqueue *rq) {
     if (rq->tail == best) rq->tail = best_prev;
     best->next = NULL;
     return best;
+}
+
+static void sched_balance(void) {
+    if (!g_runq || g_cpu_count < 2) return;
+    uint32_t cpu = sched_cpu_index();
+    if (cpu >= g_cpu_count) return;
+
+    uint32_t local_len = runq_len(&g_runq[cpu]);
+    uint32_t best_cpu = cpu;
+    uint32_t best_len = local_len;
+    for (uint32_t i = 0; i < g_cpu_count; ++i) {
+        if (i == cpu) continue;
+        uint32_t len = runq_len(&g_runq[i]);
+        if (len > best_len) {
+            best_len = len;
+            best_cpu = i;
+        }
+    }
+    if (best_cpu == cpu) return;
+    if (best_len <= local_len + 1) return;
+
+    struct thread *stolen = runq_pop_head(&g_runq[best_cpu]);
+    if (!stolen) return;
+    stolen->cpu = cpu;
+    runq_push(&g_runq[cpu], stolen);
 }
 
 void sched_enqueue(struct thread *t) {
@@ -210,6 +255,9 @@ void sched_tick(void) {
             g_need_resched[cpu] = 1;
         }
     }
+    if ((g_sched_ticks % g_balance_interval) == 0) {
+        sched_balance();
+    }
 }
 
 void sched_maybe_preempt(void) {
@@ -226,6 +274,10 @@ void sched_yield(void) {
     uint32_t cpu = sched_cpu_index();
     struct thread *prev = g_current[cpu];
     struct thread *next = runq_pick(&g_runq[cpu]);
+    if (!next) {
+        sched_balance();
+        next = runq_pick(&g_runq[cpu]);
+    }
     if (!next) {
         if (prev && (prev->state == THREAD_BLOCKED || prev->state == THREAD_DEAD)) {
             next = g_idle[cpu];
@@ -279,6 +331,10 @@ void sched_preempt_from_isr(void) {
 
     struct thread *prev = g_current[cpu];
     struct thread *next = runq_pick(&g_runq[cpu]);
+    if (!next) {
+        sched_balance();
+        next = runq_pick(&g_runq[cpu]);
+    }
     if (!next) {
         if (prev && (prev->state == THREAD_BLOCKED || prev->state == THREAD_DEAD)) {
             next = g_idle[cpu];

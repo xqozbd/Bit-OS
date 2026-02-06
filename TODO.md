@@ -39,6 +39,7 @@
 - [x] ELF loader: relocations + stack setup with argv/envp.
 - [x] Initramfs unpacker (tar or cpio) into VFS.
 - [x] VFS: path normalization + mount points.
+- [x] AHCI / SATA / NVMe driver support (or virtio-blk for virtualization).
 - [x] Userspace `fork/exec/exit` support.
 - [x] Ring-3 entry path (iret/sysret + user stack setup).
 - [x] Driver registry (init order + status).
@@ -75,13 +76,12 @@
 - [x] `/dev` and pseudo-filesystem (`/proc`, `/sys`) skeleton.
 - [x] UDP sockets + socket syscalls (TCP stub).
 - [x] TCP sockets (connect/listen/accept + retransmit).
+- [x] Simple init process + busybox-like shell spawn.
+- [x] Per-CPU run queue load balancing.
+- [x] Crash isolation: kernel survives user task faults.
+- [x] Userland `mmap` / `munmap` support.
 
 ## Next
-- [ ] AHCI / SATA / NVMe driver support (or virtio-blk for virtualization).
-- [ ] Simple init process + busybox-like shell spawn.
-- [ ] Per-CPU run queue load balancing.
-- [ ] Crash isolation: kernel survives user task faults.
-- [ ] Userland `mmap` / `munmap` support.
 - [ ] SLAB/SLUB kernel object allocator.
 - [ ] Copy-on-write `fork()` support.
 - [ ] Kernel SLAB object caches for vfs/inodes.

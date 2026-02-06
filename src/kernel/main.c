@@ -24,6 +24,7 @@
 #include "kernel/block.h"
 #include "kernel/partition.h"
 #include "drivers/storage/ata.h"
+#include "drivers/storage/ahci.h"
 #include "sys/blockfs.h"
 #include "sys/fat32.h"
 #include "sys/pseudofs.h"
@@ -39,6 +40,7 @@
 #include "kernel/power.h"
 #include "kernel/socket.h"
 #include "kernel/driver_registry.h"
+#include "kernel/init.h"
 #include "sys/boot_params.h"
 
 /* Bootstrap stack: keep it inside the kernel image so it's mapped in our page tables. */
@@ -85,6 +87,7 @@ static void kmain_stage2(void) {
     int drv_paging = driver_register("paging", drv_order++);
     int drv_heap = driver_register("heap", drv_order++);
     int drv_block = driver_register("block", drv_order++);
+    int drv_ahci = driver_register("ahci", drv_order++);
     int drv_ata = driver_register("ata", drv_order++);
     int drv_partition = driver_register("partition", drv_order++);
     int drv_pcnet = driver_register("pcnet", drv_order++);
@@ -186,6 +189,9 @@ static void kmain_stage2(void) {
     } else {
         driver_set_status_idx(drv_block, DRIVER_STATUS_OK, NULL);
     }
+    boot_screen_set_status("ahci");
+    log_printf("Boot: initializing AHCI...\n");
+    ahci_init();
     boot_screen_set_status("ata");
     log_printf("Boot: initializing ATA...\n");
     ata_init();
@@ -215,6 +221,11 @@ static void kmain_stage2(void) {
     watchdog_log_stage("pci_init");
     log_printf("Boot: PCI scan complete\n");
     driver_set_status_idx(drv_pci, DRIVER_STATUS_OK, NULL);
+    if (ahci_has_device()) {
+        driver_set_status_idx(drv_ahci, DRIVER_STATUS_OK, NULL);
+    } else {
+        driver_set_status_idx(drv_ahci, DRIVER_STATUS_SKIPPED, "not found");
+    }
     pcnet_log_status();
     if (!pcnet_is_found()) {
         driver_set_status_idx(drv_pcnet, DRIVER_STATUS_SKIPPED, "not found");
@@ -353,6 +364,12 @@ static void kmain_stage2(void) {
     log_printf("Boot: initializing console...\n");
     console_init();
     driver_set_status_idx(drv_console, DRIVER_STATUS_OK, NULL);
+    log_printf("Boot: spawning init...\n");
+    if (init_spawn() == 0) {
+        log_printf("Boot: init started\n");
+    } else {
+        log_printf("Boot: init not started\n");
+    }
     watchdog_checkpoint_boot_ok();
     watchdog_checkpoint("mouse_init");
     log_printf("Boot: initializing mouse...\n");

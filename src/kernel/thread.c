@@ -69,9 +69,10 @@ void thread_exit(void) {
         t->state = THREAD_DEAD;
         task_on_thread_exit(t);
     }
-    sched_yield();
-    halt_forever();
-    __builtin_unreachable();
+    for (;;) {
+        sched_yield();
+        cpu_idle();
+    }
 }
 
 int thread_join(struct thread *t) {

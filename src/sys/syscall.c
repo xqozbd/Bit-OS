@@ -376,6 +376,28 @@ static uint64_t sys_recv_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4
     return (uint64_t)socket_recvfrom(sid, buf, len, NULL, NULL);
 }
 
+static uint64_t sys_mmap_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a5; (void)a6;
+    uint64_t addr = a1;
+    uint64_t len = a2;
+    uint32_t prot = (uint32_t)a3;
+    uint32_t flags = (uint32_t)a4;
+    struct task *t = task_current();
+    if (!t) return (uint64_t)-1;
+    uint64_t out = task_mmap_anonymous(t, addr, len, prot, flags);
+    if (out == 0) return (uint64_t)-1;
+    return out;
+}
+
+static uint64_t sys_munmap_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a3; (void)a4; (void)a5; (void)a6;
+    uint64_t addr = a1;
+    uint64_t len = a2;
+    struct task *t = task_current();
+    if (!t) return (uint64_t)-1;
+    return (uint64_t)task_munmap(t, addr, len);
+}
+
 static syscall_fn g_syscalls[SYS_MAX] = {
     0,
     sys_write_impl,
@@ -397,7 +419,9 @@ static syscall_fn g_syscalls[SYS_MAX] = {
     sys_listen_impl,
     sys_accept_impl,
     sys_send_impl,
-    sys_recv_impl
+    sys_recv_impl,
+    sys_mmap_impl,
+    sys_munmap_impl
 };
 
 uint64_t syscall_dispatch(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3,

@@ -166,17 +166,35 @@ int initramfs_init_from_limine(void) {
 
         if (str_eq(name, "TRAILER!!!")) break;
 
+        while (name[0] == '.' && name[1] == '/') name += 2;
+        while (name[0] == '/') name++;
+        if (name[0] == '\0') continue;
+        size_t name_len = str_len(name);
+        int is_dir = 0;
+        if (name_len > 0 && name[name_len - 1] == '/') {
+            is_dir = 1;
+            name_len--;
+            if (name_len == 0) continue;
+        }
+
         const uint8_t *file_data = base + off;
         uint64_t data_end = off + filesz;
         off = (data_end + 3) & ~3ull;
 
+        char path_buf[256];
+        const char *path = name;
+        if (name_len >= sizeof(path_buf)) continue;
+        for (size_t i = 0; i < name_len; ++i) path_buf[i] = name[i];
+        path_buf[name_len] = '\0';
+        path = path_buf;
+
         int parent = 0;
         const char *leaf = NULL;
         size_t leaf_len = 0;
-        if (!ensure_path_dirs(name, &parent, &leaf, &leaf_len)) continue;
+        if (!ensure_path_dirs(path, &parent, &leaf, &leaf_len)) continue;
 
         if (leaf_len == 0) continue;
-        if (name[namesz - 2] == '/') {
+        if (is_dir) {
             (void)get_or_create_dir(parent, leaf, leaf_len);
         } else {
             (void)add_file(parent, leaf, leaf_len, file_data, filesz);
