@@ -60,6 +60,7 @@ Block device layer abstraction + buffered IO.
 Partition table parsing (MBR/GPT).
 Disk driver for VMware (ATA PIO).
 VFS: mount root from block device.
+Persistent root filesystem support (FAT32 read-only).
 
 ## Features Removed:
 None

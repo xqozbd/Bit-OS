@@ -6,6 +6,7 @@
 #define VFS_BACKEND_MOCK 1
 #define VFS_BACKEND_INITRAMFS 2
 #define VFS_BACKEND_BLOCK 3
+#define VFS_BACKEND_FAT32 4
 
 void vfs_init(void);
 void vfs_set_root(int backend, int root_node);

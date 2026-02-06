@@ -25,6 +25,7 @@
 #include "kernel/partition.h"
 #include "drivers/storage/ata.h"
 #include "sys/blockfs.h"
+#include "sys/fat32.h"
 #include "arch/x86_64/smp.h"
 #include "arch/x86_64/timer.h"
 #include "kernel/watchdog.h"
@@ -258,13 +259,24 @@ static void kmain_stage2(void) {
         vfs_mount("/block", VFS_BACKEND_BLOCK, blockfs_root());
         log_printf("Boot: mounted block devices at /block\n");
     }
+    int fat_ready = 0;
+    if (partition_count() > 0) {
+        if (fat32_init_from_partition(0) == 0 && fat32_is_ready()) {
+            vfs_mount("/fat", VFS_BACKEND_FAT32, fat32_root());
+            log_printf("Boot: mounted FAT32 at /fat\n");
+            fat_ready = 1;
+        }
+    }
     if (initramfs_available()) {
         vfs_set_root(VFS_BACKEND_INITRAMFS, initramfs_root());
         log_printf("Boot: VFS root set to initramfs\n");
         vfs_mount("/mock", VFS_BACKEND_MOCK, fs_root());
         log_printf("Boot: mounted mock FS at /mock\n");
     } else {
-        if (block_device_count() > 0 && partition_count() > 0) {
+        if (fat_ready) {
+            vfs_set_root(VFS_BACKEND_FAT32, fat32_root());
+            log_printf("Boot: VFS root set to FAT32\n");
+        } else if (block_device_count() > 0 && partition_count() > 0) {
             vfs_set_root(VFS_BACKEND_BLOCK, blockfs_root());
             log_printf("Boot: VFS root set to block device\n");
         } else {

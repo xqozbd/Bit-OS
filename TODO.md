@@ -71,9 +71,9 @@
 - [x] Partition table parsing (MBR/GPT).
 - [x] Disk driver for VMware (ATA PIO or AHCI).
 - [x] VFS: mount root from block device.
+- [x] Persistent root filesystem support (ext2/fat32 driver).
 
 ## Next
-- [ ] Persistent root filesystem support (ext2/fat32 driver).
 - [ ] `/dev` and pseudo-filesystem (`/proc`, `/sys`) skeleton.
 - [ ] Simple TCP/UDP sockets and socket syscalls.
 - [ ] AHCI / SATA / NVMe driver support (or virtio-blk for virtualization).
