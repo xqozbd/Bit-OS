@@ -43,40 +43,27 @@ Clear screen printing BitOS's version when the banner already does so.
 ## v0.1.1
 
 ## Features Added:
-Interrupt masking / IRQ priority routing (PIC mask/unmask + LAPIC TPR).
-Driver registry (init order + status).
-ACPI parsing stub (device discovery + table list command).
-ACPI table presence summary (MADT/MCFG/HPET/FADT).
-Kernel panic backtrace (stack walk).
-Configurable boot params (Limine cmdline).
-Proper shutdown/restart (ACPI S5 + reset fallback).
-Per-process file descriptor table + basic open/read/close syscalls.
-Ring-3 entry path (GDT/TSS + iretq user entry + user stack mapper).
-Userspace fork/exec/exit support (basic user ELF exec + vfork-style fork).
-User address space layout defaults + page-table clone helpers.
-Copy-on-write (COW) fork with refcounted frames.
-Signals: basic delivery (kill/ignore) with default handlers and sys_signal/sys_kill.
-Block device layer abstraction + buffered IO.
-Partition table parsing (MBR/GPT).
-Disk driver for VMware (ATA PIO).
-AHCI SATA driver (basic DMA for virtualization).
-VFS: mount root from block device.
-Persistent root filesystem support (FAT32 read-only).
-Pseudo-filesystem skeletons for /dev, /proc, /sys.
-UDP sockets + socket syscalls (TCP returns not supported).
-TCP sockets (connect/listen/accept + basic retransmit).
-Simple init process that spawns a user shell (init/busybox/sh).
-Per-CPU run queue load balancing.
-Userland mmap/munmap support (anonymous mappings).
-SLAB/SLUB kernel object allocator.
-Kernel SLAB caches for VFS nodes and inodes.
-Add /proc tasks and /sys drivers entries.
-Crash isolation: user task faults no longer halt the kernel.
-Kernel timer wheel for efficient sleep timers.
-TCP stack: three-way handshake + retransmission improvements.
-DHCP client: auto-configure IP, gateway, and mask.
-Userspace DNS resolver stub (dotted-quad parsing).
-USB xHCI controller init (MMIO map/reset + rings + port status logging).
+Kernel & Architecture: Interrupt masking / IRQ priority routing, GDT/TSS + Ring-3 entry path, and kernel panic backtrace (stack walk).
+
+Scheduling & Memory: Per-CPU run queue load balancing, user address space layout defaults + page-table clone helpers, and userland mmap/munmap support.
+
+Process & Syscalls: Userspace fork/exec/exit support, per-process file descriptor table + basic open/read/close syscalls, and signals (kill/ignore) with default handlers.
+
+Storage & Filesystems: Block device layer + buffered IO, MBR/GPT partition parsing, VMware ATA PIO and AHCI SATA driver, VFS mount root, and FAT32 read-only root.
+
+Pseudo-FS: /dev, /proc, /sys skeletons plus /proc tasks and /sys drivers entries.
+
+Networking: UDP sockets + socket syscalls, TCP sockets (connect/listen/accept + basic retransmit), TCP three-way handshake + retransmission improvements, DHCP client, and DNS stub (dotted-quad parsing).
+
+Init & Userland: Simple init process that spawns a user shell (init/busybox/sh).
+
+Kernel Memory: SLAB/SLUB allocator and SLAB caches for VFS nodes and inodes.
+
+USB: xHCI controller init (MMIO map/reset + rings + port status logging).
+
+Boot: Configurable boot params (Limine cmdline) and proper shutdown/restart (ACPI S5 + reset fallback).
+
+Reliability: Crash isolation so user task faults no longer halt the kernel, and kernel timer wheel for efficient sleep timers.
 
 ## Features Removed:
 None
