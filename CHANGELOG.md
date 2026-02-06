@@ -61,6 +61,7 @@ Partition table parsing (MBR/GPT).
 Disk driver for VMware (ATA PIO).
 VFS: mount root from block device.
 Persistent root filesystem support (FAT32 read-only).
+Pseudo-filesystem skeletons for /dev, /proc, /sys.
 
 ## Features Removed:
 None

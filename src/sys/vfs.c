@@ -6,6 +6,7 @@
 #include "sys/fs_mock.h"
 #include "sys/blockfs.h"
 #include "sys/fat32.h"
+#include "sys/pseudofs.h"
 #include "lib/strutil.h"
 #include "lib/log.h"
 enum { VFS_MAX_NODES = 512 };
@@ -78,6 +79,9 @@ static int backend_is_dir(int backend, int node) {
     if (backend == VFS_BACKEND_INITRAMFS) return initramfs_is_dir(node);
     if (backend == VFS_BACKEND_BLOCK) return blockfs_is_dir(node);
     if (backend == VFS_BACKEND_FAT32) return fat32_is_dir(node);
+    if (backend == VFS_BACKEND_DEV) return pseudofs_is_dir(PSEUDOFS_DEV, node);
+    if (backend == VFS_BACKEND_PROC) return pseudofs_is_dir(PSEUDOFS_PROC, node);
+    if (backend == VFS_BACKEND_SYS) return pseudofs_is_dir(PSEUDOFS_SYS, node);
     return fs_is_dir(node);
 }
 
@@ -85,6 +89,9 @@ static int backend_read_file(int backend, int node, const uint8_t **data, uint64
     if (backend == VFS_BACKEND_INITRAMFS) return initramfs_read_file(node, data, size);
     if (backend == VFS_BACKEND_BLOCK) return blockfs_read_file(node, data, size);
     if (backend == VFS_BACKEND_FAT32) return fat32_read_file(node, data, size);
+    if (backend == VFS_BACKEND_DEV) return pseudofs_read_file(PSEUDOFS_DEV, node, data, size);
+    if (backend == VFS_BACKEND_PROC) return pseudofs_read_file(PSEUDOFS_PROC, node, data, size);
+    if (backend == VFS_BACKEND_SYS) return pseudofs_read_file(PSEUDOFS_SYS, node, data, size);
     return fs_read_file(node, data, size);
 }
 
@@ -92,6 +99,9 @@ static int backend_resolve(int backend, int cwd, const char *path) {
     if (backend == VFS_BACKEND_INITRAMFS) return initramfs_resolve(cwd, path);
     if (backend == VFS_BACKEND_BLOCK) return blockfs_resolve(cwd, path);
     if (backend == VFS_BACKEND_FAT32) return fat32_resolve(cwd, path);
+    if (backend == VFS_BACKEND_DEV) return pseudofs_resolve(PSEUDOFS_DEV, cwd, path);
+    if (backend == VFS_BACKEND_PROC) return pseudofs_resolve(PSEUDOFS_PROC, cwd, path);
+    if (backend == VFS_BACKEND_SYS) return pseudofs_resolve(PSEUDOFS_SYS, cwd, path);
     return fs_resolve(cwd, path);
 }
 
@@ -216,6 +226,18 @@ void vfs_pwd(int cwd) {
         fat32_pwd(n->node);
         return;
     }
+    if (n->backend == VFS_BACKEND_DEV) {
+        pseudofs_pwd(PSEUDOFS_DEV, n->node);
+        return;
+    }
+    if (n->backend == VFS_BACKEND_PROC) {
+        pseudofs_pwd(PSEUDOFS_PROC, n->node);
+        return;
+    }
+    if (n->backend == VFS_BACKEND_SYS) {
+        pseudofs_pwd(PSEUDOFS_SYS, n->node);
+        return;
+    }
     fs_pwd(n->node);
 }
 
@@ -245,6 +267,18 @@ void vfs_ls(int node) {
     }
     if (n->backend == VFS_BACKEND_FAT32) {
         fat32_ls(n->node);
+        return;
+    }
+    if (n->backend == VFS_BACKEND_DEV) {
+        pseudofs_ls(PSEUDOFS_DEV, n->node);
+        return;
+    }
+    if (n->backend == VFS_BACKEND_PROC) {
+        pseudofs_ls(PSEUDOFS_PROC, n->node);
+        return;
+    }
+    if (n->backend == VFS_BACKEND_SYS) {
+        pseudofs_ls(PSEUDOFS_SYS, n->node);
         return;
     }
     fs_ls(n->node);

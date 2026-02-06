@@ -26,6 +26,7 @@
 #include "drivers/storage/ata.h"
 #include "sys/blockfs.h"
 #include "sys/fat32.h"
+#include "sys/pseudofs.h"
 #include "arch/x86_64/smp.h"
 #include "arch/x86_64/timer.h"
 #include "kernel/watchdog.h"
@@ -255,6 +256,10 @@ static void kmain_stage2(void) {
     boot_screen_set_status("vfs");
     log_printf("Boot: initializing VFS...\n");
     vfs_init();
+    vfs_mount("/dev", VFS_BACKEND_DEV, pseudofs_root(PSEUDOFS_DEV));
+    vfs_mount("/proc", VFS_BACKEND_PROC, pseudofs_root(PSEUDOFS_PROC));
+    vfs_mount("/sys", VFS_BACKEND_SYS, pseudofs_root(PSEUDOFS_SYS));
+    log_printf("Boot: mounted /dev, /proc, /sys\n");
     if (block_device_count() > 0 && partition_count() > 0) {
         vfs_mount("/block", VFS_BACKEND_BLOCK, blockfs_root());
         log_printf("Boot: mounted block devices at /block\n");
