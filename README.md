@@ -53,8 +53,4 @@ The build generates `BitOS.iso` for booting in a VM. If you see Limine missing e
 See [LICENSE](LICENSE).
 
 ## TODO (Expandable)
-<details>
-<summary>Open TODO.md</summary>
-
-See `TODO.md` in the repo.
-</details>
+See [TODO.md](TODO.md).
