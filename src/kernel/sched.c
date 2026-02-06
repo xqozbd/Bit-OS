@@ -3,6 +3,7 @@
 #include <stddef.h>
 
 #include "arch/x86_64/cpu.h"
+#include "arch/x86_64/gdt.h"
 #include "arch/x86_64/paging.h"
 #include "arch/x86_64/smp.h"
 #include "kernel/heap.h"
@@ -256,6 +257,9 @@ void sched_yield(void) {
     next->state = (next->state == THREAD_IDLE) ? THREAD_IDLE : THREAD_RUNNING;
     next->last_run_tick = g_sched_ticks;
     g_current[cpu] = next;
+    if (next->stack && next->stack_size) {
+        gdt_set_kernel_stack((uint64_t)(uintptr_t)(next->stack + next->stack_size));
+    }
 
     if (!prev) {
         cpu_enable_interrupts();
@@ -299,6 +303,9 @@ void sched_preempt_from_isr(void) {
     next->state = (next->state == THREAD_IDLE) ? THREAD_IDLE : THREAD_RUNNING;
     next->last_run_tick = g_sched_ticks;
     g_current[cpu] = next;
+    if (next->stack && next->stack_size) {
+        gdt_set_kernel_stack((uint64_t)(uintptr_t)(next->stack + next->stack_size));
+    }
 
     if (!prev) return;
     if (next->pml4_phys && prev->pml4_phys != next->pml4_phys) {

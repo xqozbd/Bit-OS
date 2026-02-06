@@ -9,6 +9,9 @@
 #include "arch/x86_64/paging.h"
 #include "kernel/pmm.h"
 #include "lib/log.h"
+#include "sys/vfs.h"
+
+extern void *memcpy(void *restrict dest, const void *restrict src, size_t n);
 
 typedef uint64_t (*syscall_fn)(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 
@@ -70,12 +73,58 @@ static uint64_t sys_sbrk_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4
     return old;
 }
 
+static uint64_t sys_open_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a3; (void)a4; (void)a5; (void)a6;
+    const char *path = (const char *)a1;
+    uint32_t flags = (uint32_t)a2;
+    if (!path) return (uint64_t)-1;
+    int node = vfs_resolve(0, path);
+    if (node < 0) return (uint64_t)-1;
+    if (vfs_is_dir(node)) return (uint64_t)-1;
+    struct task *t = task_current();
+    if (!t) return (uint64_t)-1;
+    int fd = task_fd_alloc(t, node, flags);
+    return (uint64_t)fd;
+}
+
+static uint64_t sys_read_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a4; (void)a5; (void)a6;
+    int fd = (int)a1;
+    uint8_t *buf = (uint8_t *)a2;
+    uint64_t len = a3;
+    if (!buf || len == 0) return 0;
+    struct task *t = task_current();
+    if (!t) return (uint64_t)-1;
+    struct task_fd *ent = task_fd_get(t, fd);
+    if (!ent) return (uint64_t)-1;
+    const uint8_t *data = NULL;
+    uint64_t size = 0;
+    if (!vfs_read_file(ent->node, &data, &size) || !data) return (uint64_t)-1;
+    if (ent->offset >= size) return 0;
+    uint64_t avail = size - ent->offset;
+    uint64_t to_copy = len < avail ? len : avail;
+    memcpy(buf, data + ent->offset, (size_t)to_copy);
+    ent->offset += to_copy;
+    return to_copy;
+}
+
+static uint64_t sys_close_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    int fd = (int)a1;
+    struct task *t = task_current();
+    if (!t) return (uint64_t)-1;
+    return (uint64_t)task_fd_close(t, fd);
+}
+
 static syscall_fn g_syscalls[SYS_MAX] = {
     0,
     sys_write_impl,
     sys_exit_impl,
     sys_sleep_impl,
-    sys_sbrk_impl
+    sys_sbrk_impl,
+    sys_open_impl,
+    sys_read_impl,
+    sys_close_impl
 };
 
 uint64_t syscall_dispatch(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3,

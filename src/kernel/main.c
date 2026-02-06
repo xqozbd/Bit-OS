@@ -11,6 +11,7 @@
 #include "drivers/video/fb_printf.h"
 #include "kernel/heap.h"
 #include "arch/x86_64/idt.h"
+#include "arch/x86_64/gdt.h"
 #include "sys/initramfs.h"
 #include "sys/fs_mock.h"
 #include "sys/vfs.h"
@@ -88,6 +89,10 @@ static void kmain_stage2(void) {
     int drv_console = driver_register("console", drv_order++);
     int drv_mouse = driver_register("mouse", drv_order++);
     watchdog_early_stage("kmain_start");
+    log_printf("Boot: initializing GDT/TSS...\n");
+    gdt_init();
+    gdt_set_kernel_stack((uint64_t)(uintptr_t)(g_bootstrap_stack + sizeof(g_bootstrap_stack)));
+    log_printf("Boot: GDT/TSS ready\n");
     log_printf("Boot: enabling CPU SSE...\n");
     cpu_enable_sse();
     log_printf("Boot: CPU SSE enabled\n");

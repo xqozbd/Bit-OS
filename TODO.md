@@ -39,6 +39,7 @@
 - [x] ELF loader: relocations + stack setup with argv/envp.
 - [x] Initramfs unpacker (tar or cpio) into VFS.
 - [x] VFS: path normalization + mount points.
+- [x] Ring-3 entry path (iret/sysret + user stack setup).
 - [x] Driver registry (init order + status).
 - [x] Interrupt masking / IRQ priority routing.
 - [x] Console output buffering + scrollback.
@@ -61,10 +62,12 @@
 - [x] ACPI parsing stub (device discovery).
 - [x] Configurable boot params (Limine cmdline).
 - [x] Proper shutdown/restart (ACPI + fallback reset).
+- [x] File descriptor table per-process + basic `open/read/write/close`.
 
 ## Next
-- [ ] File descriptor table per-process + basic `open/read/write/close`.
 - [ ] Userspace `fork/exec/exit` support.
+- [ ] User address space layout + page-table clone helpers.
+- [ ] Copy-on-write (COW) for fork with refcounted frames.
 - [ ] Signals: basic delivery and default handlers.
 - [ ] Persistent root filesystem support (ext2/fat32 driver).
 - [ ] `/dev` and pseudo-filesystem (`/proc`, `/sys`) skeleton.

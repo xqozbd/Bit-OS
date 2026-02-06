@@ -50,6 +50,8 @@ ACPI table presence summary (MADT/MCFG/HPET/FADT).
 Kernel panic backtrace (stack walk).
 Configurable boot params (Limine cmdline).
 Proper shutdown/restart (ACPI S5 + reset fallback).
+Per-process file descriptor table + basic open/read/close syscalls.
+Ring-3 entry path (GDT/TSS + iretq user entry + user stack mapper).
 
 ## Features Removed:
 None

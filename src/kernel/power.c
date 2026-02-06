@@ -15,6 +15,17 @@ static void log_state(uint8_t state, const char *name) {
     }
 }
 
+static void force_triple_fault(void) {
+    struct {
+        uint16_t limit;
+        uint64_t base;
+    } __attribute__((packed)) idt = {0, 0};
+#if defined(__GNUC__) || defined(__clang__)
+    __asm__ volatile("lidt %0" : : "m"(idt));
+    __asm__ volatile("int $0x3");
+#endif
+}
+
 void power_init(void) {
     log_state(3, "S3");
     log_state(4, "S4");
@@ -57,5 +68,6 @@ void power_restart(void) {
     outw(0xB004, 0x2000);
     outw(0x4004, 0x3400);
     outw(0x4004, 0x2000);
+    force_triple_fault();
     halt_forever();
 }

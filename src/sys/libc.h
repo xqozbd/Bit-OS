@@ -30,4 +30,16 @@ static inline long sys_sleep_ms(uint64_t ms) {
     return __syscall6(3, (long)ms, 0, 0, 0, 0, 0);
 }
 
+static inline long sys_open(const char *path, uint32_t flags) {
+    return __syscall6(5, (long)path, (long)flags, 0, 0, 0, 0);
+}
+
+static inline long sys_read(int fd, void *buf, size_t len) {
+    return __syscall6(6, (long)fd, (long)buf, (long)len, 0, 0, 0);
+}
+
+static inline long sys_close(int fd) {
+    return __syscall6(7, (long)fd, 0, 0, 0, 0, 0);
+}
+
 #endif /* SYS_LIBC_H */

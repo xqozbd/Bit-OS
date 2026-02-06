@@ -3,6 +3,8 @@
 #include "lib/log.h"
 #include "lib/strutil.h"
 
+extern void *memset(void *s, int c, size_t n);
+
 #define MAX_DRIVERS 64
 
 static struct driver_entry g_drivers[MAX_DRIVERS];

@@ -12,6 +12,7 @@ static uint32_t g_next_pid = 2;
 static struct task g_boot_task;
 static struct task *g_task_head = NULL;
 static struct task *g_task_tail = NULL;
+static struct task_fd g_boot_fds[16];
 
 enum {
     USER_HEAP_BASE  = 0x0000000040000000ull,
@@ -28,6 +29,52 @@ struct task *task_current(void) {
     return t->task;
 }
 
+void task_fd_init(struct task *t) {
+    if (!t) return;
+    if (!t->fds) {
+        t->fds = (struct task_fd *)kmalloc(sizeof(struct task_fd) * 16);
+    }
+    if (!t->fds) return;
+    for (int i = 0; i < 16; ++i) {
+        t->fds[i].used = 0;
+        t->fds[i].node = -1;
+        t->fds[i].offset = 0;
+        t->fds[i].flags = 0;
+    }
+}
+
+struct task_fd *task_fd_get(struct task *t, int fd) {
+    if (!t || !t->fds) return NULL;
+    if (fd < 0 || fd >= 16) return NULL;
+    if (!t->fds[fd].used) return NULL;
+    return &t->fds[fd];
+}
+
+int task_fd_alloc(struct task *t, int node, uint32_t flags) {
+    if (!t || !t->fds) return -1;
+    for (int i = 0; i < 16; ++i) {
+        if (!t->fds[i].used) {
+            t->fds[i].used = 1;
+            t->fds[i].node = node;
+            t->fds[i].offset = 0;
+            t->fds[i].flags = flags;
+            return i;
+        }
+    }
+    return -1;
+}
+
+int task_fd_close(struct task *t, int fd) {
+    if (!t || !t->fds) return -1;
+    if (fd < 0 || fd >= 16) return -1;
+    if (!t->fds[fd].used) return -1;
+    t->fds[fd].used = 0;
+    t->fds[fd].node = -1;
+    t->fds[fd].offset = 0;
+    t->fds[fd].flags = 0;
+    return 0;
+}
+
 void task_init_bootstrap(struct thread *t) {
     if (!t) return;
     g_boot_task.pid = 1;
@@ -41,7 +88,9 @@ void task_init_bootstrap(struct thread *t) {
     g_boot_task.brk = 0;
     g_boot_task.brk_limit = 0;
     g_boot_task.name = t->name ? t->name : "bootstrap";
+    g_boot_task.fds = g_boot_fds;
     g_boot_task.next = NULL;
+    task_fd_init(&g_boot_task);
     t->task = &g_boot_task;
     g_task_head = &g_boot_task;
     g_task_tail = &g_boot_task;
@@ -68,6 +117,8 @@ struct task *task_create_for_thread(struct thread *t, const char *name) {
         task->brk_limit = 0;
     }
     task->name = name ? name : "task";
+    task->fds = NULL;
+    task_fd_init(task);
     task->next = NULL;
     t->task = task;
     if (!g_task_head) {

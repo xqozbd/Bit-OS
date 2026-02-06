@@ -8,6 +8,9 @@ enum {
     SYS_EXIT  = 2,
     SYS_SLEEP = 3,
     SYS_SBRK  = 4,
+    SYS_OPEN  = 5,
+    SYS_READ  = 6,
+    SYS_CLOSE = 7,
     SYS_MAX
 };
 
