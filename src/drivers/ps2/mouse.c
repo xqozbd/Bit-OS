@@ -241,6 +241,7 @@ void ms_init(void) {
 	/* Enable IRQ12 + IRQ1 in controller command byte */
 	uint8_t cmd = read_cmd_byte();
 	cmd |= 0x03; /* bit0=IRQ1, bit1=IRQ12 */
+	cmd &= (uint8_t)~0x20; /* clear "disable mouse" if set */
 	write_cmd_byte(cmd);
 
 	/* Enable auxiliary device (mouse) */

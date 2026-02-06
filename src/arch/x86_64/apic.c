@@ -8,6 +8,7 @@
 
 #define APIC_REG_EOI     0x0B0
 #define APIC_REG_SVR     0x0F0
+#define APIC_REG_TPR     0x080
 #define APIC_REG_LVT_TMR 0x320
 #define APIC_REG_TMRDIV  0x3E0
 #define APIC_REG_TMRINIT 0x380
@@ -73,4 +74,13 @@ void apic_timer_set_periodic(uint8_t vector, uint32_t initial_count) {
 uint32_t apic_timer_current(void) {
     if (!g_apic) return 0;
     return apic_read(APIC_REG_TMRCUR);
+}
+
+int apic_is_ready(void) {
+    return g_apic != 0;
+}
+
+void apic_set_tpr(uint8_t tpr) {
+    if (!g_apic) return;
+    apic_write(APIC_REG_TPR, (uint32_t)tpr);
 }

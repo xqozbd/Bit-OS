@@ -84,6 +84,16 @@ enum {
     ACPI_MAX_PSTATES = 16
 };
 
+enum {
+    ACPI_MAX_TABLES = 64
+};
+
+struct acpi_table_info {
+    char signature[5];
+    uint32_t length;
+    uint64_t phys;
+};
+
 static int g_acpi_ready = 0;
 static const struct acpi_sdt_header *g_dsdt_hdr = NULL;
 static const uint8_t *g_dsdt_aml = NULL;
@@ -96,6 +106,12 @@ static struct acpi_gas g_pct_ctrl;
 static struct acpi_gas g_pct_stat;
 static int g_pct_valid = 0;
 static const struct acpi_fadt *g_fadt = NULL;
+static struct acpi_table_info g_tables[ACPI_MAX_TABLES];
+static uint32_t g_table_count = 0;
+static int g_have_madt = 0;
+static int g_have_mcfg = 0;
+static int g_have_hpet = 0;
+static int g_have_fadt = 0;
 
 #define ACPI_SLP_TYP_MASK 0x1C00u
 #define ACPI_SLP_EN_BIT   0x2000u
@@ -574,6 +590,11 @@ void acpi_init(void) {
     g_pct_count = -1;
     g_pstate_count = 0;
     g_pct_valid = 0;
+    g_table_count = 0;
+    g_have_madt = 0;
+    g_have_mcfg = 0;
+    g_have_hpet = 0;
+    g_have_fadt = 0;
 
     if (!rsdp_request.response || !rsdp_request.response->address) {
         log_printf("ACPI: no RSDP\n");
@@ -627,6 +648,20 @@ void acpi_init(void) {
         if (!tbl_phys) continue;
         if (!acpi_phys_in_memmap(tbl_phys, sizeof(struct acpi_sdt_header))) continue;
         const struct acpi_sdt_header *hdr = (const struct acpi_sdt_header *)acpi_map_phys(tbl_phys);
+        if (hdr && g_table_count < ACPI_MAX_TABLES) {
+            struct acpi_table_info *ti = &g_tables[g_table_count++];
+            ti->signature[0] = hdr->signature[0];
+            ti->signature[1] = hdr->signature[1];
+            ti->signature[2] = hdr->signature[2];
+            ti->signature[3] = hdr->signature[3];
+            ti->signature[4] = '\0';
+            ti->length = hdr->length;
+            ti->phys = tbl_phys;
+            if (acpi_sig_eq(hdr->signature, "APIC")) g_have_madt = 1;
+            if (acpi_sig_eq(hdr->signature, "MCFG")) g_have_mcfg = 1;
+            if (acpi_sig_eq(hdr->signature, "HPET")) g_have_hpet = 1;
+            if (acpi_sig_eq(hdr->signature, "FACP")) g_have_fadt = 1;
+        }
         if (hdr && acpi_sig_eq(hdr->signature, "FACP")) {
             fadt = (const struct acpi_fadt *)hdr;
             break;
@@ -676,6 +711,7 @@ void acpi_log_status(void) {
         return;
     }
     log_printf("ACPI: DSDT AML=%u bytes\n", (unsigned)g_dsdt_aml_len);
+    log_printf("ACPI: tables discovered=%u\n", (unsigned)g_table_count);
     if (g_pss_count >= 0) {
         log_printf("ACPI: _PSS package entries=%u parsed=%u\n",
                    (unsigned)g_pss_count, (unsigned)g_pstate_count);
@@ -688,6 +724,32 @@ void acpi_log_status(void) {
     } else {
         log_printf("ACPI: _PCT not found\n");
     }
+}
+
+int acpi_is_ready(void) {
+    return g_acpi_ready;
+}
+
+int acpi_device_discovery_count(void) {
+    return (int)g_table_count;
+}
+
+void acpi_device_discovery_log(void) {
+    if (!g_acpi_ready) {
+        log_printf("ACPI: device discovery not ready\n");
+        return;
+    }
+    log_printf("ACPI: table list\n");
+    for (uint32_t i = 0; i < g_table_count; ++i) {
+        const struct acpi_table_info *ti = &g_tables[i];
+        log_printf("  [%u] %s len=%u\n", (unsigned)i, ti->signature,
+                   (unsigned)ti->length);
+    }
+    log_printf("ACPI: present MADT=%s MCFG=%s HPET=%s FADT=%s\n",
+               g_have_madt ? "yes" : "no",
+               g_have_mcfg ? "yes" : "no",
+               g_have_hpet ? "yes" : "no",
+               g_have_fadt ? "yes" : "no");
 }
 
 int acpi_pss_count(void) {
@@ -747,5 +809,22 @@ int acpi_sleep(uint8_t state) {
         outw((uint16_t)g_fadt->pm1b_cnt_blk, (uint16_t)(pm1b | ACPI_SLP_EN_BIT));
     }
 
+    return 1;
+}
+
+int acpi_reset(void) {
+    if (!g_fadt) return 0;
+    const struct acpi_gas *gas = (const struct acpi_gas *)g_fadt->reset_reg;
+    if (!gas || gas->address == 0 || g_fadt->reset_value == 0) return 0;
+    if (gas->addr_space_id != 1) return 0; /* System I/O only */
+    uint16_t port = (uint16_t)gas->address;
+    uint8_t value = g_fadt->reset_value;
+    if (gas->reg_bit_width >= 32) {
+        outl(port, (uint32_t)value);
+    } else if (gas->reg_bit_width >= 16) {
+        outw(port, (uint16_t)value);
+    } else {
+        outb(port, value);
+    }
     return 1;
 }

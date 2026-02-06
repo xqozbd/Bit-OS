@@ -441,6 +441,18 @@ void pcnet_log_status(void) {
                g_pcnet_mac[3], g_pcnet_mac[4], g_pcnet_mac[5]);
 }
 
+int pcnet_is_found(void) {
+    return g_pcnet_found;
+}
+
+int pcnet_is_ready(void) {
+    return g_pcnet_ready;
+}
+
+int pcnet_has_error(void) {
+    return g_pcnet_error;
+}
+
 void pcnet_tick(void) {
     if (!g_pcnet_ready) return;
     pcnet_poll_rx();

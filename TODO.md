@@ -18,6 +18,7 @@
 - [x] APIC timer calibration and switch from PIT to APIC timer for scheduling.
 - [x] Page fault handler with fault reason logging.
 - [x] Page fault recovery + kill userspace task.
+- [x] Kernel panic backtrace (stack walk).
 - [x] Limine module loading as an initramfs.
 - [x] Basic VFS layer and in-memory FS for `ls/cd/cat`.
 - [x] Line editing (backspace, left/right).
@@ -38,6 +39,8 @@
 - [x] ELF loader: relocations + stack setup with argv/envp.
 - [x] Initramfs unpacker (tar or cpio) into VFS.
 - [x] VFS: path normalization + mount points.
+- [x] Driver registry (init order + status).
+- [x] Interrupt masking / IRQ priority routing.
 - [x] Console output buffering + scrollback.
 - [x] PS/2 mouse packet sync + rate limiting improvements.
 - [x] Ring buffer logging + persistent crash dump to RAM.
@@ -55,13 +58,11 @@
 - [x] Process/task model (PID, state, kernel stack, page table).
 - [x] Userspace memory allocator (brk/sbrk syscall).
 - [x] Keyboard line discipline (canonical mode, Ctrl+C, Ctrl+V).
+- [x] ACPI parsing stub (device discovery).
+- [x] Configurable boot params (Limine cmdline).
+- [x] Proper shutdown/restart (ACPI + fallback reset).
 
 ## Next
-- [ ] Interrupt masking / IRQ priority routing.
-- [ ] Driver registry (init order + status).
-- [ ] ACPI parsing stub (device discovery).
-- [ ] Kernel panic backtrace (stack walk).
-- [ ] Configurable boot params (Limine cmdline).
 - [ ] File descriptor table per-process + basic `open/read/write/close`.
 - [ ] Userspace `fork/exec/exit` support.
 - [ ] Signals: basic delivery and default handlers.

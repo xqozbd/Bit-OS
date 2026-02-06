@@ -39,3 +39,21 @@ None
 ## Features Changed: 
 Booting sequence. 
 Clear screen printing BitOS's version when the banner already does so.
+
+## v0.1.1
+
+## Features Added:
+Interrupt masking / IRQ priority routing (PIC mask/unmask + LAPIC TPR).
+Driver registry (init order + status).
+ACPI parsing stub (device discovery + table list command).
+ACPI table presence summary (MADT/MCFG/HPET/FADT).
+Kernel panic backtrace (stack walk).
+Configurable boot params (Limine cmdline).
+Proper shutdown/restart (ACPI S5 + reset fallback).
+
+## Features Removed:
+None
+
+## Features Changed:
+Build warnings cleaned up (log/acpi prototypes).
+Driver registry output: show "not found" directly for skipped devices.

@@ -23,11 +23,13 @@
 #include "drivers/net/pcnet.h"
 #include "kernel/power.h"
 #include "kernel/task.h"
+#include "sys/acpi.h"
+#include "kernel/driver_registry.h"
 
 static const char *const g_commands[] = {
     "help", "clear", "time", "mem", "memtest", "cputest", "ps",
     "ls", "cd", "pwd", "cat", "run", "echo", "ver", "debug", "ping",
-    "shutdown", "restart", "s3", "s4", "thermal", "dmesg"
+    "shutdown", "restart", "s3", "s4", "thermal", "acpi", "dmesg", "drivers"
 };
 
 
@@ -55,7 +57,9 @@ static void cmd_help(void) {
     log_printf("  s3 (suspend to RAM)\n");
     log_printf("  s4 (hibernate)\n");
     log_printf("  thermal (ACPI thermal status)\n");
+    log_printf("  acpi (ACPI table list)\n");
     log_printf("  dmesg (dump ring buffer log)\n");
+    log_printf("  drivers (driver registry status)\n");
     log_printf("  sizes: 1g 512m 256k (also gb/mb/kb/gig/meg)\n");
     log_printf("  time: 20s 1min 2minutes\n\n");
 
@@ -114,24 +118,14 @@ static void cmd_debug(void) {
     bootinfo_log();
     systeminfo_log();
     pcnet_log_status();
+    driver_log_status();
     log_printf("\n");
 }
 
 static void cmd_shutdown(void) {
     log_printf("Shutting down Bit-OS...\n");
     log_printf("Goodbye\n");
-
-    if (power_shutdown_acpi()) {
-        halt_forever();
-    }
-
-    outw(0x604, 0x2000);
-    outw(0xB004, 0x2000);
-    outw(0x4004, 0x3400);
-    outw(0x4004, 0x2000);
-
-    // fallback is to stop the cpu
-    halt_forever();
+    power_shutdown();
 }
 
 
@@ -155,8 +149,7 @@ static void cmd_ver(void) {
 
 static void cmd_restart(void) {
     log_printf("Restarting...\n");
-    outb(0x64, 0xFE);
-    halt_forever();
+    power_restart();
 }
 
 static void cmd_s3(void) {
@@ -175,12 +168,20 @@ static void cmd_thermal(void) {
     acpi_thermal_log();
 }
 
+static void cmd_acpi(void) {
+    acpi_device_discovery_log();
+}
+
 static void cmd_dmesg(void) {
     log_ring_dump();
 }
 
 static void cmd_ps(void) {
     task_dump_list();
+}
+
+static void cmd_drivers(void) {
+    driver_log_status();
 }
 
 static void cmd_cat(const char *path, int cwd) {
@@ -464,8 +465,12 @@ int commands_exec(int argc, char **argv, struct command_ctx *ctx) {
         cmd_s4();
     } else if (str_eq(argv[0], "thermal")) {
         cmd_thermal();
+    } else if (str_eq(argv[0], "acpi")) {
+        cmd_acpi();
     } else if (str_eq(argv[0], "dmesg")) {
         cmd_dmesg();
+    } else if (str_eq(argv[0], "drivers")) {
+        cmd_drivers();
     } else {
         return 0;
     }

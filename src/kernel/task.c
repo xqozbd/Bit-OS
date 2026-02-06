@@ -3,6 +3,7 @@
 #include <stddef.h>
 
 #include "lib/compat.h"
+#include "lib/log.h"
 #include "kernel/heap.h"
 #include "kernel/thread.h"
 #include "kernel/sched.h"

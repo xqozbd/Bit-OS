@@ -30,6 +30,8 @@
 #include "kernel/pstate.h"
 #include "sys/acpi.h"
 #include "kernel/power.h"
+#include "kernel/driver_registry.h"
+#include "sys/boot_params.h"
 
 /* Bootstrap stack: keep it inside the kernel image so it's mapped in our page tables. */
 #define KSTACK_SIZE (64 * 1024)
@@ -66,6 +68,25 @@ void kmain(void) {
 static void kmain_stage2(void) {
     log_init_serial();
     log_printf("Boot: serial logger ready (COM1)\n");
+    driver_registry_init();
+    uint32_t drv_order = 0;
+    int drv_idt = driver_register("idt", drv_order++);
+    int drv_fb = driver_register("framebuffer", drv_order++);
+    int drv_banner = driver_register("banner", drv_order++);
+    int drv_pmm = driver_register("pmm", drv_order++);
+    int drv_paging = driver_register("paging", drv_order++);
+    int drv_heap = driver_register("heap", drv_order++);
+    int drv_pcnet = driver_register("pcnet", drv_order++);
+    int drv_pci = driver_register("pci", drv_order++);
+    int drv_acpi = driver_register("acpi", drv_order++);
+    int drv_pstate = driver_register("pstate", drv_order++);
+    int drv_initramfs = driver_register("initramfs", drv_order++);
+    int drv_vfs = driver_register("vfs", drv_order++);
+    int drv_smp = driver_register("smp", drv_order++);
+    int drv_timer = driver_register("timer", drv_order++);
+    int drv_sched = driver_register("sched", drv_order++);
+    int drv_console = driver_register("console", drv_order++);
+    int drv_mouse = driver_register("mouse", drv_order++);
     watchdog_early_stage("kmain_start");
     log_printf("Boot: enabling CPU SSE...\n");
     cpu_enable_sse();
@@ -75,16 +96,24 @@ static void kmain_stage2(void) {
     watchdog_early_stage("idt_init");
     watchdog_log_stage("idt_init");
     log_printf("Boot: IDT ready\n");
+    driver_set_status_idx(drv_idt, DRIVER_STATUS_OK, NULL);
 
     log_printf("Boot: checking Limine base revision...\n");
     if (LIMINE_BASE_REVISION_SUPPORTED(limine_base_revision) == false) {
         log_printf("Boot: Limine base revision unsupported\n");
         halt_forever();
     }
+    if (exec_cmdline_request.response && exec_cmdline_request.response->cmdline) {
+        boot_params_init(exec_cmdline_request.response->cmdline);
+        log_printf("Boot: cmdline=%s\n", exec_cmdline_request.response->cmdline);
+    } else {
+        boot_params_init(NULL);
+    }
 
     log_printf("Boot: checking framebuffer availability...\n");
     if (!framebuffer_request.response || framebuffer_request.response->framebuffer_count < 1) {
         log_printf("Boot: no framebuffer available\n");
+        driver_set_status_idx(drv_fb, DRIVER_STATUS_FAIL, "no framebuffer");
         halt_forever();
     }
 
@@ -96,9 +125,11 @@ static void kmain_stage2(void) {
     log_set_fb_ready(0);
     watchdog_early_stage("fb_ready");
     watchdog_log_stage("fb_ready");
+    driver_set_status_idx(drv_fb, DRIVER_STATUS_OK, NULL);
     log_printf("Boot: drawing banner...\n");
     banner_init(fb);
     banner_draw();
+    driver_set_status_idx(drv_banner, DRIVER_STATUS_OK, NULL);
     log_printf("Boot: showing boot screen...\n");
     boot_screen_print_loading();
 
@@ -108,18 +139,21 @@ static void kmain_stage2(void) {
     watchdog_early_stage("pmm_init");
     watchdog_log_stage("pmm_init");
     log_printf("Boot: PMM ready\n");
+    driver_set_status_idx(drv_pmm, DRIVER_STATUS_OK, NULL);
     boot_screen_set_status("paging");
     log_printf("Boot: initializing paging...\n");
     paging_init();
     watchdog_early_stage("paging_init");
     watchdog_log_stage("paging_init");
     log_printf("Boot: paging ready\n");
+    driver_set_status_idx(drv_paging, DRIVER_STATUS_OK, NULL);
     boot_screen_set_status("heap");
     log_printf("Boot: initializing heap...\n");
     heap_init();
     watchdog_early_stage("heap_init");
     watchdog_log_stage("heap_init");
     log_printf("Boot: heap ready\n");
+    driver_set_status_idx(drv_heap, DRIVER_STATUS_OK, NULL);
     boot_screen_set_status("pcnet");
     log_printf("Boot: initializing PCNet driver...\n");
     pcnet_init();
@@ -132,7 +166,15 @@ static void kmain_stage2(void) {
     watchdog_early_stage("pci_init");
     watchdog_log_stage("pci_init");
     log_printf("Boot: PCI scan complete\n");
+    driver_set_status_idx(drv_pci, DRIVER_STATUS_OK, NULL);
     pcnet_log_status();
+    if (!pcnet_is_found()) {
+        driver_set_status_idx(drv_pcnet, DRIVER_STATUS_SKIPPED, "not found");
+    } else if (pcnet_has_error() || !pcnet_is_ready()) {
+        driver_set_status_idx(drv_pcnet, DRIVER_STATUS_FAIL, "error");
+    } else {
+        driver_set_status_idx(drv_pcnet, DRIVER_STATUS_OK, NULL);
+    }
     boot_screen_set_status("acpi");
     log_printf("Boot: initializing ACPI...\n");
     acpi_init();
@@ -140,6 +182,11 @@ static void kmain_stage2(void) {
     watchdog_log_stage("acpi_init");
     acpi_log_status();
     log_printf("Boot: ACPI init complete\n");
+    if (acpi_is_ready()) {
+        driver_set_status_idx(drv_acpi, DRIVER_STATUS_OK, NULL);
+    } else {
+        driver_set_status_idx(drv_acpi, DRIVER_STATUS_SKIPPED, "not ready");
+    }
     power_init();
     boot_screen_set_status("pstate");
     log_printf("Boot: initializing P-states...\n");
@@ -147,12 +194,18 @@ static void kmain_stage2(void) {
     watchdog_early_stage("pstate_init");
     watchdog_log_stage("pstate_init");
     log_printf("Boot: P-states ready\n");
+    if (acpi_pss_count() > 0 && acpi_pct_count() > 0) {
+        driver_set_status_idx(drv_pstate, DRIVER_STATUS_OK, NULL);
+    } else {
+        driver_set_status_idx(drv_pstate, DRIVER_STATUS_SKIPPED, "no _PSS/_PCT");
+    }
     boot_screen_set_status("initramfs");
     log_printf("Boot: initializing initramfs...\n");
     initramfs_init_from_limine();
     watchdog_early_stage("initramfs");
     watchdog_log_stage("initramfs");
     log_printf("Boot: initramfs ready\n");
+    driver_set_status_idx(drv_initramfs, DRIVER_STATUS_OK, NULL);
     boot_screen_set_status("vfs");
     log_printf("Boot: initializing VFS...\n");
     vfs_init();
@@ -171,24 +224,28 @@ static void kmain_stage2(void) {
     }
     watchdog_early_stage("vfs_init");
     watchdog_log_stage("vfs_init");
+    driver_set_status_idx(drv_vfs, DRIVER_STATUS_OK, NULL);
     boot_screen_set_status("smp");
     log_printf("Boot: initializing SMP...\n");
     smp_init();
     watchdog_early_stage("smp_init");
     watchdog_log_stage("smp_init");
     log_printf("Boot: SMP ready\n");
+    driver_set_status_idx(drv_smp, DRIVER_STATUS_OK, NULL);
     boot_screen_set_status("timer");
     log_printf("Boot: initializing timer...\n");
     timer_init();
     watchdog_checkpoint("timer_init");
     watchdog_log_stage("timer_init");
     log_printf("Boot: timer ready\n");
+    driver_set_status_idx(drv_timer, DRIVER_STATUS_OK, NULL);
     boot_screen_set_status("sched");
     log_printf("Boot: initializing scheduler...\n");
     sched_init();
     sleep_init();
     watchdog_log_stage("sched_init");
     log_printf("Boot: scheduler ready\n");
+    driver_set_status_idx(drv_sched, DRIVER_STATUS_OK, NULL);
     boot_screen_set_status("switching");
     log_printf("Boot: entering monitor...\n");
     monitor_init();
@@ -221,10 +278,12 @@ static void kmain_stage2(void) {
     boot_screen_print_main();
     log_printf("Boot: initializing console...\n");
     console_init();
+    driver_set_status_idx(drv_console, DRIVER_STATUS_OK, NULL);
     watchdog_checkpoint_boot_ok();
     watchdog_checkpoint("mouse_init");
     log_printf("Boot: initializing mouse...\n");
     ms_init();
+    driver_set_status_idx(drv_mouse, DRIVER_STATUS_OK, NULL);
     log_printf("Boot: entering console loop\n");
     log_printf("\b");
     console_run();

@@ -2,6 +2,8 @@
 
 #include "lib/log.h"
 #include "sys/acpi.h"
+#include "arch/x86_64/io.h"
+#include "arch/x86_64/cpu.h"
 
 static void log_state(uint8_t state, const char *name) {
     struct acpi_sleep_state ss;
@@ -33,4 +35,27 @@ int power_suspend_s4(void) {
 int power_shutdown_acpi(void) {
     log_printf("power: entering S5\n");
     return acpi_sleep(5);
+}
+
+void power_shutdown(void) {
+    if (power_shutdown_acpi()) {
+        halt_forever();
+    }
+    outw(0x604, 0x2000);
+    outw(0xB004, 0x2000);
+    outw(0x4004, 0x3400);
+    outw(0x4004, 0x2000);
+    halt_forever();
+}
+
+void power_restart(void) {
+    if (acpi_reset()) {
+        halt_forever();
+    }
+    outb(0x64, 0xFE);
+    outw(0x604, 0x2000);
+    outw(0xB004, 0x2000);
+    outw(0x4004, 0x3400);
+    outw(0x4004, 0x2000);
+    halt_forever();
 }
