@@ -6,6 +6,7 @@
 #include "boot/boot_requests.h"
 #include "lib/log.h"
 #include "lib/strutil.h"
+#include "kernel/slab.h"
 
 enum { IR_MAX_NODES = 256 };
 enum { IR_NAME_BUF = 8192 };
@@ -18,7 +19,7 @@ struct ir_node {
     uint64_t size;
 };
 
-static struct ir_node g_nodes[IR_MAX_NODES];
+static struct ir_node *g_nodes[IR_MAX_NODES];
 static int g_node_count = 0;
 static char g_name_buf[IR_NAME_BUF];
 static size_t g_name_used = 0;
@@ -49,19 +50,23 @@ static const char *name_store(const char *s, size_t len) {
 
 static int node_new(const char *name, int parent, int is_dir) {
     if (g_node_count >= IR_MAX_NODES) return -1;
+    struct ir_node *n = slab_alloc(sizeof(*n));
+    if (!n) return -1;
     int idx = g_node_count++;
-    g_nodes[idx].name = name;
-    g_nodes[idx].parent = parent;
-    g_nodes[idx].is_dir = is_dir;
-    g_nodes[idx].data = NULL;
-    g_nodes[idx].size = 0;
+    n->name = name;
+    n->parent = parent;
+    n->is_dir = is_dir;
+    n->data = NULL;
+    n->size = 0;
+    g_nodes[idx] = n;
     return idx;
 }
 
 static int find_child(int dir, const char *name) {
     for (int i = 0; i < g_node_count; ++i) {
-        if (g_nodes[i].parent != dir) continue;
-        if (str_eq(g_nodes[i].name, name)) return i;
+        if (!g_nodes[i]) continue;
+        if (g_nodes[i]->parent != dir) continue;
+        if (str_eq(g_nodes[i]->name, name)) return i;
     }
     return -1;
 }
@@ -93,8 +98,8 @@ static int add_file(int parent, const char *name, size_t len, const uint8_t *dat
     if (!stored) return -1;
     int idx = node_new(stored, parent, 0);
     if (idx >= 0) {
-        g_nodes[idx].data = data;
-        g_nodes[idx].size = size;
+        g_nodes[idx]->data = data;
+        g_nodes[idx]->size = size;
     }
     return idx;
 }
@@ -126,6 +131,12 @@ static int ensure_path_dirs(const char *path, int *parent_out, const char **name
 
 int initramfs_init_from_limine(void) {
     g_available = 0;
+    for (int i = 0; i < g_node_count; ++i) {
+        if (g_nodes[i]) {
+            slab_free(g_nodes[i]);
+            g_nodes[i] = NULL;
+        }
+    }
     g_node_count = 0;
     g_name_used = 0;
 
@@ -218,15 +229,15 @@ int initramfs_root(void) { return 0; }
 
 int initramfs_is_dir(int node) {
     if (node < 0 || node >= g_node_count) return 0;
-    return g_nodes[node].is_dir != 0;
+    return g_nodes[node] && g_nodes[node]->is_dir != 0;
 }
 
 int initramfs_read_file(int node, const uint8_t **data, uint64_t *size) {
     if (!data || !size) return 0;
     if (node < 0 || node >= g_node_count) return 0;
-    if (g_nodes[node].is_dir) return 0;
-    *data = g_nodes[node].data;
-    *size = g_nodes[node].size;
+    if (!g_nodes[node] || g_nodes[node]->is_dir) return 0;
+    *data = g_nodes[node]->data;
+    *size = g_nodes[node]->size;
     return (*data != NULL);
 }
 
@@ -245,7 +256,7 @@ int initramfs_resolve(int cwd, const char *path) {
                 if (str_eq(part, ".")) {
                     /* no-op */
                 } else if (str_eq(part, "..")) {
-                    if (cur != 0) cur = g_nodes[cur].parent;
+                    if (cur != 0 && g_nodes[cur]) cur = g_nodes[cur]->parent;
                 } else {
                     int next = find_child(cur, part);
                     if (next < 0) return -1;
@@ -271,12 +282,13 @@ void initramfs_pwd(int cwd) {
         return;
     }
     while (cur > 0 && len + 2 < sizeof(buf)) {
-        const char *name = g_nodes[cur].name;
+        if (!g_nodes[cur]) break;
+        const char *name = g_nodes[cur]->name;
         size_t nlen = str_len(name);
         if (len + nlen + 1 >= sizeof(buf)) break;
         for (size_t i = 0; i < nlen; ++i) buf[len++] = name[i];
         buf[len++] = '/';
-        cur = g_nodes[cur].parent;
+        cur = g_nodes[cur]->parent;
     }
     for (size_t i = 0; i < len / 2; ++i) {
         char tmp = buf[i];
@@ -289,14 +301,16 @@ void initramfs_pwd(int cwd) {
 
 void initramfs_ls(int node) {
     if (node < 0 || node >= g_node_count) return;
-    const struct ir_node *d = &g_nodes[node];
+    const struct ir_node *d = g_nodes[node];
+    if (!d) return;
     if (!d->is_dir) {
         log_printf("%s\n", d->name);
         return;
     }
     for (int i = 0; i < g_node_count; ++i) {
-        if (g_nodes[i].parent != node) continue;
-        log_printf("%s%s ", g_nodes[i].name, g_nodes[i].is_dir ? "/" : "");
+        if (!g_nodes[i]) continue;
+        if (g_nodes[i]->parent != node) continue;
+        log_printf("%s%s ", g_nodes[i]->name, g_nodes[i]->is_dir ? "/" : "");
     }
     log_printf("\n");
 }

@@ -74,5 +74,6 @@ void task_init_bootstrap(struct thread *t);
 void task_on_thread_exit(struct thread *t);
 uint32_t task_pid(struct task *t);
 void task_dump_list(void);
+size_t task_format_list(char *buf, size_t buf_len);
 
 #endif /* KERNEL_TASK_H */

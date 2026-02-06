@@ -26,6 +26,7 @@ enum {
     SYS_RECV = 20,
     SYS_MMAP = 21,
     SYS_MUNMAP = 22,
+    SYS_GETDNS = 23,
     SYS_MAX
 };
 

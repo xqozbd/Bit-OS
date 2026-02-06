@@ -10,6 +10,7 @@
 #define TCP_MAX_CONNS 8
 #define TCP_RX_BUF 2048
 #define TCP_RETX_TICKS 50
+#define TCP_RETX_MAX 5
 
 enum tcp_state {
     TCP_CLOSED = 0,
@@ -34,6 +35,7 @@ struct tcp_conn {
     uint32_t snd_una;
     uint32_t rcv_nxt;
     uint32_t retx_deadline;
+    uint8_t retx_count;
     uint16_t last_len;
     uint8_t last_flags;
     uint8_t last_payload[512];
@@ -58,6 +60,7 @@ static int alloc_conn(void) {
             g_conns[i].snd_una = 0;
             g_conns[i].rcv_nxt = 0;
             g_conns[i].retx_deadline = 0;
+            g_conns[i].retx_count = 0;
             g_conns[i].last_len = 0;
             g_conns[i].last_flags = 0;
             g_conns[i].rx_head = 0;
@@ -75,6 +78,7 @@ static void free_conn(int id) {
     g_conns[id].lport = 0;
     g_conns[id].rport = 0;
     g_conns[id].retx_deadline = 0;
+    g_conns[id].retx_count = 0;
     g_conns[id].last_len = 0;
     g_conns[id].last_flags = 0;
     g_conns[id].rx_head = 0;
@@ -92,6 +96,7 @@ static void tcp_send_segment(struct tcp_conn *c, uint8_t flags,
         c->last_len = len;
         c->last_flags = flags;
         c->retx_deadline = g_ticks + TCP_RETX_TICKS;
+        c->retx_count = 0;
     }
     if (flags & TCP_FLAG_SYN) c->snd_nxt += 1;
     if (flags & TCP_FLAG_FIN) c->snd_nxt += 1;
@@ -235,7 +240,8 @@ void tcp_on_rx(const uint8_t src_ip[4], const uint8_t dst_ip[4],
     }
 
     if (c->state == TCP_SYN_SENT) {
-        if ((flags & (TCP_FLAG_SYN | TCP_FLAG_ACK)) == (TCP_FLAG_SYN | TCP_FLAG_ACK)) {
+        if ((flags & (TCP_FLAG_SYN | TCP_FLAG_ACK)) == (TCP_FLAG_SYN | TCP_FLAG_ACK) &&
+            ack == c->snd_nxt) {
             c->rcv_nxt = seq + 1;
             c->state = TCP_ESTABLISHED;
             tcp_send_segment(c, TCP_FLAG_ACK, NULL, 0);
@@ -244,10 +250,14 @@ void tcp_on_rx(const uint8_t src_ip[4], const uint8_t dst_ip[4],
     }
 
     if (c->state == TCP_SYN_RECV) {
-        if (flags & TCP_FLAG_ACK) {
+        if ((flags & TCP_FLAG_ACK) && ack == c->snd_nxt) {
             c->state = TCP_ESTABLISHED;
         }
         return;
+    }
+
+    if (c->state == TCP_FIN_WAIT1 && (flags & TCP_FLAG_ACK) && ack == c->snd_nxt) {
+        c->state = TCP_FIN_WAIT2;
     }
 
     if (flags & TCP_FLAG_FIN) {
@@ -255,6 +265,8 @@ void tcp_on_rx(const uint8_t src_ip[4], const uint8_t dst_ip[4],
         tcp_send_segment(c, TCP_FLAG_ACK, NULL, 0);
         if (c->state == TCP_ESTABLISHED) {
             c->state = TCP_CLOSE_WAIT;
+        } else if (c->state == TCP_FIN_WAIT2) {
+            free_conn((int)(c - g_conns));
         }
     }
 
@@ -281,6 +293,12 @@ void tcp_tick(void) {
         struct tcp_conn *c = &g_conns[i];
         if (!c->used) continue;
         if (c->retx_deadline && g_ticks >= c->retx_deadline) {
+            if (c->retx_count >= TCP_RETX_MAX) {
+                log_printf("tcp: retransmit limit reached, closing conn %d\n", i);
+                free_conn(i);
+                continue;
+            }
+            c->retx_count++;
             tcp_send_segment(c, c->last_flags, c->last_payload, c->last_len);
         }
     }

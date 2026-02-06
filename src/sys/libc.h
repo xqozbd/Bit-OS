@@ -102,6 +102,32 @@ static inline long sys_munmap(void *addr, size_t len) {
     return __syscall6(22, (long)addr, (long)len, 0, 0, 0, 0);
 }
 
+/* Userspace DNS stub: accepts dotted-quad literals only. */
+static inline int dns_resolve(const char *name, uint8_t out_ip[4]) {
+    if (!name || !out_ip) return -1;
+    unsigned int octet = 0;
+    unsigned int dots = 0;
+    unsigned int idx = 0;
+    const char *p = name;
+    while (*p) {
+        if (*p >= '0' && *p <= '9') {
+            octet = octet * 10u + (unsigned int)(*p - '0');
+            if (octet > 255u) return -1;
+        } else if (*p == '.') {
+            if (dots >= 3u || idx >= 4u) return -1;
+            out_ip[idx++] = (uint8_t)octet;
+            octet = 0;
+            dots++;
+        } else {
+            return -1;
+        }
+        p++;
+    }
+    if (dots != 3u || idx != 3u) return -1;
+    out_ip[idx] = (uint8_t)octet;
+    return 0;
+}
+
 enum {
     SIG_DFL = 0,
     SIG_IGN = 1,

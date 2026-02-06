@@ -49,6 +49,7 @@ static void ap_entry_c(struct limine_mp_info *info) {
 __attribute__((naked, noreturn, used))
 static void ap_entry(struct limine_mp_info *info) {
 #if defined(__GNUC__) || defined(__clang__)
+    (void)info;
     __asm__ volatile(
         ".intel_syntax noprefix\n"
         "cli\n"

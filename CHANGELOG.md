@@ -68,7 +68,15 @@ TCP sockets (connect/listen/accept + basic retransmit).
 Simple init process that spawns a user shell (init/busybox/sh).
 Per-CPU run queue load balancing.
 Userland mmap/munmap support (anonymous mappings).
+SLAB/SLUB kernel object allocator.
+Kernel SLAB caches for VFS nodes and inodes.
+Add /proc tasks and /sys drivers entries.
 Crash isolation: user task faults no longer halt the kernel.
+Kernel timer wheel for efficient sleep timers.
+TCP stack: three-way handshake + retransmission improvements.
+DHCP client: auto-configure IP, gateway, and mask.
+Userspace DNS resolver stub (dotted-quad parsing).
+USB xHCI controller init (MMIO map/reset + rings + port status logging).
 
 ## Features Removed:
 None

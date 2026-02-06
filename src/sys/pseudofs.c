@@ -7,6 +7,8 @@
 #include "lib/strutil.h"
 #include "arch/x86_64/timer.h"
 #include "kernel/meminfo.h"
+#include "kernel/task.h"
+#include "kernel/driver_registry.h"
 #include "lib/version.h"
 
 static char g_buf[256];
@@ -39,9 +41,11 @@ static int node_for_path(int fs_id, const char *path) {
     } else if (fs_id == PSEUDOFS_PROC) {
         if (str_eq(path, "uptime")) return 1;
         if (str_eq(path, "meminfo")) return 2;
+        if (str_eq(path, "tasks")) return 3;
     } else if (fs_id == PSEUDOFS_SYS) {
         if (str_eq(path, "build")) return 1;
         if (str_eq(path, "version")) return 2;
+        if (str_eq(path, "drivers")) return 3;
     }
     return -1;
 }
@@ -106,6 +110,10 @@ int pseudofs_read_file(int fs_id, int node, const uint8_t **data, uint64_t *size
             append_str(&w, &remain, "usable=");
             append_u64(&w, &remain, usable);
             append_char(&w, &remain, '\n');
+        } else if (node == 3) {
+            size_t used = task_format_list(w, remain);
+            w += used;
+            remain = (remain > used) ? (remain - used) : 0;
         }
     } else if (fs_id == PSEUDOFS_SYS) {
         if (node == 1) {
@@ -116,6 +124,10 @@ int pseudofs_read_file(int fs_id, int node, const uint8_t **data, uint64_t *size
             append_str(&w, &remain, "version=");
             append_str(&w, &remain, BITOS_VERSION);
             append_char(&w, &remain, '\n');
+        } else if (node == 3) {
+            size_t used = driver_registry_format(w, remain);
+            w += used;
+            remain = (remain > used) ? (remain - used) : 0;
         }
     } else if (fs_id == PSEUDOFS_DEV) {
         if (node == 1) {
@@ -143,10 +155,12 @@ void pseudofs_pwd(int fs_id, int cwd) {
     } else if (fs_id == PSEUDOFS_PROC) {
         if (cwd == 1) log_printf("/%s/uptime\n", base);
         else if (cwd == 2) log_printf("/%s/meminfo\n", base);
+        else if (cwd == 3) log_printf("/%s/tasks\n", base);
         else log_printf("/%s\n", base);
     } else if (fs_id == PSEUDOFS_SYS) {
         if (cwd == 1) log_printf("/%s/build\n", base);
         else if (cwd == 2) log_printf("/%s/version\n", base);
+        else if (cwd == 3) log_printf("/%s/drivers\n", base);
         else log_printf("/%s\n", base);
     } else {
         log_printf("/%s\n", base);
@@ -161,8 +175,8 @@ void pseudofs_ls(int fs_id, int node) {
     if (fs_id == PSEUDOFS_DEV) {
         log_printf("null tty0\n");
     } else if (fs_id == PSEUDOFS_PROC) {
-        log_printf("uptime meminfo\n");
+        log_printf("uptime meminfo tasks\n");
     } else if (fs_id == PSEUDOFS_SYS) {
-        log_printf("build version\n");
+        log_printf("build version drivers\n");
     }
 }

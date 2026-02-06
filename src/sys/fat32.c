@@ -7,6 +7,7 @@
 #include "kernel/block.h"
 #include "kernel/partition.h"
 #include "kernel/heap.h"
+#include "kernel/slab.h"
 #include "lib/log.h"
 #include "lib/strutil.h"
 
@@ -76,7 +77,7 @@ static struct partition_info g_part;
 static uint32_t g_fat_lba = 0;
 static uint32_t g_data_lba = 0;
 static uint32_t g_clusters = 0;
-static struct fat32_node g_nodes[FAT32_MAX_NODES];
+static struct fat32_node *g_nodes[FAT32_MAX_NODES];
 static uint32_t g_node_count = 0;
 static uint8_t *g_read_buf = NULL;
 
@@ -107,7 +108,9 @@ static int node_new(uint32_t parent, uint32_t first_cluster, uint32_t size, int 
                     const char *name) {
     if (g_node_count >= FAT32_MAX_NODES) return -1;
     uint32_t idx = g_node_count++;
-    struct fat32_node *n = &g_nodes[idx];
+    struct fat32_node *n = slab_alloc(sizeof(*n));
+    if (!n) return -1;
+    g_nodes[idx] = n;
     n->parent = parent;
     n->first_cluster = first_cluster;
     n->size = size;
@@ -179,6 +182,12 @@ int fat32_init_from_partition(uint32_t part_index) {
     g_ready = 0;
     g_dev = NULL;
     memset(&g_part, 0, sizeof(g_part));
+    for (uint32_t i = 0; i < g_node_count; ++i) {
+        if (g_nodes[i]) {
+            slab_free(g_nodes[i]);
+            g_nodes[i] = NULL;
+        }
+    }
     g_node_count = 0;
     if (g_read_buf) {
         kfree(g_read_buf);
@@ -227,7 +236,8 @@ int fat32_root(void) {
 static int find_child(int dir, const char *name) {
     if (dir < 0 || (uint32_t)dir >= g_node_count) return -1;
     for (uint32_t i = 0; i < g_node_count; ++i) {
-        if (g_nodes[i].parent == (uint32_t)dir && str_eq(g_nodes[i].name, name)) return (int)i;
+        if (!g_nodes[i]) continue;
+        if (g_nodes[i]->parent == (uint32_t)dir && str_eq(g_nodes[i]->name, name)) return (int)i;
     }
     return -1;
 }
@@ -247,7 +257,7 @@ int fat32_resolve(int cwd, const char *path) {
                 if (str_eq(part, ".")) {
                     /* no-op */
                 } else if (str_eq(part, "..")) {
-                    if (cur != 0) cur = (int)g_nodes[cur].parent;
+                    if (cur != 0 && g_nodes[cur]) cur = (int)g_nodes[cur]->parent;
                 } else {
                     int next = find_child(cur, part);
                     if (next < 0) return -1;
@@ -266,13 +276,14 @@ int fat32_resolve(int cwd, const char *path) {
 
 int fat32_is_dir(int node) {
     if (node < 0 || (uint32_t)node >= g_node_count) return 0;
-    return g_nodes[node].is_dir != 0;
+    return g_nodes[node] && g_nodes[node]->is_dir != 0;
 }
 
 int fat32_read_file(int node, const uint8_t **data, uint64_t *size) {
     if (!data || !size) return 0;
     if (node < 0 || (uint32_t)node >= g_node_count) return 0;
-    struct fat32_node *n = &g_nodes[node];
+    struct fat32_node *n = g_nodes[node];
+    if (!n) return 0;
     if (n->is_dir) return 0;
 
     uint32_t sector_size = g_bpb.bytes_per_sector;
@@ -317,12 +328,13 @@ void fat32_pwd(int cwd) {
     size_t len = 0;
     int cur = cwd;
     while (cur > 0 && len + 2 < sizeof(buf)) {
-        const char *name = g_nodes[cur].name;
+        if (!g_nodes[cur]) break;
+        const char *name = g_nodes[cur]->name;
         size_t nlen = str_len(name);
         if (len + nlen + 1 >= sizeof(buf)) break;
         for (size_t i = 0; i < nlen; ++i) buf[len++] = name[i];
         buf[len++] = '/';
-        cur = (int)g_nodes[cur].parent;
+        cur = (int)g_nodes[cur]->parent;
     }
     for (size_t i = 0; i < len / 2; ++i) {
         char tmp = buf[i];
@@ -336,14 +348,16 @@ void fat32_pwd(int cwd) {
 void fat32_ls(int node) {
     if (!g_ready) return;
     if (node < 0 || (uint32_t)node >= g_node_count) return;
-    struct fat32_node *n = &g_nodes[node];
+    struct fat32_node *n = g_nodes[node];
+    if (!n) return;
     if (!n->is_dir) {
         log_printf("%s\n", n->name);
         return;
     }
     for (uint32_t i = 0; i < g_node_count; ++i) {
-        if (g_nodes[i].parent == (uint32_t)node) {
-            log_printf("%s%s ", g_nodes[i].name, g_nodes[i].is_dir ? "/" : "");
+        if (!g_nodes[i]) continue;
+        if (g_nodes[i]->parent == (uint32_t)node) {
+            log_printf("%s%s ", g_nodes[i]->name, g_nodes[i]->is_dir ? "/" : "");
         }
     }
     log_printf("\n");

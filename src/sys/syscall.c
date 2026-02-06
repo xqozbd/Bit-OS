@@ -14,6 +14,7 @@
 #include "sys/vfs.h"
 #include "arch/x86_64/usermode.h"
 #include "kernel/socket.h"
+#include "kernel/dhcp.h"
 
 extern void *memcpy(void *restrict dest, const void *restrict src, size_t n);
 
@@ -398,6 +399,14 @@ static uint64_t sys_munmap_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t 
     return (uint64_t)task_munmap(t, addr, len);
 }
 
+static uint64_t sys_getdns_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    uint8_t *out = (uint8_t *)a1;
+    if (!out) return (uint64_t)-1;
+    if (dhcp_get_dns(out) != 0) return (uint64_t)-1;
+    return 0;
+}
+
 static syscall_fn g_syscalls[SYS_MAX] = {
     0,
     sys_write_impl,
@@ -421,7 +430,8 @@ static syscall_fn g_syscalls[SYS_MAX] = {
     sys_send_impl,
     sys_recv_impl,
     sys_mmap_impl,
-    sys_munmap_impl
+    sys_munmap_impl,
+    sys_getdns_impl
 };
 
 uint64_t syscall_dispatch(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3,

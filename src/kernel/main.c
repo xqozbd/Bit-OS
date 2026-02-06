@@ -34,6 +34,7 @@
 #include "drivers/ps2/mouse.h"
 #include "drivers/pci/pci.h"
 #include "drivers/net/pcnet.h"
+#include "drivers/usb/xhci.h"
 #include "kernel/time.h"
 #include "kernel/pstate.h"
 #include "sys/acpi.h"
@@ -41,6 +42,7 @@
 #include "kernel/socket.h"
 #include "kernel/driver_registry.h"
 #include "kernel/init.h"
+#include "kernel/dhcp.h"
 #include "sys/boot_params.h"
 
 /* Bootstrap stack: keep it inside the kernel image so it's mapped in our page tables. */
@@ -91,6 +93,7 @@ static void kmain_stage2(void) {
     int drv_ata = driver_register("ata", drv_order++);
     int drv_partition = driver_register("partition", drv_order++);
     int drv_pcnet = driver_register("pcnet", drv_order++);
+    int drv_xhci = driver_register("xhci", drv_order++);
     int drv_pci = driver_register("pci", drv_order++);
     int drv_acpi = driver_register("acpi", drv_order++);
     int drv_pstate = driver_register("pstate", drv_order++);
@@ -211,6 +214,8 @@ static void kmain_stage2(void) {
     boot_screen_set_status("pcnet");
     log_printf("Boot: initializing PCNet driver...\n");
     pcnet_init();
+    log_printf("Boot: registering xHCI driver...\n");
+    xhci_init();
     watchdog_early_stage("pcnet_init");
     watchdog_log_stage("pcnet_init");
     log_printf("Boot: PCNet ready\n");
@@ -234,8 +239,20 @@ static void kmain_stage2(void) {
     } else {
         driver_set_status_idx(drv_pcnet, DRIVER_STATUS_OK, NULL);
     }
+    if (xhci_is_ready()) {
+        driver_set_status_idx(drv_xhci, DRIVER_STATUS_OK, NULL);
+    } else {
+        driver_set_status_idx(drv_xhci, DRIVER_STATUS_SKIPPED, "not found");
+    }
     socket_init();
     log_printf("Boot: socket layer ready\n");
+    if (pcnet_is_ready()) {
+        if (dhcp_request() == 0) {
+            log_printf("Boot: DHCP configuration applied\n");
+        } else {
+            log_printf("Boot: DHCP failed, using static IP\n");
+        }
+    }
     boot_screen_set_status("acpi");
     log_printf("Boot: initializing ACPI...\n");
     acpi_init();

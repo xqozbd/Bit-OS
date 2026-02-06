@@ -6,42 +6,85 @@
 #include "kernel/thread.h"
 #include "lib/log.h"
 
-struct sleep_node {
-    struct sleep_node *next;
-    struct thread *t;
-    uint64_t wake_tick;
-};
+#define SLEEP_WHEEL_BITS 8u
+#define SLEEP_WHEEL_SIZE (1u << SLEEP_WHEEL_BITS)
 
-static struct sleep_node *g_sleep_head = NULL;
+static struct thread *g_sleep_wheel[SLEEP_WHEEL_SIZE];
+static struct thread *g_sleep_overflow = NULL;
+static uint64_t g_sleep_last_tick = 0;
 
 void sleep_init(void) {
-    g_sleep_head = NULL;
+    for (uint32_t i = 0; i < SLEEP_WHEEL_SIZE; ++i) {
+        g_sleep_wheel[i] = NULL;
+    }
+    g_sleep_overflow = NULL;
+    g_sleep_last_tick = timer_uptime_ticks();
 }
 
-static void sleep_insert(struct sleep_node *n) {
-    if (!g_sleep_head || n->wake_tick < g_sleep_head->wake_tick) {
-        n->next = g_sleep_head;
-        g_sleep_head = n;
+static void overflow_insert(struct thread *t) {
+    if (!g_sleep_overflow || t->sleep_wake_tick < g_sleep_overflow->sleep_wake_tick) {
+        t->sleep_next = g_sleep_overflow;
+        g_sleep_overflow = t;
         return;
     }
-    struct sleep_node *cur = g_sleep_head;
-    while (cur->next && cur->next->wake_tick <= n->wake_tick) {
-        cur = cur->next;
+    struct thread *cur = g_sleep_overflow;
+    while (cur->sleep_next && cur->sleep_next->sleep_wake_tick <= t->sleep_wake_tick) {
+        cur = cur->sleep_next;
     }
-    n->next = cur->next;
-    cur->next = n;
+    t->sleep_next = cur->sleep_next;
+    cur->sleep_next = t;
+}
+
+static void wheel_insert(struct thread *t) {
+    uint32_t slot = (uint32_t)(t->sleep_wake_tick & (SLEEP_WHEEL_SIZE - 1u));
+    t->sleep_next = g_sleep_wheel[slot];
+    g_sleep_wheel[slot] = t;
+}
+
+static void wake_thread(struct thread *t) {
+    if (t && t->state == THREAD_BLOCKED) {
+        t->state = THREAD_READY;
+        t->sleep_next = NULL;
+        sched_enqueue(t);
+    }
 }
 
 void sleep_tick(void) {
     uint64_t now = timer_uptime_ticks();
-    while (g_sleep_head && g_sleep_head->wake_tick <= now) {
-        struct sleep_node *n = g_sleep_head;
-        g_sleep_head = n->next;
-        if (n->t && n->t->state == THREAD_BLOCKED) {
-            n->t->state = THREAD_READY;
-            sched_enqueue(n->t);
+    if (now <= g_sleep_last_tick) return;
+
+    for (uint64_t tick = g_sleep_last_tick + 1; tick <= now; ++tick) {
+        uint32_t slot = (uint32_t)(tick & (SLEEP_WHEEL_SIZE - 1u));
+        struct thread *t = g_sleep_wheel[slot];
+        g_sleep_wheel[slot] = NULL;
+        while (t) {
+            struct thread *next = t->sleep_next;
+            t->sleep_next = NULL;
+            if (t->sleep_wake_tick <= tick) {
+                wake_thread(t);
+            } else {
+                wheel_insert(t);
+            }
+            t = next;
+        }
+
+        while (g_sleep_overflow && g_sleep_overflow->sleep_wake_tick <= tick) {
+            struct thread *wake = g_sleep_overflow;
+            g_sleep_overflow = wake->sleep_next;
+            wake->sleep_next = NULL;
+            wake_thread(wake);
+        }
+
+        while (g_sleep_overflow &&
+               (g_sleep_overflow->sleep_wake_tick - tick) < SLEEP_WHEEL_SIZE) {
+            struct thread *move = g_sleep_overflow;
+            g_sleep_overflow = move->sleep_next;
+            move->sleep_next = NULL;
+            wheel_insert(move);
         }
     }
+
+    g_sleep_last_tick = now;
 }
 
 void sleep_ticks(uint64_t ticks) {
@@ -49,14 +92,16 @@ void sleep_ticks(uint64_t ticks) {
     struct thread *t = thread_current();
     if (!t) return;
 
-    struct sleep_node node;
-    node.t = t;
-    node.wake_tick = timer_uptime_ticks() + ticks;
-    node.next = NULL;
-
+    uint64_t now = timer_uptime_ticks();
+    t->sleep_wake_tick = now + ticks;
+    t->sleep_next = NULL;
     cpu_disable_interrupts();
     t->state = THREAD_BLOCKED;
-    sleep_insert(&node);
+    if (ticks < SLEEP_WHEEL_SIZE) {
+        wheel_insert(t);
+    } else {
+        overflow_insert(t);
+    }
     cpu_enable_interrupts();
     sched_yield();
 }

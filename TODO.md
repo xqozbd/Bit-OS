@@ -80,17 +80,16 @@
 - [x] Per-CPU run queue load balancing.
 - [x] Crash isolation: kernel survives user task faults.
 - [x] Userland `mmap` / `munmap` support.
+- [x] SLAB/SLUB kernel object allocator.
+- [x] Kernel SLAB object caches for vfs/inodes.
+- [x] `/proc` and `/sys` pseudo-filesystem entries for processes and devices.
+- [x] Kernel timer wheel or hierarchical timer for efficient timers.
+- [x] TCP stack with three-way handshake and retransmission.
+- [x] DHCP client to auto-configure IP addresses.
+- [x] DNS resolver stub in userspace.
+- [x] USB xHCI controller init + port status (no device enumeration yet).
 
 ## Next
-- [ ] SLAB/SLUB kernel object allocator.
-- [ ] Copy-on-write `fork()` support.
-- [ ] Kernel SLAB object caches for vfs/inodes.
-- [ ] `/proc` and `/sys` pseudo-filesystem entries for processes and devices.
-- [ ] Kernel timer wheel or hierarchical timer for efficient timers.
-- [ ] TCP stack with three-way handshake and retransmission.
-- [ ] DHCP client to auto-configure IP addresses.
-- [ ] DNS resolver stub in userspace.
-- [ ] USB xHCI controller driver.
 - [ ] USB device manager (keyboard, mouse, storage support).
 - [ ] Terminal VT100 emulation + colors.
 - [ ] Scrollback buffer in console.

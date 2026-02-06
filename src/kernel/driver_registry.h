@@ -24,5 +24,6 @@ void driver_set_status_idx(int index, enum driver_status status, const char *det
 void driver_set_status(const char *name, enum driver_status status, const char *detail);
 const struct driver_entry *driver_entries(size_t *out_count);
 void driver_log_status(void);
+size_t driver_registry_format(char *buf, size_t buf_len);
 
 #endif

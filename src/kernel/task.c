@@ -398,6 +398,79 @@ static const char *task_state_name(uint32_t st) {
     }
 }
 
+static void buf_append(char **dst, size_t *remain, const char *s) {
+    if (!dst || !*dst || !remain || !s) return;
+    while (*s && *remain > 1) {
+        **dst = *s++;
+        (*dst)++;
+        (*remain)--;
+    }
+}
+
+static void buf_append_u32(char **dst, size_t *remain, uint32_t v) {
+    char tmp[16];
+    size_t n = 0;
+    if (v == 0) {
+        if (*remain > 1) {
+            **dst = '0';
+            (*dst)++;
+            (*remain)--;
+        }
+        return;
+    }
+    while (v && n < sizeof(tmp)) {
+        tmp[n++] = (char)('0' + (v % 10));
+        v /= 10;
+    }
+    while (n > 0 && *remain > 1) {
+        **dst = tmp[--n];
+        (*dst)++;
+        (*remain)--;
+    }
+}
+
+static void buf_append_hex32(char **dst, size_t *remain, uint32_t v) {
+    static const char hex[] = "0123456789abcdef";
+    if (*remain <= 2) return;
+    **dst = '0'; (*dst)++; (*remain)--;
+    **dst = 'x'; (*dst)++; (*remain)--;
+    for (int i = 7; i >= 0; --i) {
+        if (*remain <= 1) break;
+        uint32_t nib = (v >> (i * 4)) & 0xF;
+        **dst = hex[nib];
+        (*dst)++;
+        (*remain)--;
+    }
+}
+
+size_t task_format_list(char *buf, size_t buf_len) {
+    if (!buf || buf_len == 0) return 0;
+    char *w = buf;
+    size_t remain = buf_len;
+    struct task *cur = g_task_head;
+    if (!cur) {
+        buf_append(&w, &remain, "ps: no tasks\n");
+        *w = '\0';
+        return (size_t)(w - buf);
+    }
+    buf_append(&w, &remain, "PID  TID  STATE    PML4        NAME\n");
+    while (cur) {
+        buf_append_u32(&w, &remain, cur->pid);
+        buf_append(&w, &remain, "   ");
+        buf_append_u32(&w, &remain, cur->tid);
+        buf_append(&w, &remain, "   ");
+        buf_append(&w, &remain, task_state_name(cur->state));
+        buf_append(&w, &remain, "   ");
+        buf_append_hex32(&w, &remain, (uint32_t)cur->pml4_phys);
+        buf_append(&w, &remain, " ");
+        buf_append(&w, &remain, cur->name ? cur->name : "-");
+        buf_append(&w, &remain, "\n");
+        cur = cur->next;
+    }
+    *w = '\0';
+    return (size_t)(w - buf);
+}
+
 void task_dump_list(void) {
     struct task *cur = g_task_head;
     if (!cur) {

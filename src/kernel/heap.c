@@ -2,6 +2,7 @@
 #include <stdint.h>
 
 #include "kernel/heap.h"
+#include "kernel/slab.h"
 #include "lib/log.h"
 #include "arch/x86_64/paging.h"
 #include "kernel/pmm.h"
@@ -89,12 +90,17 @@ static void heap_coalesce(void) {
 void heap_init(void) {
     heap_end = heap_base;
     heap_head = NULL;
+    slab_init();
     log_printf("Heap: base=0x%x\n", (unsigned)heap_base);
 }
 
 void *kmalloc(size_t size) {
     if (size == 0) return NULL;
     size = align_up_size(size, 16);
+    if (size <= 2048) {
+        void *s = slab_alloc(size);
+        if (s) return s;
+    }
 
     struct heap_block *b = heap_head;
     while (b) {
@@ -132,6 +138,10 @@ void *kmalloc(size_t size) {
 
 void kfree(void *ptr) {
     if (!ptr) return;
+    if (slab_owns(ptr)) {
+        slab_free(ptr);
+        return;
+    }
     struct heap_block *b = (struct heap_block *)((uintptr_t)ptr - sizeof(struct heap_block));
     if (b->magic != HEAP_MAGIC) {
         log_printf("Heap: bad free (magic)\n");
@@ -150,6 +160,16 @@ void *krealloc(void *ptr, size_t size) {
     }
 
     size = align_up_size(size, 16);
+    if (slab_owns(ptr)) {
+        size_t old_size = slab_obj_size(ptr);
+        if (size <= old_size) return ptr;
+        void *n = kmalloc(size);
+        if (!n) return NULL;
+        size_t to_copy = old_size < size ? old_size : size;
+        memcpy(n, ptr, to_copy);
+        slab_free(ptr);
+        return n;
+    }
     struct heap_block *b = (struct heap_block *)((uintptr_t)ptr - sizeof(struct heap_block));
     if (b->magic != HEAP_MAGIC) {
         log_printf("Heap: bad realloc (magic)\n");

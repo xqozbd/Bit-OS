@@ -43,6 +43,8 @@ struct thread {
     uint64_t mem_current;
     uint64_t mem_peak;
     uint64_t pml4_phys;
+    struct thread *sleep_next;
+    uint64_t sleep_wake_tick;
     uint8_t is_user;
     const char *name;
     struct task *task;

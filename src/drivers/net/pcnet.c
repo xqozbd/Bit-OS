@@ -69,8 +69,9 @@ static uint32_t g_rx_idx = 0;
 static uint32_t g_tx_idx = 0;
 static uint32_t g_last_arp_tick = 0;
 
-static const uint8_t g_ip_addr[4] = {10, 0, 2, 15};
-static const uint8_t g_gw_addr[4] = {10, 0, 2, 2};
+static uint8_t g_ip_addr[4] = {10, 0, 2, 15};
+static uint8_t g_gw_addr[4] = {10, 0, 2, 2};
+static uint8_t g_netmask[4] = {255, 255, 255, 0};
 static uint8_t g_arp_ip[4];
 static uint8_t g_arp_mac[6];
 static uint8_t g_arp_valid = 0;
@@ -230,6 +231,14 @@ static void pcnet_handle_arp(const uint8_t *pkt, uint16_t len) {
 
 static inline uint16_t net_htons(uint16_t v) {
     return (uint16_t)((v << 8) | (v >> 8));
+}
+
+static int ip_is_zero(const uint8_t ip[4]) {
+    return ip[0] == 0 && ip[1] == 0 && ip[2] == 0 && ip[3] == 0;
+}
+
+static int ip_is_broadcast(const uint8_t ip[4]) {
+    return ip[0] == 255 && ip[1] == 255 && ip[2] == 255 && ip[3] == 255;
 }
 
 static uint16_t net_checksum(const void *data, uint16_t len) {
@@ -420,9 +429,11 @@ static void pcnet_handle_ipv4(const uint8_t *pkt, uint16_t len) {
     uint16_t ip_len = (uint16_t)((ip[2] << 8) | ip[3]);
     if (ip_len < (uint16_t)(ihl * 4)) return;
     if (len < 14 + ip_len) return;
-    if (ip[16] != g_ip_addr[0] || ip[17] != g_ip_addr[1] ||
-        ip[18] != g_ip_addr[2] || ip[19] != g_ip_addr[3]) {
-        return;
+    if (!ip_is_zero(g_ip_addr)) {
+        if (ip[16] != g_ip_addr[0] || ip[17] != g_ip_addr[1] ||
+            ip[18] != g_ip_addr[2] || ip[19] != g_ip_addr[3]) {
+            if (!ip_is_broadcast(&ip[16])) return;
+        }
     }
     if (ip[9] == 1) {
         const uint8_t *icmp = ip + ihl * 4;
@@ -629,6 +640,12 @@ void pcnet_tick(void) {
 int pcnet_udp_send(const uint8_t dst_ip[4], uint16_t src_port, uint16_t dst_port,
                    const uint8_t *data, uint16_t len) {
     if (!g_pcnet_ready || !dst_ip || !data || len == 0) return -1;
+    if (ip_is_broadcast(dst_ip)) {
+        uint8_t dst_mac[6];
+        for (uint8_t i = 0; i < 6; ++i) dst_mac[i] = 0xFF;
+        pcnet_send_ipv4_udp(dst_ip, dst_mac, src_port, dst_port, data, len);
+        return 0;
+    }
     uint8_t dst_mac[6];
     int have_mac = 0;
     if (g_arp_valid &&
@@ -643,6 +660,12 @@ int pcnet_udp_send(const uint8_t dst_ip[4], uint16_t src_port, uint16_t dst_port
     }
     pcnet_send_ipv4_udp(dst_ip, dst_mac, src_port, dst_port, data, len);
     return 0;
+}
+
+int pcnet_udp_send_broadcast(uint16_t src_port, uint16_t dst_port,
+                             const uint8_t *data, uint16_t len) {
+    uint8_t bcast[4] = {255, 255, 255, 255};
+    return pcnet_udp_send(bcast, src_port, dst_port, data, len);
 }
 
 int pcnet_tcp_send(const uint8_t dst_ip[4], uint16_t src_port, uint16_t dst_port,
@@ -687,4 +710,41 @@ void pcnet_ping(const uint8_t ip[4]) {
     const uint8_t payload[8] = {'b','i','t','o','s','p','i','n'};
     pcnet_send_ipv4_icmp(8, 0, ip, dst_mac, 0x1234, 1, payload, sizeof(payload));
     log_printf("ping: sent to %u.%u.%u.%u\n", ip[0], ip[1], ip[2], ip[3]);
+}
+
+void pcnet_set_ip(const uint8_t ip[4]) {
+    if (!ip) return;
+    for (uint8_t i = 0; i < 4; ++i) g_ip_addr[i] = ip[i];
+    g_arp_valid = 0;
+}
+
+void pcnet_set_gw(const uint8_t gw[4]) {
+    if (!gw) return;
+    for (uint8_t i = 0; i < 4; ++i) g_gw_addr[i] = gw[i];
+    g_arp_valid = 0;
+}
+
+void pcnet_set_mask(const uint8_t mask[4]) {
+    if (!mask) return;
+    for (uint8_t i = 0; i < 4; ++i) g_netmask[i] = mask[i];
+}
+
+void pcnet_get_ip(uint8_t out[4]) {
+    if (!out) return;
+    for (uint8_t i = 0; i < 4; ++i) out[i] = g_ip_addr[i];
+}
+
+void pcnet_get_gw(uint8_t out[4]) {
+    if (!out) return;
+    for (uint8_t i = 0; i < 4; ++i) out[i] = g_gw_addr[i];
+}
+
+void pcnet_get_mask(uint8_t out[4]) {
+    if (!out) return;
+    for (uint8_t i = 0; i < 4; ++i) out[i] = g_netmask[i];
+}
+
+void pcnet_get_mac(uint8_t out[6]) {
+    if (!out) return;
+    for (uint8_t i = 0; i < 6; ++i) out[i] = g_pcnet_mac[i];
 }
