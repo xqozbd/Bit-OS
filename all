@@ -1,7 +1,7 @@
 #!/bin/sh
 
 make clean
-make
+make -j
 ./iso.sh
 
 echo "Run in VM Box"
