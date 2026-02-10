@@ -55,6 +55,10 @@ override LDFLAGS += \
     -nostdlib \
     -static \
     -z max-page-size=0x1000 \
+    -R .note \
+    -R .note.gnu.property \
+    -R .note.gnu.build-id \
+    -R .note.* \
     --gc-sections \
     -T linker.lds
 
@@ -90,16 +94,19 @@ bin/$(OUTPUT): linker.lds $(OBJ)
 obj/%.c.o: %.c
 	mkdir -p "$(dir $@)"
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
+	$(TOOLCHAIN_PREFIX)objcopy --remove-section .note.gnu.property $@
 
 # Compile GAS
 obj/%.S.o: %.S
 	mkdir -p "$(dir $@)"
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
+	$(TOOLCHAIN_PREFIX)objcopy --remove-section .note.gnu.property $@
 
 # Compile NASM
 obj/%.asm.o: %.asm
 	mkdir -p "$(dir $@)"
 	$(AS) $(NASMFLAGS) $< -o $@
+	$(TOOLCHAIN_PREFIX)objcopy --remove-section .note.gnu.property $@
 
 # Clean
 .PHONY: clean

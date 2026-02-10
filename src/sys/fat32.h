@@ -16,5 +16,6 @@ int fat32_create(int cwd, const char *name, int is_dir);
 uint64_t fat32_get_size(int node);
 void fat32_pwd(int cwd);
 void fat32_ls(int node);
+void fat32_ensure_scanned(int node);
 
 #endif /* FAT32_H */

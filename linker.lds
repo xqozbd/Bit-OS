@@ -15,6 +15,13 @@ PHDRS
 SECTIONS
 {
 
+    /DISCARD/ : {
+        *(.note.gnu.property)
+        *(.note.gnu.build-id)
+        *(.note .note.*)
+        *(.eh_frame*)
+    }
+
     . = 0xffffffff80000000;
     __kernel_start = .;
 
@@ -37,10 +44,6 @@ SECTIONS
         *(.rodata .rodata.*)
     } :rodata
 
-    .note.gnu.build-id : {
-        *(.note.gnu.build-id)
-    } :rodata
-
     . = ALIGN(CONSTANT(MAXPAGESIZE));
 
     .data : {
@@ -54,9 +57,4 @@ SECTIONS
     } :data
 
     __kernel_end = .;
-
-    /DISCARD/ : {
-        *(.eh_frame*)
-        *(.note .note.*)
-    }
 }

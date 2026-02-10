@@ -2,6 +2,7 @@
 #define SYS_VFS_H
 
 #include <stdint.h>
+#include <stddef.h>
 
 #define VFS_BACKEND_MOCK 1
 #define VFS_BACKEND_INITRAMFS 2
@@ -19,7 +20,14 @@ int vfs_mount(const char *path, int backend, int root_node);
 int vfs_resolve(int cwd, const char *path);
 int vfs_is_dir(int node);
 int vfs_read_file(int node, const uint8_t **data, uint64_t *size);
+int vfs_write_file(int node, const uint8_t *data, uint64_t size, uint64_t offset);
+int vfs_truncate(int node, uint64_t new_size);
+uint64_t vfs_get_size(int node);
+int vfs_create(int cwd, const char *path, int is_dir);
 void vfs_pwd(int cwd);
 void vfs_ls(int node);
+int vfs_list_dir(const char *path, char *out, uint64_t out_len);
+int vfs_build_path(int node, char *out, size_t out_len);
+int vfs_root_backend(void);
 
 #endif /* SYS_VFS_H */

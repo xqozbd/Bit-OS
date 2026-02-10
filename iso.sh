@@ -5,8 +5,6 @@ KERNEL=bitos
 ISO=BitOS.iso
 INITRAMFS_DIR=initramfs
 INITRAMFS_IMG=initramfs.cpio
-USER_INIT_SRC=user/init.c
-USER_INIT_BIN=$INITRAMFS_DIR/bin/init
 
 rm -rf iso_root "$ISO"
 
@@ -22,18 +20,28 @@ for f in $req_files; do
   fi
 done
 
-# Kernel
 cp -v bin/$KERNEL iso_root/boot/
 
 # Initramfs (optional)
-if [ -f "$USER_INIT_SRC" ]; then
-  mkdir -p "$INITRAMFS_DIR/bin"
-  x86_64-linux-gnu-gcc -nostdlib -static -ffreestanding -fno-pie -no-pie \
-    -Wl,-e,_start -Wl,-Ttext=0x400000 \
-    -o "$USER_INIT_BIN" "$USER_INIT_SRC"
-fi
-
 if [ -d "$INITRAMFS_DIR" ]; then
+  rm -rf "$INITRAMFS_DIR/bin"
+  mkdir -p "$INITRAMFS_DIR/bin"
+  for src in user/*.c; do
+    [ -f "$src" ] || continue
+    base=$(basename "$src" .c)
+    x86_64-linux-gnu-gcc -nostdlib -static -ffreestanding -fno-pie -no-pie -Iuser \
+      -Wl,-e,_start -Wl,-T,user/user.lds \
+      -o "$INITRAMFS_DIR/bin/$base" "$src"
+  done
+  mkdir -p "$INITRAMFS_DIR/etc"
+  if [ ! -f "$INITRAMFS_DIR/etc/services.conf" ]; then
+    cat > "$INITRAMFS_DIR/etc/services.conf" <<'EOF'
+# name path after=<dependency>
+ls /bin/ls
+ps /bin/ps
+top /bin/top after=ps
+EOF
+  fi
   (cd "$INITRAMFS_DIR" && find . -print0 | cpio --null -ov --format=newc) > "$INITRAMFS_IMG"
   cp -v "$INITRAMFS_IMG" iso_root/boot/
 fi

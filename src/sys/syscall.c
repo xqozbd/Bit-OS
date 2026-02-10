@@ -12,24 +12,47 @@
 #include "lib/log.h"
 #include "sys/elf_loader.h"
 #include "sys/vfs.h"
+#include "sys/fcntl.h"
 #include "arch/x86_64/usermode.h"
 #include "kernel/socket.h"
 #include "kernel/dhcp.h"
+#include "sys/journal.h"
+#include "sys/initramfs.h"
+#include "sys/fat32.h"
+#include "sys/ext2.h"
+#include "sys/fs_mock.h"
 
 extern void *memcpy(void *restrict dest, const void *restrict src, size_t n);
 
 typedef uint64_t (*syscall_fn)(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 
 static uint64_t sys_write_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
-    (void)a3; (void)a4; (void)a5; (void)a6;
-    const char *buf = (const char *)a1;
-    uint64_t len = a2;
+    (void)a4; (void)a5; (void)a6;
+    int fd = (int)a1;
+    const uint8_t *buf = (const uint8_t *)a2;
+    uint64_t len = a3;
     if (!buf || len == 0) return 0;
     if (len > 4096) len = 4096;
-    for (uint64_t i = 0; i < len; ++i) {
-        log_printf("%c", buf[i]);
+
+    struct task *t = task_current();
+    if (!t) {
+        for (uint64_t i = 0; i < len; ++i) log_printf("%c", (char)buf[i]);
+        return len;
     }
-    return len;
+    struct task_fd *ent = task_fd_get(t, fd);
+    if (!ent) return (uint64_t)-1;
+    if (ent->type == FD_TYPE_CONSOLE) {
+        for (uint64_t i = 0; i < len; ++i) log_printf("%c", (char)buf[i]);
+        return len;
+    }
+    if (ent->type != FD_TYPE_FILE) return (uint64_t)-1;
+    if (ent->flags & O_APPEND) {
+        ent->offset = vfs_get_size(ent->node);
+    }
+    int rc = vfs_write_file(ent->node, buf, len, ent->offset);
+    if (rc < 0) return (uint64_t)-1;
+    ent->offset += (uint64_t)rc;
+    return (uint64_t)rc;
 }
 
 static uint64_t sys_exit_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
@@ -89,11 +112,26 @@ static uint64_t sys_open_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4
     uint32_t flags = (uint32_t)a2;
     if (!path) return (uint64_t)-1;
     int node = vfs_resolve(0, path);
-    if (node < 0) return (uint64_t)-1;
+    if (node < 0) {
+        if (flags & O_CREAT) {
+            node = vfs_create(0, path, 0);
+        }
+        if (node < 0) return (uint64_t)-1;
+    } else {
+        if (vfs_is_dir(node)) return (uint64_t)-1;
+        if (flags & O_TRUNC) {
+            if (vfs_truncate(node, 0) != 0) return (uint64_t)-1;
+        }
+    }
     if (vfs_is_dir(node)) return (uint64_t)-1;
     struct task *t = task_current();
     if (!t) return (uint64_t)-1;
     int fd = task_fd_alloc(t, node, flags);
+    if (fd < 0) return (uint64_t)-1;
+    struct task_fd *ent = task_fd_get(t, fd);
+    if (ent && (flags & O_APPEND)) {
+        ent->offset = vfs_get_size(node);
+    }
     return (uint64_t)fd;
 }
 
@@ -407,6 +445,44 @@ static uint64_t sys_getdns_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t 
     return 0;
 }
 
+static uint64_t sys_listdir_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a4; (void)a5; (void)a6;
+    const char *path = (const char *)a1;
+    char *buf = (char *)a2;
+    uint64_t len = a3;
+    if (!buf || len == 0) return (uint64_t)-1;
+    int rc = vfs_list_dir(path, buf, len);
+    return (rc < 0) ? (uint64_t)-1 : (uint64_t)rc;
+}
+
+static uint64_t sys_mount_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a3; (void)a4; (void)a5; (void)a6;
+    uint32_t part = (uint32_t)a1;
+    uint32_t type = (uint32_t)a2; /* 1=ext2, 2=fat32 */
+    if (type == 1) {
+        if (ext2_init_from_partition(part) != 0) return (uint64_t)-1;
+        vfs_set_root(VFS_BACKEND_EXT2, ext2_root());
+        journal_init();
+        return 0;
+    }
+    if (type == 2) {
+        if (fat32_init_from_partition(part) != 0) return (uint64_t)-1;
+        vfs_set_root(VFS_BACKEND_FAT32, fat32_root());
+        return 0;
+    }
+    return (uint64_t)-1;
+}
+
+static uint64_t sys_umount_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a1; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    if (initramfs_available()) {
+        vfs_set_root(VFS_BACKEND_INITRAMFS, initramfs_root());
+        return 0;
+    }
+    vfs_set_root(VFS_BACKEND_MOCK, fs_root());
+    return 0;
+}
+
 static syscall_fn g_syscalls[SYS_MAX] = {
     0,
     sys_write_impl,
@@ -431,7 +507,10 @@ static syscall_fn g_syscalls[SYS_MAX] = {
     sys_recv_impl,
     sys_mmap_impl,
     sys_munmap_impl,
-    sys_getdns_impl
+    sys_getdns_impl,
+    sys_listdir_impl,
+    sys_mount_impl,
+    sys_umount_impl
 };
 
 uint64_t syscall_dispatch(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3,

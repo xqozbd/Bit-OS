@@ -15,6 +15,7 @@
 #include "sys/initramfs.h"
 #include "sys/fs_mock.h"
 #include "sys/vfs.h"
+#include "sys/journal.h"
 #include "lib/log.h"
 #include "kernel/monitor.h"
 #include "arch/x86_64/paging.h"
@@ -328,6 +329,7 @@ static void kmain_stage2(void) {
         if (ext2_ready) {
             vfs_set_root(VFS_BACKEND_EXT2, ext2_root());
             log_printf("Boot: VFS root set to ext2\n");
+            journal_init();
         } else if (fat_ready) {
             vfs_set_root(VFS_BACKEND_FAT32, fat32_root());
             log_printf("Boot: VFS root set to FAT32\n");

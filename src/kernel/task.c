@@ -19,6 +19,16 @@ static struct task_fd g_boot_fds[16];
 static const uint64_t g_mmap_base_default = 0x0000000080000000ull;
 static const uint64_t g_mmap_limit_default = 0x00000000F0000000ull;
 
+static void fd_set_console(struct task_fd *fd) {
+    if (!fd) return;
+    fd->used = 1;
+    fd->type = FD_TYPE_CONSOLE;
+    fd->node = -1;
+    fd->sock_id = -1;
+    fd->offset = 0;
+    fd->flags = 0;
+}
+
 static uint32_t next_pid(void) {
     return __atomic_fetch_add(&g_next_pid, 1u, __ATOMIC_SEQ_CST);
 }
@@ -43,6 +53,9 @@ void task_fd_init(struct task *t) {
         t->fds[i].offset = 0;
         t->fds[i].flags = 0;
     }
+    fd_set_console(&t->fds[0]);
+    fd_set_console(&t->fds[1]);
+    fd_set_console(&t->fds[2]);
 }
 
 struct task_fd *task_fd_get(struct task *t, int fd) {
@@ -57,7 +70,7 @@ int task_fd_alloc(struct task *t, int node, uint32_t flags) {
     for (int i = 0; i < 16; ++i) {
         if (!t->fds[i].used) {
             t->fds[i].used = 1;
-            t->fds[i].type = 1;
+            t->fds[i].type = FD_TYPE_FILE;
             t->fds[i].node = node;
             t->fds[i].sock_id = -1;
             t->fds[i].offset = 0;
@@ -73,7 +86,7 @@ int task_fd_alloc_socket(struct task *t, int sock_id) {
     for (int i = 0; i < 16; ++i) {
         if (!t->fds[i].used) {
             t->fds[i].used = 1;
-            t->fds[i].type = 2;
+            t->fds[i].type = FD_TYPE_SOCKET;
             t->fds[i].node = -1;
             t->fds[i].sock_id = sock_id;
             t->fds[i].offset = 0;
@@ -88,7 +101,7 @@ int task_fd_close(struct task *t, int fd) {
     if (!t || !t->fds) return -1;
     if (fd < 0 || fd >= 16) return -1;
     if (!t->fds[fd].used) return -1;
-    if (t->fds[fd].type == 2 && t->fds[fd].sock_id >= 0) {
+    if (t->fds[fd].type == FD_TYPE_SOCKET && t->fds[fd].sock_id >= 0) {
         socket_close(t->fds[fd].sock_id);
     }
     t->fds[fd].used = 0;

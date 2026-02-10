@@ -13,6 +13,10 @@ enum task_state {
     TASK_DEAD = 3
 };
 
+#define FD_TYPE_FILE 1
+#define FD_TYPE_SOCKET 2
+#define FD_TYPE_CONSOLE 3
+
 struct task {
     uint32_t pid;
     uint32_t tid;

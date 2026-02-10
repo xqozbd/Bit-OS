@@ -8,7 +8,11 @@
 #include "arch/x86_64/cpu_info.h"
 #include "arch/x86_64/cpu.h"
 #include "drivers/video/fb_printf.h"
+#include "sys/initramfs.h"
 #include "sys/vfs.h"
+#include "sys/ext2.h"
+#include "sys/fat32.h"
+#include "sys/journal.h"
 #include "lib/log.h"
 #include "arch/x86_64/io.h"
 #include "arch/x86_64/paging.h"
@@ -29,6 +33,7 @@
 static const char *const g_commands[] = {
     "help", "clear", "time", "mem", "memtest", "cputest", "ps",
     "ls", "cd", "pwd", "cat", "run", "echo", "ver", "debug", "ping",
+    "mount", "umount", "dd",
     "shutdown", "restart", "s3", "s4", "thermal", "acpi", "dmesg", "drivers"
 };
 
@@ -60,6 +65,9 @@ static void cmd_help(void) {
     log_printf("  acpi (ACPI table list)\n");
     log_printf("  dmesg (dump ring buffer log)\n");
     log_printf("  drivers (driver registry status)\n");
+    log_printf("  mount <part> <ext2|fat32>\n");
+    log_printf("  umount\n");
+    log_printf("  dd <src> <dst>\n");
     log_printf("  sizes: 1g 512m 256k (also gb/mb/kb/gig/meg)\n");
     log_printf("  time: 20s 1min 2minutes\n\n");
 
@@ -337,6 +345,24 @@ static void cmd_cputest(void) {
     log_printf("\n");
 }
 
+static int copy_file(const char *src_path, const char *dst_path, int cwd) {
+    int src = vfs_resolve(cwd, src_path);
+    if (src < 0 || vfs_is_dir(src)) return -1;
+    const uint8_t *data = NULL;
+    uint64_t size = 0;
+    if (!vfs_read_file(src, &data, &size) || !data) return -1;
+
+    int dst = vfs_resolve(cwd, dst_path);
+    if (dst < 0) {
+        dst = vfs_create(cwd, dst_path, 0);
+        if (dst < 0) return -1;
+    }
+    if (vfs_is_dir(dst)) return -1;
+    if (vfs_truncate(dst, 0) != 0) return -1;
+    if (vfs_write_file(dst, data, size, 0) < 0) return -1;
+    return 0;
+}
+
 void commands_help(void) {
     cmd_help();
 }
@@ -471,6 +497,47 @@ int commands_exec(int argc, char **argv, struct command_ctx *ctx) {
         cmd_dmesg();
     } else if (str_eq(argv[0], "drivers")) {
         cmd_drivers();
+    } else if (str_eq(argv[0], "mount")) {
+        if (argc < 3) {
+            log_printf("mount: usage: mount <part> <ext2|fat32>\n");
+        } else {
+            uint64_t part = 0;
+            if (!str_to_u64(argv[1], &part)) {
+                log_printf("mount: bad partition\n");
+            } else if (str_eq(argv[2], "ext2")) {
+                if (ext2_init_from_partition((uint32_t)part) == 0) {
+                    vfs_set_root(VFS_BACKEND_EXT2, ext2_root());
+                    journal_init();
+                    log_printf("mounted ext2 partition %u\n", (unsigned)part);
+                } else {
+                    log_printf("mount: ext2 init failed\n");
+                }
+            } else if (str_eq(argv[2], "fat32")) {
+                if (fat32_init_from_partition((uint32_t)part) == 0) {
+                    vfs_set_root(VFS_BACKEND_FAT32, fat32_root());
+                    log_printf("mounted fat32 partition %u\n", (unsigned)part);
+                } else {
+                    log_printf("mount: fat32 init failed\n");
+                }
+            } else {
+                log_printf("mount: unknown fs\n");
+            }
+        }
+    } else if (str_eq(argv[0], "umount")) {
+        if (initramfs_available()) {
+            vfs_set_root(VFS_BACKEND_INITRAMFS, initramfs_root());
+            log_printf("root switched to initramfs\n");
+        } else {
+            vfs_set_root(VFS_BACKEND_MOCK, fs_root());
+            log_printf("root switched to mock\n");
+        }
+    } else if (str_eq(argv[0], "dd")) {
+        if (argc < 3) {
+            log_printf("dd: usage: dd <src> <dst>\n");
+        } else {
+            if (copy_file(argv[1], argv[2], *ctx->cwd) == 0) log_printf("dd: ok\n");
+            else log_printf("dd: failed\n");
+        }
     } else {
         return 0;
     }

@@ -98,13 +98,13 @@
 - [x] Writeback cache + dirty block flush for block devices.
 - [x] FAT32 write support (create/write/truncate).
 - [x] Buffer cache + writeback for block devices.
+- [x] VFS write API + open flags (O_CREAT/O_TRUNC/O_APPEND).
+- [x] FS journal + recovery for root FS.
+- [x] Userland `ps`, `top`, `ls`, `mount`, `umount`, `dd` utilities.
+- [x] Simple init system with service units/dependencies.
+- [x] Root filesystem journaling.
 
 ## Next
-- [ ] VFS write API + open flags (O_CREAT/O_TRUNC/O_APPEND).
-- [ ] FS journal + recovery for root FS.
-- [ ] Userland `ps`, `top`, `ls`, `mount`, `umount`, `dd` utilities.
-- [ ] Simple init system with service units/dependencies.
-- [ ] Root filesystem journaling.
 - [ ] Basic firewall/netfilter rules.
 - [ ] IPv6 support (optional).
 - [ ] Namespaces: PID, mount, network isolation.

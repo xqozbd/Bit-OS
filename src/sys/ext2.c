@@ -273,6 +273,14 @@ static void scan_dir(uint32_t parent_node, uint32_t inode_no) {
     }
 }
 
+void ext2_ensure_scanned(int node) {
+    if (!g_ready) return;
+    if (node < 0 || (uint32_t)node >= g_node_count) return;
+    struct ext2_node *n = g_nodes[node];
+    if (!n || n->scanned || !n->is_dir) return;
+    scan_dir((uint32_t)node, n->inode);
+}
+
 static int write_superblock(void) {
     if (!g_dev) return -1;
     uint32_t sector_size = g_dev->sector_size;
@@ -703,6 +711,12 @@ int ext2_read_file(int node, const uint8_t **data, uint64_t *size) {
     *data = out;
     *size = offset;
     return 1;
+}
+
+uint64_t ext2_get_size(int node) {
+    if (node < 0 || (uint32_t)node >= g_node_count) return 0;
+    if (!g_nodes[node]) return 0;
+    return g_nodes[node]->size;
 }
 
 int ext2_alloc_block(uint32_t *out_block) {

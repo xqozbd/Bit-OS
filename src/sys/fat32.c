@@ -352,6 +352,15 @@ static void scan_dir(uint32_t parent, uint32_t start_cluster) {
     }
 }
 
+void fat32_ensure_scanned(int node) {
+    if (!g_ready) return;
+    if (node < 0 || (uint32_t)node >= g_node_count) return;
+    struct fat32_node *n = g_nodes[node];
+    if (!n || !n->is_dir) return;
+    /* FAT32 directories are fully scanned at init; nothing else to do. */
+    (void)n;
+}
+
 int fat32_init_from_partition(uint32_t part_index) {
     memset(&g_bpb, 0, sizeof(g_bpb));
     g_ready = 0;

@@ -27,6 +27,9 @@ enum {
     SYS_MMAP = 21,
     SYS_MUNMAP = 22,
     SYS_GETDNS = 23,
+    SYS_LISTDIR = 24,
+    SYS_MOUNT = 25,
+    SYS_UMOUNT = 26,
     SYS_MAX
 };
 

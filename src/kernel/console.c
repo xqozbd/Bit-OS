@@ -302,11 +302,18 @@ void console_run(void) {
                 continue;
             }
             if (ch == KB_KEY_PGUP) {
-                fb_scrollback_up(3);
+                fb_scrollback_up(1);
+                caret_visible = 0;
                 continue;
             }
             if (ch == KB_KEY_PGDN) {
-                fb_scrollback_down(3);
+                fb_scrollback_down(1);
+                if (fb_scrollback_offset() == 0) {
+                    caret_visible = 1;
+                    console_redraw(line, len, cursor, &last_len, caret_visible);
+                } else {
+                    caret_visible = 0;
+                }
                 continue;
             }
 

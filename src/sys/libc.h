@@ -4,6 +4,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "sys/fcntl.h"
+
 static inline long __syscall6(long n, long a1, long a2, long a3, long a4, long a5, long a6) {
 #if defined(__GNUC__) || defined(__clang__)
     long ret;
@@ -18,8 +20,8 @@ static inline long __syscall6(long n, long a1, long a2, long a3, long a4, long a
 #endif
 }
 
-static inline long sys_write(const void *buf, size_t len) {
-    return __syscall6(1, (long)buf, (long)len, 0, 0, 0, 0);
+static inline long sys_write(int fd, const void *buf, size_t len) {
+    return __syscall6(1, (long)fd, (long)buf, (long)len, 0, 0, 0);
 }
 
 static inline long sys_exit(int code) {
@@ -100,6 +102,18 @@ static inline void *sys_mmap(void *addr, size_t len, uint32_t prot, uint32_t fla
 
 static inline long sys_munmap(void *addr, size_t len) {
     return __syscall6(22, (long)addr, (long)len, 0, 0, 0, 0);
+}
+
+static inline long sys_listdir(const char *path, char *buf, size_t len) {
+    return __syscall6(24, (long)path, (long)buf, (long)len, 0, 0, 0);
+}
+
+static inline long sys_mount(uint32_t part_index, uint32_t type) {
+    return __syscall6(25, (long)part_index, (long)type, 0, 0, 0, 0);
+}
+
+static inline long sys_umount(void) {
+    return __syscall6(26, 0, 0, 0, 0, 0, 0);
 }
 
 /* Userspace DNS stub: accepts dotted-quad literals only. */
