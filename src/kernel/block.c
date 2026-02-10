@@ -6,7 +6,7 @@ extern void *memcpy(void *restrict dest, const void *restrict src, size_t n);
 extern void *memset(void *s, int c, size_t n);
 
 #define MAX_BLOCK_DEVS 8
-#define BLOCK_CACHE_SLOTS 4
+#define BLOCK_CACHE_SLOTS 32
 
 struct block_cache_entry {
     const struct block_device *dev;
@@ -14,6 +14,7 @@ struct block_cache_entry {
     uint32_t sector_size;
     uint8_t valid;
     uint8_t dirty;
+    uint8_t pad[2];
     uint8_t data[BLOCK_CACHE_MAX_SECTOR_SIZE];
 };
 
@@ -156,4 +157,17 @@ int block_flush_all(void) {
         if (tmp != 0) rc = tmp;
     }
     return rc;
+}
+
+int block_writeback_poll(uint32_t max_flush) {
+    if (max_flush == 0) max_flush = 1;
+    uint32_t flushed = 0;
+    for (uint32_t i = 0; i < BLOCK_CACHE_SLOTS; ++i) {
+        if (!g_cache[i].valid || !g_cache[i].dirty) continue;
+        if (cache_flush_entry(&g_cache[i]) == 0) {
+            flushed++;
+            if (flushed >= max_flush) break;
+        }
+    }
+    return (int)flushed;
 }

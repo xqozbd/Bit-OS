@@ -201,6 +201,23 @@ static int read_inode(uint32_t inode_no, struct ext2_inode *out) {
     return 0;
 }
 
+static int write_inode(uint32_t inode_no, const struct ext2_inode *in) {
+    if (!in || inode_no == 0) return -1;
+    uint32_t inodes_per_group = g_sb.s_inodes_per_group;
+    uint32_t group = (inode_no - 1) / inodes_per_group;
+    uint32_t index = (inode_no - 1) % inodes_per_group;
+    if (group >= g_group_count) return -1;
+    uint32_t table_block = g_gdt[group].bg_inode_table;
+    uint32_t offset = index * g_inode_size;
+    uint32_t block = table_block + (offset / g_block_size);
+    uint32_t block_off = offset % g_block_size;
+    if (!g_inode_buf) g_inode_buf = (uint8_t *)kmalloc(g_block_size);
+    if (!g_inode_buf) return -1;
+    if (read_block(block, g_inode_buf) != 0) return -1;
+    memcpy(g_inode_buf + block_off, in, sizeof(*in));
+    return write_block(block, g_inode_buf);
+}
+
 static int is_dir_inode(const struct ext2_inode *ino) {
     return (ino->i_mode & 0xF000) == 0x4000;
 }
@@ -318,6 +335,194 @@ static int find_child(uint32_t parent, const char *name) {
     return -1;
 }
 
+static uint32_t round_up4(uint32_t v) {
+    return (v + 3u) & ~3u;
+}
+
+static int split_path(const char *path, char *parent_out, size_t parent_len,
+                      char *name_out, size_t name_len) {
+    if (!path || !parent_out || !name_out) return -1;
+    size_t len = str_len(path);
+    if (len == 0) return -1;
+    while (len > 1 && path[len - 1] == '/') len--;
+    size_t last = len;
+    while (last > 0 && path[last - 1] != '/') last--;
+    size_t p_len = (last == 0) ? 1 : last;
+    if (p_len >= parent_len) return -1;
+    for (size_t i = 0; i < p_len; ++i) parent_out[i] = path[i];
+    parent_out[p_len] = '\0';
+    size_t n_len = len - last;
+    if (n_len == 0 || n_len >= name_len) return -1;
+    for (size_t i = 0; i < n_len; ++i) name_out[i] = path[last + i];
+    name_out[n_len] = '\0';
+    return 0;
+}
+
+static int dir_find_entry(uint32_t dir_inode, const char *name,
+                          uint32_t *out_block, uint32_t *out_off,
+                          struct ext2_dirent *out_de, uint32_t *out_prev_off) {
+    struct ext2_inode ino;
+    if (read_inode(dir_inode, &ino) != 0) return -1;
+    if (!is_dir_inode(&ino)) return -1;
+    if (!g_block_buf) g_block_buf = (uint8_t *)kmalloc(g_block_size);
+    if (!g_block_buf) return -1;
+    for (uint32_t i = 0; i < 12; ++i) {
+        uint32_t blk = ino.i_block[i];
+        if (blk == 0) continue;
+        if (read_block(blk, g_block_buf) != 0) return -1;
+        uint32_t off = 0;
+        uint32_t prev_off = 0xFFFFFFFFu;
+        while (off + sizeof(struct ext2_dirent) <= g_block_size) {
+            struct ext2_dirent *de = (struct ext2_dirent *)(g_block_buf + off);
+            if (de->rec_len == 0) break;
+            if (de->inode != 0 && de->name_len > 0) {
+                char nm[EXT2_MAX_NAME];
+                uint32_t nlen = de->name_len;
+                if (nlen >= sizeof(nm)) nlen = sizeof(nm) - 1;
+                memcpy(nm, de->name, nlen);
+                nm[nlen] = '\0';
+                if (str_eq(nm, name)) {
+                    if (out_block) *out_block = blk;
+                    if (out_off) *out_off = off;
+                    if (out_prev_off) *out_prev_off = prev_off;
+                    if (out_de) memcpy(out_de, de, sizeof(*out_de));
+                    return 0;
+                }
+            }
+            prev_off = off;
+            off += de->rec_len;
+        }
+    }
+    return -1;
+}
+
+static int dir_add_entry(uint32_t dir_inode, uint32_t child_inode,
+                         uint8_t file_type, const char *name) {
+    struct ext2_inode ino;
+    if (read_inode(dir_inode, &ino) != 0) return -1;
+    if (!is_dir_inode(&ino)) return -1;
+    if (!g_block_buf) g_block_buf = (uint8_t *)kmalloc(g_block_size);
+    if (!g_block_buf) return -1;
+
+    uint32_t name_len = (uint32_t)str_len(name);
+    uint32_t need = round_up4(8u + name_len);
+    for (uint32_t i = 0; i < 12; ++i) {
+        uint32_t blk = ino.i_block[i];
+        if (blk == 0) continue;
+        if (read_block(blk, g_block_buf) != 0) return -1;
+        uint32_t off = 0;
+        while (off + sizeof(struct ext2_dirent) <= g_block_size) {
+            struct ext2_dirent *de = (struct ext2_dirent *)(g_block_buf + off);
+            if (de->rec_len == 0) break;
+            uint32_t used = round_up4(8u + de->name_len);
+            if (de->rec_len >= used + need) {
+                uint32_t new_off = off + used;
+                struct ext2_dirent *nd = (struct ext2_dirent *)(g_block_buf + new_off);
+                nd->inode = child_inode;
+                nd->rec_len = (uint16_t)(de->rec_len - used);
+                nd->name_len = (uint8_t)name_len;
+                nd->file_type = file_type;
+                memcpy(nd->name, name, name_len);
+                de->rec_len = (uint16_t)used;
+                if (write_block(blk, g_block_buf) != 0) return -1;
+                ino.i_size += need;
+                return write_inode(dir_inode, &ino);
+            }
+            off += de->rec_len;
+        }
+    }
+
+    for (uint32_t i = 0; i < 12; ++i) {
+        if (ino.i_block[i] == 0) {
+            uint32_t new_blk = 0;
+            if (ext2_alloc_block(&new_blk) != 0) return -1;
+            memset(g_block_buf, 0, g_block_size);
+            struct ext2_dirent *nd = (struct ext2_dirent *)g_block_buf;
+            nd->inode = child_inode;
+            nd->rec_len = (uint16_t)g_block_size;
+            nd->name_len = (uint8_t)name_len;
+            nd->file_type = file_type;
+            memcpy(nd->name, name, name_len);
+            if (write_block(new_blk, g_block_buf) != 0) return -1;
+            ino.i_block[i] = new_blk;
+            ino.i_size += g_block_size;
+            ino.i_blocks += (g_block_size / 512u);
+            return write_inode(dir_inode, &ino);
+        }
+    }
+    return -1;
+}
+
+static int ext2_fsck_lite(void) {
+    if (g_sb.s_magic != 0xEF53) {
+        log_printf("ext2: fsck-lite failed: bad magic\n");
+        return -1;
+    }
+    if (g_block_size < 1024 || g_block_size > 4096) {
+        log_printf("ext2: fsck-lite failed: block size %u\n", (unsigned)g_block_size);
+        return -1;
+    }
+    if (g_inode_size < 128 || g_inode_size > g_block_size) {
+        log_printf("ext2: fsck-lite failed: inode size %u\n", (unsigned)g_inode_size);
+        return -1;
+    }
+    if (g_sb.s_blocks_per_group == 0 || g_sb.s_inodes_per_group == 0) {
+        log_printf("ext2: fsck-lite failed: zero group sizes\n");
+        return -1;
+    }
+    if (g_group_count == 0 || !g_gdt) {
+        log_printf("ext2: fsck-lite failed: no group desc\n");
+        return -1;
+    }
+    for (uint32_t g = 0; g < g_group_count; ++g) {
+        uint32_t bb = g_gdt[g].bg_block_bitmap;
+        uint32_t ib = g_gdt[g].bg_inode_bitmap;
+        uint32_t it = g_gdt[g].bg_inode_table;
+        if (bb == 0 || ib == 0 || it == 0) {
+            log_printf("ext2: fsck-lite failed: group %u bitmap/table zero\n", (unsigned)g);
+            return -1;
+        }
+        if (bb >= g_sb.s_blocks_count || ib >= g_sb.s_blocks_count || it >= g_sb.s_blocks_count) {
+            log_printf("ext2: fsck-lite failed: group %u bitmap/table out of range\n", (unsigned)g);
+            return -1;
+        }
+    }
+    struct ext2_inode root;
+    if (read_inode(2, &root) != 0 || !is_dir_inode(&root)) {
+        log_printf("ext2: fsck-lite failed: root inode invalid\n");
+        return -1;
+    }
+    if (root.i_size < 12) {
+        log_printf("ext2: fsck-lite warning: root size small\n");
+    }
+    if (root.i_block[0] != 0 && g_block_size) {
+        if (!g_block_buf) g_block_buf = (uint8_t *)kmalloc(g_block_size);
+        if (g_block_buf) {
+            if (read_block(root.i_block[0], g_block_buf) == 0) {
+                uint32_t off = 0;
+                while (off + sizeof(struct ext2_dirent) <= g_block_size) {
+                    struct ext2_dirent *de = (struct ext2_dirent *)(g_block_buf + off);
+                    if (de->rec_len == 0) {
+                        log_printf("ext2: fsck-lite warning: rec_len=0\n");
+                        break;
+                    }
+                    if (de->rec_len < 8 || (off + de->rec_len) > g_block_size) {
+                        log_printf("ext2: fsck-lite warning: bad rec_len\n");
+                        break;
+                    }
+                    if (de->name_len > de->rec_len - 8) {
+                        log_printf("ext2: fsck-lite warning: bad name_len\n");
+                        break;
+                    }
+                    off += de->rec_len;
+                }
+            }
+        }
+    }
+    log_printf("ext2: fsck-lite ok\n");
+    return 0;
+}
+
 int ext2_init_from_partition(uint32_t part_index) {
     memset(&g_sb, 0, sizeof(g_sb));
     g_ready = 0;
@@ -383,6 +588,8 @@ int ext2_init_from_partition(uint32_t part_index) {
         uint8_t *dst = (uint8_t *)g_gdt + (i * g_block_size);
         if (read_block(gdt_block + i, dst) != 0) return -1;
     }
+
+    if (ext2_fsck_lite() != 0) return -1;
 
     int root = node_new(0xFFFFFFFFu, 2, 0, 1, "/");
     if (root < 0) return -1;
@@ -509,7 +716,10 @@ int ext2_alloc_block(uint32_t *out_block) {
         uint32_t bit = 0;
         if (bitmap_find_and_set(g_gdt[g].bg_block_bitmap, blocks_per_group, &bit) == 0) {
             uint32_t block_no = g * blocks_per_group + bit;
-            if (block_no < g_sb.s_first_data_block) continue;
+            if (block_no < g_sb.s_first_data_block) {
+                bitmap_clear(g_gdt[g].bg_block_bitmap, bit);
+                continue;
+            }
             g_gdt[g].bg_free_blocks_count--;
             g_sb.s_free_blocks_count--;
             if (write_gdt() != 0) return -1;
@@ -546,7 +756,10 @@ int ext2_alloc_inode(uint16_t mode, uint32_t *out_inode) {
         uint32_t bit = 0;
         if (bitmap_find_and_set(g_gdt[g].bg_inode_bitmap, inodes_per_group, &bit) == 0) {
             uint32_t inode_no = g * inodes_per_group + bit + 1;
-            if (inode_no < g_sb.s_first_ino) continue;
+            if (inode_no < g_sb.s_first_ino) {
+                bitmap_clear(g_gdt[g].bg_inode_bitmap, bit);
+                continue;
+            }
             g_gdt[g].bg_free_inodes_count--;
             g_sb.s_free_inodes_count--;
             if (write_gdt() != 0) return -1;
@@ -555,6 +768,10 @@ int ext2_alloc_inode(uint16_t mode, uint32_t *out_inode) {
             struct ext2_inode ino;
             memset(&ino, 0, sizeof(ino));
             ino.i_mode = mode;
+            ino.i_links_count = 1;
+            ino.i_size = 0;
+            ino.i_blocks = 0;
+            write_inode(inode_no, &ino);
             if (read_inode(inode_no, &ino) == 0) {
                 ino.i_mode = mode;
             }
@@ -578,6 +795,213 @@ int ext2_free_inode(uint32_t inode) {
     g_sb.s_free_inodes_count++;
     if (write_gdt() != 0) return -1;
     return write_superblock();
+}
+
+static int inode_block_get(struct ext2_inode *ino, uint32_t index, int allocate, uint32_t *out_blk) {
+    if (index < 12) {
+        if (ino->i_block[index] == 0 && allocate) {
+            uint32_t nb = 0;
+            if (ext2_alloc_block(&nb) != 0) return -1;
+            ino->i_block[index] = nb;
+            ino->i_blocks += (g_block_size / 512u);
+        }
+        if (out_blk) *out_blk = ino->i_block[index];
+        return 0;
+    }
+    index -= 12;
+    if (index >= (g_block_size / sizeof(uint32_t))) return -1;
+    if (ino->i_block[12] == 0) {
+        if (!allocate) return -1;
+        uint32_t ib = 0;
+        if (ext2_alloc_block(&ib) != 0) return -1;
+        ino->i_block[12] = ib;
+        ino->i_blocks += (g_block_size / 512u);
+        if (!g_block_buf) g_block_buf = (uint8_t *)kmalloc(g_block_size);
+        if (!g_block_buf) return -1;
+        memset(g_block_buf, 0, g_block_size);
+        if (write_block(ib, g_block_buf) != 0) return -1;
+    }
+    if (!g_block_buf) g_block_buf = (uint8_t *)kmalloc(g_block_size);
+    if (!g_block_buf) return -1;
+    if (read_block(ino->i_block[12], g_block_buf) != 0) return -1;
+    uint32_t *entries = (uint32_t *)g_block_buf;
+    if (entries[index] == 0 && allocate) {
+        uint32_t nb = 0;
+        if (ext2_alloc_block(&nb) != 0) return -1;
+        entries[index] = nb;
+        if (write_block(ino->i_block[12], g_block_buf) != 0) return -1;
+    }
+    if (out_blk) *out_blk = entries[index];
+    return 0;
+}
+
+int ext2_write(int node, const uint8_t *data, uint64_t len, uint64_t offset) {
+    if (!g_ready || !data) return -1;
+    if (node < 0 || (uint32_t)node >= g_node_count) return -1;
+    struct ext2_node *n = g_nodes[node];
+    if (!n || n->is_dir) return -1;
+    struct ext2_inode ino;
+    if (read_inode(n->inode, &ino) != 0) return -1;
+
+    uint64_t end = offset + len;
+    if (end > 0xFFFFFFFFu) return -1;
+    uint64_t file_size = ino.i_size;
+    if (end > file_size) file_size = end;
+
+    uint64_t pos = 0;
+    while (pos < len) {
+        uint64_t abs = offset + pos;
+        uint32_t blk_idx = (uint32_t)(abs / g_block_size);
+        uint32_t blk_off = (uint32_t)(abs % g_block_size);
+        uint32_t blk = 0;
+        if (inode_block_get(&ino, blk_idx, 1, &blk) != 0) return -1;
+        if (blk == 0) return -1;
+        if (!g_block_buf) g_block_buf = (uint8_t *)kmalloc(g_block_size);
+        if (!g_block_buf) return -1;
+        if (read_block(blk, g_block_buf) != 0) return -1;
+        uint64_t to_copy = len - pos;
+        if (to_copy > (g_block_size - blk_off)) to_copy = g_block_size - blk_off;
+        memcpy(g_block_buf + blk_off, data + pos, (size_t)to_copy);
+        if (write_block(blk, g_block_buf) != 0) return -1;
+        pos += to_copy;
+    }
+    ino.i_size = (uint32_t)file_size;
+    if (write_inode(n->inode, &ino) != 0) return -1;
+    n->size = (uint32_t)file_size;
+    return (int)len;
+}
+
+int ext2_truncate(int node, uint64_t new_size) {
+    if (!g_ready) return -1;
+    if (node < 0 || (uint32_t)node >= g_node_count) return -1;
+    struct ext2_node *n = g_nodes[node];
+    if (!n || n->is_dir) return -1;
+    struct ext2_inode ino;
+    if (read_inode(n->inode, &ino) != 0) return -1;
+    if (new_size >= ino.i_size) {
+        ino.i_size = (uint32_t)new_size;
+        n->size = (uint32_t)new_size;
+        return write_inode(n->inode, &ino);
+    }
+
+    uint32_t keep_blocks = (uint32_t)((new_size + g_block_size - 1) / g_block_size);
+    for (uint32_t i = keep_blocks; i < 12; ++i) {
+        if (ino.i_block[i]) {
+            ext2_free_block(ino.i_block[i]);
+            ino.i_block[i] = 0;
+        }
+    }
+    if (ino.i_block[12]) {
+        if (!g_block_buf) g_block_buf = (uint8_t *)kmalloc(g_block_size);
+        if (!g_block_buf) return -1;
+        if (read_block(ino.i_block[12], g_block_buf) != 0) return -1;
+        uint32_t *entries = (uint32_t *)g_block_buf;
+        uint32_t count = g_block_size / sizeof(uint32_t);
+        uint32_t start = 0;
+        if (keep_blocks > 12) start = keep_blocks - 12;
+        for (uint32_t i = start; i < count; ++i) {
+            if (entries[i]) {
+                ext2_free_block(entries[i]);
+                entries[i] = 0;
+            }
+        }
+        int empty = 1;
+        for (uint32_t i = 0; i < count; ++i) {
+            if (entries[i]) { empty = 0; break; }
+        }
+        if (empty) {
+            ext2_free_block(ino.i_block[12]);
+            ino.i_block[12] = 0;
+        } else {
+            write_block(ino.i_block[12], g_block_buf);
+        }
+    }
+    ino.i_size = (uint32_t)new_size;
+    n->size = (uint32_t)new_size;
+    return write_inode(n->inode, &ino);
+}
+
+int ext2_create(int cwd, const char *path, uint16_t mode, int is_dir) {
+    if (!g_ready || !path) return -1;
+    char parent_path[256];
+    char name[EXT2_MAX_NAME];
+    if (split_path(path, parent_path, sizeof(parent_path), name, sizeof(name)) != 0) return -1;
+    int parent_node = ext2_resolve(cwd, parent_path);
+    if (parent_node < 0) return -1;
+    struct ext2_node *p = g_nodes[parent_node];
+    if (!p || !p->is_dir) return -1;
+    if (dir_find_entry(p->inode, name, NULL, NULL, NULL, NULL) == 0) return -1;
+
+    uint32_t inode_no = 0;
+    uint16_t type = is_dir ? 0x4000 : 0x8000;
+    if (ext2_alloc_inode((uint16_t)(type | (mode & 0x0FFF)), &inode_no) != 0) return -1;
+    struct ext2_inode ino;
+    memset(&ino, 0, sizeof(ino));
+    ino.i_mode = (uint16_t)(type | (mode & 0x0FFF));
+    ino.i_links_count = 1;
+    ino.i_size = 0;
+    ino.i_blocks = 0;
+    if (write_inode(inode_no, &ino) != 0) return -1;
+
+    uint8_t ftype = is_dir ? 2 : 1;
+    if (dir_add_entry(p->inode, inode_no, ftype, name) != 0) return -1;
+
+    int child = node_new((uint32_t)parent_node, inode_no, 0, is_dir, name);
+    return child;
+}
+
+int ext2_unlink(int cwd, const char *path) {
+    if (!g_ready || !path) return -1;
+    char parent_path[256];
+    char name[EXT2_MAX_NAME];
+    if (split_path(path, parent_path, sizeof(parent_path), name, sizeof(name)) != 0) return -1;
+    int parent_node = ext2_resolve(cwd, parent_path);
+    if (parent_node < 0) return -1;
+    struct ext2_node *p = g_nodes[parent_node];
+    if (!p || !p->is_dir) return -1;
+
+    uint32_t blk = 0, off = 0, prev_off = 0xFFFFFFFFu;
+    struct ext2_dirent de;
+    if (dir_find_entry(p->inode, name, &blk, &off, &de, &prev_off) != 0) return -1;
+    if (!g_block_buf) g_block_buf = (uint8_t *)kmalloc(g_block_size);
+    if (!g_block_buf) return -1;
+    if (read_block(blk, g_block_buf) != 0) return -1;
+    struct ext2_dirent *cur = (struct ext2_dirent *)(g_block_buf + off);
+    if (prev_off != 0xFFFFFFFFu) {
+        struct ext2_dirent *prev = (struct ext2_dirent *)(g_block_buf + prev_off);
+        prev->rec_len = (uint16_t)(prev->rec_len + cur->rec_len);
+    } else {
+        cur->inode = 0;
+    }
+    if (write_block(blk, g_block_buf) != 0) return -1;
+    ext2_free_inode(de.inode);
+    return 0;
+}
+
+int ext2_rename(int cwd, const char *old_path, const char *new_name) {
+    if (!g_ready || !old_path || !new_name) return -1;
+    char parent_path[256];
+    char name[EXT2_MAX_NAME];
+    if (split_path(old_path, parent_path, sizeof(parent_path), name, sizeof(name)) != 0) return -1;
+    int parent_node = ext2_resolve(cwd, parent_path);
+    if (parent_node < 0) return -1;
+    struct ext2_node *p = g_nodes[parent_node];
+    if (!p || !p->is_dir) return -1;
+
+    uint32_t blk = 0, off = 0;
+    struct ext2_dirent de;
+    if (dir_find_entry(p->inode, name, &blk, &off, &de, NULL) != 0) return -1;
+    uint32_t new_len = (uint32_t)str_len(new_name);
+    uint32_t need = round_up4(8u + new_len);
+    if (need > de.rec_len) return -1;
+    if (!g_block_buf) g_block_buf = (uint8_t *)kmalloc(g_block_size);
+    if (!g_block_buf) return -1;
+    if (read_block(blk, g_block_buf) != 0) return -1;
+    struct ext2_dirent *cur = (struct ext2_dirent *)(g_block_buf + off);
+    cur->name_len = (uint8_t)new_len;
+    memcpy(cur->name, new_name, new_len);
+    if (write_block(blk, g_block_buf) != 0) return -1;
+    return 0;
 }
 
 void ext2_pwd(int cwd) {

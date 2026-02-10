@@ -32,5 +32,6 @@ int block_read_cached(const struct block_device *dev, uint64_t lba, uint32_t cou
 int block_write_cached(const struct block_device *dev, uint64_t lba, uint32_t count, const void *buf);
 int block_flush(const struct block_device *dev);
 int block_flush_all(void);
+int block_writeback_poll(uint32_t max_flush);
 
 #endif /* BLOCK_H */

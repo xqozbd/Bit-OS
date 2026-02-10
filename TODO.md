@@ -75,6 +75,8 @@
 - [x] Persistent root filesystem support (ext2/fat32 driver).
 - [x] ext2: read-only driver (superblock, group desc, inode, dir traversal).
 - [x] ext2: block/inode allocator + bitmap updates.
+- [x] ext2: file create/write/truncate (direct + single-indirect blocks).
+- [x] ext2: unlink/rename + directory entry updates.
 - [x] `/dev` and pseudo-filesystem (`/proc`, `/sys`) skeleton.
 - [x] UDP sockets + socket syscalls (TCP stub).
 - [x] TCP sockets (connect/listen/accept + retransmit).
@@ -89,19 +91,16 @@
 - [x] TCP stack with three-way handshake and retransmission.
 - [x] DHCP client to auto-configure IP addresses.
 - [x] DNS resolver stub in userspace.
-- [x] USB xHCI controller init + port status (no device enumeration yet).
+- [x] USB xHCI controller init + port status.
 - [x] USB device manager (keyboard, mouse, storage support).
 - [x] Terminal VT100 emulation + colors.
+- [x] ext2: fsck-lite / consistency checks at mount.
+- [x] Writeback cache + dirty block flush for block devices.
+- [x] FAT32 write support (create/write/truncate).
+- [x] Buffer cache + writeback for block devices.
 
 ## Next
-- [ ] Real filesystem: ext2 read/write (create/write/unlink/rename).
-- [ ] ext2: file create/write/truncate (direct + single-indirect blocks).
-- [ ] ext2: unlink/rename + directory entry updates.
-- [ ] ext2: fsck-lite / consistency checks at mount.
-- [ ] Writeback cache + dirty block flush for block devices.
 - [ ] VFS write API + open flags (O_CREAT/O_TRUNC/O_APPEND).
-- [ ] FAT32 write support (create/write/truncate).
-- [ ] Buffer cache + writeback for block devices.
 - [ ] FS journal + recovery for root FS.
 - [ ] Userland `ps`, `top`, `ls`, `mount`, `umount`, `dd` utilities.
 - [ ] Simple init system with service units/dependencies.

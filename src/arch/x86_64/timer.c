@@ -9,6 +9,7 @@
 #include "arch/x86_64/pic.h"
 #include "arch/x86_64/pit.h"
 #include "kernel/watchdog.h"
+#include "kernel/block.h"
 #include "drivers/ps2/keyboard.h"
 #include "drivers/net/pcnet.h"
 #include "lib/log.h"
@@ -37,6 +38,9 @@ void timer_pit_tick(void) {
         pcnet_tick();
         watchdog_tick();
         sched_tick();
+        if ((g_ticks % g_pit_hz) == 0) {
+            block_writeback_poll(2);
+        }
     }
 }
 
@@ -49,6 +53,9 @@ void timer_apic_tick(void) {
     pcnet_tick();
     watchdog_tick();
     sched_tick();
+    if ((g_ticks % g_pit_hz) == 0) {
+        block_writeback_poll(2);
+    }
 }
 
 uint64_t timer_uptime_ticks(void) {

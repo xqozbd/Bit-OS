@@ -15,5 +15,10 @@ int ext2_alloc_block(uint32_t *out_block);
 int ext2_free_block(uint32_t block);
 int ext2_alloc_inode(uint16_t mode, uint32_t *out_inode);
 int ext2_free_inode(uint32_t inode);
+int ext2_create(int cwd, const char *path, uint16_t mode, int is_dir);
+int ext2_write(int node, const uint8_t *data, uint64_t len, uint64_t offset);
+int ext2_truncate(int node, uint64_t new_size);
+int ext2_unlink(int cwd, const char *path);
+int ext2_rename(int cwd, const char *old_path, const char *new_name);
 
 #endif /* SYS_EXT2_H */

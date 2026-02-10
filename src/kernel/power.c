@@ -1,6 +1,7 @@
 #include "kernel/power.h"
 
 #include "lib/log.h"
+#include "kernel/block.h"
 #include "sys/acpi.h"
 #include "arch/x86_64/io.h"
 #include "arch/x86_64/cpu.h"
@@ -49,6 +50,7 @@ int power_shutdown_acpi(void) {
 }
 
 void power_shutdown(void) {
+    block_flush_all();
     if (power_shutdown_acpi()) {
         halt_forever();
     }
@@ -60,6 +62,7 @@ void power_shutdown(void) {
 }
 
 void power_restart(void) {
+    block_flush_all();
     if (acpi_reset()) {
         halt_forever();
     }
