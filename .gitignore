@@ -13,3 +13,4 @@ initramfs/bin/
 *.swp
 *swo
 *.log
+initramfs.cpio
