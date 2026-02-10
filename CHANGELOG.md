@@ -40,7 +40,9 @@ None
 Booting sequence. 
 Clear screen printing BitOS's version when the banner already does so.
 
+
 ## v0.1.1
+
 
 ## Features Added:
 Kernel & Architecture: Interrupt masking / IRQ priority routing, GDT/TSS + Ring-3 entry path, and kernel panic backtrace (stack walk).
@@ -67,27 +69,30 @@ Boot: Configurable boot params (Limine cmdline) and proper shutdown/restart (ACP
 
 Reliability: Crash isolation so user task faults no longer halt the kernel, kernel timer wheel for efficient sleep timers, and block writeback flush on shutdown/restart.
 
-## Features Removed:
-None
+VFS write path: added open flags (O_CREAT/O_TRUNC/O_APPEND), file creation, truncate, and size helpers across ext2/fat32.
+
+Journaling: redo log for ext2 root (`/.journal`) with replay on mount.
+
+Syscalls: listdir, mount, umount, append-aware write.
+
+Console: page-by-page scrollback with prompt restore, command additions (mount/umount/dd).
+
+Userland: new utilities `ls`, `ps`, `top`, `mount`, `umount`, `dd`; shared syscall stub header; per-binary linker script stripping notes.
+
+Initramfs content: service config (`/etc/services.conf`), motd, sample files under `/home/guest`, and demo log under `/var/log`.
+
 
 ## Features Changed:
 Build warnings cleaned up (log/acpi prototypes).
+
 Driver registry output: show "not found" directly for skipped devices.
+
 Watchdog behavior now configurable via cmdline (watchdog=off/log/reboot/halt) and verbose logging toggle (log=verbose).
 
-## v0.1.1
+Kernel console scrollback made line-based and robustly restores prompt when returning to bottom.
 
-## Features Added:
-- VFS write path: added open flags (O_CREAT/O_TRUNC/O_APPEND), file creation, truncate, and size helpers across ext2/fat32.
-- Journaling: redo log for ext2 root (`/.journal`) with replay on mount.
-- Syscalls: listdir, mount, umount, append-aware write.
-- Console: page-by-page scrollback with prompt restore, command additions (mount/umount/dd).
-- Userland: new utilities `ls`, `ps`, `top`, `mount`, `umount`, `dd`; shared syscall stub header; per-binary linker script stripping notes.
-- Initramfs content: service config (`/etc/services.conf`), motd, sample files under `/home/guest`, and demo log under `/var/log`.
+Init now starts services from config with simple dependencies; ISO build compiles all userland tools into initramfs using dedicated linker script.
 
-## Features Changed:
-- Kernel console scrollback made line-based and robustly restores prompt when returning to bottom.
-- Init now starts services from config with simple dependencies; ISO build compiles all userland tools into initramfs using dedicated linker script.
 
 ## Features Removed:
 None
