@@ -27,6 +27,7 @@
 #include "drivers/storage/ahci.h"
 #include "sys/blockfs.h"
 #include "sys/fat32.h"
+#include "sys/ext2.h"
 #include "sys/pseudofs.h"
 #include "arch/x86_64/smp.h"
 #include "arch/x86_64/timer.h"
@@ -35,6 +36,7 @@
 #include "drivers/pci/pci.h"
 #include "drivers/net/pcnet.h"
 #include "drivers/usb/xhci.h"
+#include "drivers/usb/usbmgr.h"
 #include "kernel/time.h"
 #include "kernel/pstate.h"
 #include "sys/acpi.h"
@@ -94,6 +96,7 @@ static void kmain_stage2(void) {
     int drv_partition = driver_register("partition", drv_order++);
     int drv_pcnet = driver_register("pcnet", drv_order++);
     int drv_xhci = driver_register("xhci", drv_order++);
+    int drv_usbmgr = driver_register("usbmgr", drv_order++);
     int drv_pci = driver_register("pci", drv_order++);
     int drv_acpi = driver_register("acpi", drv_order++);
     int drv_pstate = driver_register("pstate", drv_order++);
@@ -241,8 +244,15 @@ static void kmain_stage2(void) {
     }
     if (xhci_is_ready()) {
         driver_set_status_idx(drv_xhci, DRIVER_STATUS_OK, NULL);
+        log_printf("Boot: starting USB manager...\n");
+        if (usbmgr_init() == 0) {
+            driver_set_status_idx(drv_usbmgr, DRIVER_STATUS_OK, NULL);
+        } else {
+            driver_set_status_idx(drv_usbmgr, DRIVER_STATUS_FAIL, "init failed");
+        }
     } else {
         driver_set_status_idx(drv_xhci, DRIVER_STATUS_SKIPPED, "not found");
+        driver_set_status_idx(drv_usbmgr, DRIVER_STATUS_SKIPPED, "xhci not ready");
     }
     socket_init();
     log_printf("Boot: socket layer ready\n");
@@ -296,11 +306,17 @@ static void kmain_stage2(void) {
         log_printf("Boot: mounted block devices at /block\n");
     }
     int fat_ready = 0;
+    int ext2_ready = 0;
     if (partition_count() > 0) {
         if (fat32_init_from_partition(0) == 0 && fat32_is_ready()) {
             vfs_mount("/fat", VFS_BACKEND_FAT32, fat32_root());
             log_printf("Boot: mounted FAT32 at /fat\n");
             fat_ready = 1;
+        }
+        if (ext2_init_from_partition(0) == 0 && ext2_is_ready()) {
+            vfs_mount("/ext2", VFS_BACKEND_EXT2, ext2_root());
+            log_printf("Boot: mounted ext2 at /ext2\n");
+            ext2_ready = 1;
         }
     }
     if (initramfs_available()) {
@@ -309,7 +325,10 @@ static void kmain_stage2(void) {
         vfs_mount("/mock", VFS_BACKEND_MOCK, fs_root());
         log_printf("Boot: mounted mock FS at /mock\n");
     } else {
-        if (fat_ready) {
+        if (ext2_ready) {
+            vfs_set_root(VFS_BACKEND_EXT2, ext2_root());
+            log_printf("Boot: VFS root set to ext2\n");
+        } else if (fat_ready) {
             vfs_set_root(VFS_BACKEND_FAT32, fat32_root());
             log_printf("Boot: VFS root set to FAT32\n");
         } else if (block_device_count() > 0 && partition_count() > 0) {

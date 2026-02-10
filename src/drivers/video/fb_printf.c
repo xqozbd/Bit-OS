@@ -28,10 +28,44 @@ static uint32_t char_spacing = 2;
 
 /* current colors */
 static uint32_t cur_fg = 0xFFFFFF, cur_bg = 0x000000;
+static uint32_t def_fg = 0xFFFFFF, def_bg = 0x000000;
+
+/* VT100/ANSI state */
+static int vt_esc_state = 0; /* 0=none, 1=ESC seen, 2=CSI */
+static int vt_params[8];
+static int vt_param_count = 0;
+static int vt_param_value = 0;
+static int vt_param_has_value = 0;
+static int vt_bright = 0;
+
+static const uint32_t vt_palette[8] = {
+    0x000000, /* black */
+    0xAA0000, /* red */
+    0x00AA00, /* green */
+    0xAA5500, /* yellow */
+    0x0000AA, /* blue */
+    0xAA00AA, /* magenta */
+    0x00AAAA, /* cyan */
+    0xAAAAAA  /* white */
+};
+
+static const uint32_t vt_palette_bright[8] = {
+    0x555555, /* bright black */
+    0xFF5555, /* bright red */
+    0x55FF55, /* bright green */
+    0xFFFF55, /* bright yellow */
+    0x5555FF, /* bright blue */
+    0xFF55FF, /* bright magenta */
+    0x55FFFF, /* bright cyan */
+    0xFFFFFF  /* bright white */
+};
 
 /* forward declarations */
 static void draw_char_px(uint32_t x, uint32_t y, char c, uint32_t fg, uint32_t bg);
 static void clear_row_bg(uint32_t row);
+static void clear_to_eol(void);
+static void vt_apply_sgr(void);
+static int vt_handle_char(char c);
 
 /* scrollback buffer */
 #define SB_MAX_LINES 1024
@@ -240,6 +274,130 @@ static void sb_render_full(void) {
     ms_cursor_show();
 }
 
+static void clear_to_eol(void) {
+    if (!g_fb) return;
+    uint32_t row_top = cursor_y;
+    uint32_t row_bottom = cursor_y + line_step();
+    if (row_bottom > fb_height) row_bottom = (uint32_t)fb_height;
+    uint32_t pixel = pack_pixel(cur_bg);
+    for (uint32_t y = row_top; y < row_bottom; ++y) {
+        uint8_t *addr = fb_ptr + (size_t)y * fb_pitch + (size_t)cursor_x * fb_bytes_per_pixel;
+        uint64_t remaining = fb_width - cursor_x;
+        if (fb_bytes_per_pixel == 4) {
+            uint32_t *p = (uint32_t *)addr;
+            for (uint64_t i = 0; i < remaining; ++i) p[i] = pixel;
+        } else if (fb_bytes_per_pixel == 3) {
+            for (uint64_t i = 0; i < remaining; ++i) {
+                uint64_t off = i * 3;
+                addr[off + 0] = pixel & 0xFF;
+                addr[off + 1] = (pixel >> 8) & 0xFF;
+                addr[off + 2] = (pixel >> 16) & 0xFF;
+            }
+        } else if (fb_bytes_per_pixel == 2) {
+            uint16_t v = (uint16_t)(pixel & 0xFFFF);
+            for (uint64_t i = 0; i < remaining; ++i) {
+                uint64_t off = i * 2;
+                addr[off + 0] = v & 0xFF;
+                addr[off + 1] = (v >> 8) & 0xFF;
+            }
+        }
+    }
+}
+
+static void vt_apply_sgr(void) {
+    if (vt_param_count == 0) {
+        cur_fg = def_fg;
+        cur_bg = def_bg;
+        vt_bright = 0;
+        return;
+    }
+    for (int i = 0; i < vt_param_count; ++i) {
+        int p = vt_params[i];
+        if (p == 0) {
+            cur_fg = def_fg;
+            cur_bg = def_bg;
+            vt_bright = 0;
+        } else if (p == 1) {
+            vt_bright = 1;
+        } else if (p == 22) {
+            vt_bright = 0;
+        } else if (p >= 30 && p <= 37) {
+            int idx = p - 30;
+            cur_fg = vt_bright ? vt_palette_bright[idx] : vt_palette[idx];
+        } else if (p >= 90 && p <= 97) {
+            int idx = p - 90;
+            cur_fg = vt_palette_bright[idx];
+        } else if (p >= 40 && p <= 47) {
+            int idx = p - 40;
+            cur_bg = vt_palette[idx];
+        } else if (p >= 100 && p <= 107) {
+            int idx = p - 100;
+            cur_bg = vt_palette_bright[idx];
+        } else if (p == 39) {
+            cur_fg = def_fg;
+        } else if (p == 49) {
+            cur_bg = def_bg;
+        }
+    }
+}
+
+static int vt_handle_char(char c) {
+    if (vt_esc_state == 0) {
+        if ((unsigned char)c == 0x1B) {
+            vt_esc_state = 1;
+            return 1;
+        }
+        return 0;
+    }
+    if (vt_esc_state == 1) {
+        if (c == '[') {
+            vt_esc_state = 2;
+            vt_param_count = 0;
+            vt_param_value = 0;
+            vt_param_has_value = 0;
+            return 1;
+        }
+        vt_esc_state = 0;
+        return 1;
+    }
+    if (vt_esc_state == 2) {
+        if (c >= '0' && c <= '9') {
+            vt_param_value = (vt_param_value * 10) + (c - '0');
+            vt_param_has_value = 1;
+            return 1;
+        }
+        if (c == ';') {
+            if (vt_param_count < (int)(sizeof(vt_params) / sizeof(vt_params[0]))) {
+                vt_params[vt_param_count++] = vt_param_has_value ? vt_param_value : 0;
+            }
+            vt_param_value = 0;
+            vt_param_has_value = 0;
+            return 1;
+        }
+        if (vt_param_has_value || c == 'm') {
+            if (vt_param_count < (int)(sizeof(vt_params) / sizeof(vt_params[0]))) {
+                vt_params[vt_param_count++] = vt_param_has_value ? vt_param_value : 0;
+            }
+        }
+        if (c == 'm') {
+            vt_apply_sgr();
+        } else if (c == 'H' || c == 'f') {
+            cursor_x = margin_x;
+            cursor_y = margin_y;
+        } else if (c == 'J') {
+            if (vt_param_count == 0 || vt_params[0] == 2) {
+                fb_clear();
+            }
+        } else if (c == 'K') {
+            clear_to_eol();
+        }
+        vt_esc_state = 0;
+        return 1;
+    }
+    vt_esc_state = 0;
+    return 1;
+}
+
 /* draw character at pixel coordinates (x,y) with scaling */
 static void draw_char_px(uint32_t x, uint32_t y, char c, uint32_t fg, uint32_t bg) {
     unsigned char uc = (unsigned char)c;
@@ -320,6 +478,7 @@ static void new_line(void) {
 /* API functions */
 void fb_putc(char c) {
     if (!g_fb) return;
+    if (vt_handle_char(c)) return;
     if (sb_record_enabled) sb_put_char(c);
     if (sb_view_offset > 0 && sb_record_enabled) {
         /* keep output buffered while scrolled back */
@@ -378,6 +537,8 @@ void fb_init(struct limine_framebuffer *fb, uint32_t fg, uint32_t bg) {
     cursor_x = margin_x;
     cursor_y = margin_y;
     cur_fg = fg; cur_bg = bg;
+    def_fg = fg; def_bg = bg;
+    vt_bright = 0;
 
     /* clear framebuffer to bg color */
     for (uint32_t y = 0; y < fb_height; ++y) clear_row_bg(y);

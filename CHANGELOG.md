@@ -49,7 +49,7 @@ Scheduling & Memory: Per-CPU run queue load balancing, user address space layout
 
 Process & Syscalls: Userspace fork/exec/exit support, per-process file descriptor table + basic open/read/close syscalls, and signals (kill/ignore) with default handlers.
 
-Storage & Filesystems: Block device layer + buffered IO, MBR/GPT partition parsing, VMware ATA PIO and AHCI SATA driver, VFS mount root, and FAT32 read-only root.
+Storage & Filesystems: Block device layer + buffered IO, MBR/GPT partition parsing, VMware ATA PIO and AHCI SATA driver, VFS mount root, FAT32 read-only root, ext2 read-only driver (superblock/group/inode/dir), and ext2 bitmap allocators (block/inode).
 
 Pseudo-FS: /dev, /proc, /sys skeletons plus /proc tasks and /sys drivers entries.
 
@@ -60,6 +60,10 @@ Init & Userland: Simple init process that spawns a user shell (init/busybox/sh).
 Kernel Memory: SLAB/SLUB allocator and SLAB caches for VFS nodes and inodes.
 
 USB: xHCI controller init (MMIO map/reset + rings + port status logging).
+
+USB: Device manager staging (enumeration pass + HID keyboard/mouse and MSC hooks).
+
+Console: VT100/ANSI color escape support.
 
 Boot: Configurable boot params (Limine cmdline) and proper shutdown/restart (ACPI S5 + reset fallback).
 

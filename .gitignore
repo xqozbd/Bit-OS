@@ -7,4 +7,3 @@ obj/*
 iso_root/boot/bitos
 BitOS.iso
 /limine
-initramfs.cpio

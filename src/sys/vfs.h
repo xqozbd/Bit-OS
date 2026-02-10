@@ -10,6 +10,7 @@
 #define VFS_BACKEND_DEV 5
 #define VFS_BACKEND_PROC 6
 #define VFS_BACKEND_SYS 7
+#define VFS_BACKEND_EXT2 8
 
 void vfs_init(void);
 void vfs_set_root(int backend, int root_node);

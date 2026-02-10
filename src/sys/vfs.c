@@ -6,6 +6,7 @@
 #include "sys/fs_mock.h"
 #include "sys/blockfs.h"
 #include "sys/fat32.h"
+#include "sys/ext2.h"
 #include "sys/pseudofs.h"
 #include "lib/strutil.h"
 #include "lib/log.h"
@@ -28,7 +29,7 @@ struct vfs_mount {
 
 static struct vfs_node *g_nodes[VFS_MAX_NODES];
 static int g_node_count = 0;
-static struct vfs_mount g_mounts[8];
+static struct vfs_mount g_mounts[12];
 static int g_mount_count = 0;
 static int g_root = 0;
 
@@ -96,6 +97,7 @@ static int backend_is_dir(int backend, int node) {
     if (backend == VFS_BACKEND_DEV) return pseudofs_is_dir(PSEUDOFS_DEV, node);
     if (backend == VFS_BACKEND_PROC) return pseudofs_is_dir(PSEUDOFS_PROC, node);
     if (backend == VFS_BACKEND_SYS) return pseudofs_is_dir(PSEUDOFS_SYS, node);
+    if (backend == VFS_BACKEND_EXT2) return ext2_is_dir(node);
     return fs_is_dir(node);
 }
 
@@ -106,6 +108,7 @@ static int backend_read_file(int backend, int node, const uint8_t **data, uint64
     if (backend == VFS_BACKEND_DEV) return pseudofs_read_file(PSEUDOFS_DEV, node, data, size);
     if (backend == VFS_BACKEND_PROC) return pseudofs_read_file(PSEUDOFS_PROC, node, data, size);
     if (backend == VFS_BACKEND_SYS) return pseudofs_read_file(PSEUDOFS_SYS, node, data, size);
+    if (backend == VFS_BACKEND_EXT2) return ext2_read_file(node, data, size);
     return fs_read_file(node, data, size);
 }
 
@@ -116,6 +119,7 @@ static int backend_resolve(int backend, int cwd, const char *path) {
     if (backend == VFS_BACKEND_DEV) return pseudofs_resolve(PSEUDOFS_DEV, cwd, path);
     if (backend == VFS_BACKEND_PROC) return pseudofs_resolve(PSEUDOFS_PROC, cwd, path);
     if (backend == VFS_BACKEND_SYS) return pseudofs_resolve(PSEUDOFS_SYS, cwd, path);
+    if (backend == VFS_BACKEND_EXT2) return ext2_resolve(cwd, path);
     return fs_resolve(cwd, path);
 }
 
@@ -252,6 +256,10 @@ void vfs_pwd(int cwd) {
         pseudofs_pwd(PSEUDOFS_SYS, n->node);
         return;
     }
+    if (n->backend == VFS_BACKEND_EXT2) {
+        ext2_pwd(n->node);
+        return;
+    }
     fs_pwd(n->node);
 }
 
@@ -293,6 +301,10 @@ void vfs_ls(int node) {
     }
     if (n->backend == VFS_BACKEND_SYS) {
         pseudofs_ls(PSEUDOFS_SYS, n->node);
+        return;
+    }
+    if (n->backend == VFS_BACKEND_EXT2) {
+        ext2_ls(n->node);
         return;
     }
     fs_ls(n->node);

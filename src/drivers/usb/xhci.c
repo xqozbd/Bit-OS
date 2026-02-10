@@ -426,3 +426,19 @@ int xhci_init(void) {
 int xhci_is_ready(void) {
     return g_xhci.ready;
 }
+
+uint8_t xhci_port_count(void) {
+    if (!g_xhci.ready) return 0;
+    return g_xhci.max_ports;
+}
+
+int xhci_port_info(uint8_t port_index, struct xhci_port_info *out) {
+    if (!g_xhci.ready || !out) return -1;
+    if (port_index >= g_xhci.max_ports) return -1;
+    volatile uint32_t *port = g_xhci.op + 0x100;
+    uint32_t portsc = port[port_index * 4 + 0];
+    out->portsc = portsc;
+    out->connected = (uint8_t)(portsc & 1u);
+    out->speed = (uint8_t)((portsc >> 10) & 0xFu);
+    return 0;
+}
