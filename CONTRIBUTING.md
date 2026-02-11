@@ -96,6 +96,3 @@ Include:
 - Repro steps
 - VM or host details (VirtualBox/VMware, CPU model, RAM)
 - Screenshots for visual issues
-
-**Security**
-If you believe you found a security issue, report it privately instead of opening a public issue.
