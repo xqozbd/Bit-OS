@@ -2,6 +2,13 @@
 
 BitOS is a small x86_64 hobby operating system focused on clarity, simplicity, and rapid iteration. It boots via Limine, runs a framebuffer console, and provides a growing set of kernel services and drivers.
 
+## Quick Links
+- [LICENSE](LICENSE)
+- [CHANGELOG.md](CHANGELOG.md)
+- [TODO.md](TODO.md)
+- [CONTRIBUTING.md](CONTRIBUTING.md)
+- [SECURITY.md](SECURITY.md)
+
 ## What It Does
 - Boots on x86_64 (tested in VirtualBox with Limine).
 - Initializes IDT, paging, heap, and SMP (Limine MP).
