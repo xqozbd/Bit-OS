@@ -34,6 +34,8 @@ enum {
     SYS_SENDTO6 = 28,
     SYS_RECVFROM6 = 29,
     SYS_UNSHARE_PID = 30,
+    SYS_UNSHARE_MNT = 31,
+    SYS_UNSHARE_NET = 32,
     SYS_MAX
 };
 

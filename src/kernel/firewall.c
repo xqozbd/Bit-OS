@@ -2,34 +2,39 @@
 
 #include <stddef.h>
 
+#include "kernel/netns.h"
 #include "lib/log.h"
 #include "lib/strutil.h"
 
-#define FW_RULES_MAX 32
-
-static struct fw_rule g_rules[FW_RULES_MAX];
-static uint32_t g_rule_count = 0;
+static struct net_namespace *firewall_ns(void) {
+    struct net_namespace *ns = netns_current();
+    return ns ? ns : netns_root();
+}
 
 void firewall_init(void) {
     firewall_clear();
 }
 
 void firewall_clear(void) {
-    g_rule_count = 0;
+    struct net_namespace *ns = firewall_ns();
+    if (!ns) return;
+    ns->rule_count = 0;
     for (uint32_t i = 0; i < FW_RULES_MAX; ++i) {
-        g_rules[i].proto = FW_PROTO_ANY;
-        g_rules[i].src_ip_any = 1;
-        g_rules[i].dst_ip_any = 1;
-        g_rules[i].src_port_any = 1;
-        g_rules[i].dst_port_any = 1;
-        g_rules[i].action = FW_ACTION_ACCEPT;
+        ns->rules[i].proto = FW_PROTO_ANY;
+        ns->rules[i].src_ip_any = 1;
+        ns->rules[i].dst_ip_any = 1;
+        ns->rules[i].src_port_any = 1;
+        ns->rules[i].dst_port_any = 1;
+        ns->rules[i].action = FW_ACTION_ACCEPT;
     }
 }
 
 int firewall_add_rule(const struct fw_rule *rule) {
+    struct net_namespace *ns = firewall_ns();
+    if (!ns) return -1;
     if (!rule) return -1;
-    if (g_rule_count >= FW_RULES_MAX) return -1;
-    g_rules[g_rule_count++] = *rule;
+    if (ns->rule_count >= FW_RULES_MAX) return -1;
+    ns->rules[ns->rule_count++] = *rule;
     return 0;
 }
 
@@ -40,8 +45,10 @@ static int ip_match(const uint8_t a[4], const uint8_t b[4]) {
 int firewall_ipv4_allow(uint8_t proto,
                         const uint8_t src_ip[4], const uint8_t dst_ip[4],
                         uint16_t src_port, uint16_t dst_port) {
-    for (uint32_t i = 0; i < g_rule_count; ++i) {
-        const struct fw_rule *r = &g_rules[i];
+    struct net_namespace *ns = firewall_ns();
+    if (!ns) return 1;
+    for (uint32_t i = 0; i < ns->rule_count; ++i) {
+        const struct fw_rule *r = &ns->rules[i];
         if (r->proto != FW_PROTO_ANY && r->proto != proto) continue;
         if (!r->src_ip_any && !ip_match(r->src_ip, src_ip)) continue;
         if (!r->dst_ip_any && !ip_match(r->dst_ip, dst_ip)) continue;
@@ -53,9 +60,11 @@ int firewall_ipv4_allow(uint8_t proto,
 }
 
 void firewall_log_rules(void) {
-    log_printf("Firewall rules: %u\n", (unsigned)g_rule_count);
-    for (uint32_t i = 0; i < g_rule_count; ++i) {
-        const struct fw_rule *r = &g_rules[i];
+    struct net_namespace *ns = firewall_ns();
+    if (!ns) return;
+    log_printf("Firewall rules: %u\n", (unsigned)ns->rule_count);
+    for (uint32_t i = 0; i < ns->rule_count; ++i) {
+        const struct fw_rule *r = &ns->rules[i];
         const char *p = "any";
         if (r->proto == FW_PROTO_ICMP) p = "icmp";
         else if (r->proto == FW_PROTO_TCP) p = "tcp";

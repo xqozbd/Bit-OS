@@ -6,6 +6,9 @@
 
 struct thread;
 struct pid_namespace;
+struct mount_namespace;
+struct net_namespace;
+struct res_group;
 
 enum task_state {
     TASK_READY = 0,
@@ -22,6 +25,9 @@ struct task {
     uint32_t pid;
     struct pid_namespace *pid_ns;
     uint32_t pid_ns_pid;
+    struct mount_namespace *mnt_ns;
+    struct net_namespace *net_ns;
+    struct res_group *res_grp;
     uint32_t tid;
     uint32_t state;
     uint8_t is_user;
@@ -35,6 +41,9 @@ struct task {
     uint64_t user_stack_size;
     uint64_t mmap_base;
     uint64_t mmap_limit;
+    uint64_t res_mem_bytes;
+    uint32_t res_fd_count;
+    uint32_t res_sock_count;
     uint32_t pending_signals;
     uint64_t sig_handlers[32];
     const char *name;
@@ -80,6 +89,12 @@ int task_signal_handle_pending(struct task *t);
 struct task *task_find_pid(uint32_t pid);
 uint64_t task_mmap_anonymous(struct task *t, uint64_t addr, uint64_t len, uint32_t prot, uint32_t flags);
 int task_munmap(struct task *t, uint64_t addr, uint64_t len);
+int task_charge_mem(struct task *t, uint64_t bytes);
+void task_uncharge_mem(struct task *t, uint64_t bytes);
+int task_charge_fd(struct task *t, uint32_t count);
+void task_uncharge_fd(struct task *t, uint32_t count);
+int task_charge_socket(struct task *t, uint32_t count);
+void task_uncharge_socket(struct task *t, uint32_t count);
 
 struct task *task_current(void);
 struct task *task_create_for_thread(struct thread *t, const char *name);
@@ -89,6 +104,9 @@ uint32_t task_pid(struct task *t);
 uint32_t task_pid_ns(struct task *t);
 uint32_t task_pid_ns_id(struct task *t);
 uint32_t task_unshare_pidns(struct task *t);
+uint32_t task_unshare_mntns(struct task *t);
+uint32_t task_unshare_netns(struct task *t);
+uint32_t task_unshare_resgroup(struct task *t);
 void task_dump_list(void);
 size_t task_format_list(struct task *viewer, char *buf, size_t buf_len);
 

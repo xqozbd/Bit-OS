@@ -96,11 +96,20 @@ static uint64_t sys_sbrk_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4
     uint64_t old_page = (old + 0xFFF) & ~0xFFFULL;
     uint64_t new_page = (new_brk + 0xFFF) & ~0xFFFULL;
     if (new_page > old_page) {
+        if (!task_charge_mem(task, new_page - old_page)) return (uint64_t)-1;
         for (uint64_t va = old_page; va < new_page; va += 0x1000ULL) {
             uint64_t phys = pmm_alloc_frame();
-            if (phys == 0) return (uint64_t)-1;
-            if (paging_map_user_4k(task->pml4_phys, va, phys, 0) != 0) return (uint64_t)-1;
+            if (phys == 0) {
+                task_uncharge_mem(task, new_page - old_page);
+                return (uint64_t)-1;
+            }
+            if (paging_map_user_4k(task->pml4_phys, va, phys, 0) != 0) {
+                task_uncharge_mem(task, new_page - old_page);
+                return (uint64_t)-1;
+            }
         }
+    } else if (new_page < old_page) {
+        task_uncharge_mem(task, old_page - new_page);
     }
     task->brk = new_brk;
     return old;
@@ -528,6 +537,22 @@ static uint64_t sys_unshare_pid_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint
     return ns_id ? (uint64_t)ns_id : (uint64_t)-1;
 }
 
+static uint64_t sys_unshare_mnt_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a1; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    struct task *t = task_current();
+    if (!t) return (uint64_t)-1;
+    uint32_t ns_id = task_unshare_mntns(t);
+    return ns_id ? (uint64_t)ns_id : (uint64_t)-1;
+}
+
+static uint64_t sys_unshare_net_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a1; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    struct task *t = task_current();
+    if (!t) return (uint64_t)-1;
+    uint32_t ns_id = task_unshare_netns(t);
+    return ns_id ? (uint64_t)ns_id : (uint64_t)-1;
+}
+
 static syscall_fn g_syscalls[SYS_MAX] = {
     0,
     sys_write_impl,
@@ -559,7 +584,9 @@ static syscall_fn g_syscalls[SYS_MAX] = {
     sys_connect6_impl,
     sys_sendto6_impl,
     sys_recvfrom6_impl,
-    sys_unshare_pid_impl
+    sys_unshare_pid_impl,
+    sys_unshare_mnt_impl,
+    sys_unshare_net_impl
 };
 
 uint64_t syscall_dispatch(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3,

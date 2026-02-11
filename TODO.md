@@ -110,11 +110,11 @@
 - [x] Simple init system with service units/dependencies.
 - [x] Root filesystem journaling.
 - [x] Namespaces: PID isolation (ps and /proc view).
+- [x] Namespaces: mount isolation.
+- [x] Namespaces: network isolation.
+- [x] Resource limits / cgroup-like system.
 
 ## Next
-- [ ] Namespaces: mount isolation.
-- [ ] Namespaces: network isolation.
-- [ ] Resource limits / cgroup-like system.
 - [ ] Stack canaries / basic ASLR support.
 - [ ] NX bit enforcement for kernel/user separation.
 - [ ] Busybox-style userland command suite.

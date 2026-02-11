@@ -31,6 +31,7 @@
 #include "sys/acpi.h"
 #include "kernel/driver_registry.h"
 #include "kernel/firewall.h"
+#include "kernel/resgroup.h"
 
 static const char *const g_commands[] = {
     "help", "clear", "time", "mem", "memtest", "cputest", "ps",
@@ -38,7 +39,7 @@ static const char *const g_commands[] = {
     "ping6", "ip6",
     "mount", "umount", "dd",
     "shutdown", "restart", "s3", "s4", "thermal", "acpi", "dmesg", "drivers",
-    "fw", "pidns"
+    "fw", "pidns", "mntns", "netns", "rlimit"
 };
 
 
@@ -76,6 +77,9 @@ static void cmd_help(void) {
     log_printf("  drivers (driver registry status)\n");
     log_printf("  fw list|clear|add <proto> <src_ip|any> <dst_ip|any> <src_port|any> <dst_port|any> <accept|drop>\n");
     log_printf("  pidns (create a new PID namespace for this shell)\n");
+    log_printf("  mntns (create a new mount namespace for this shell)\n");
+    log_printf("  netns (create a new network namespace for this shell)\n");
+    log_printf("  rlimit show|set <tasks|fds|sockets|mem> <value|unlimited>|unshare\n");
     log_printf("  mount <part> <ext2|fat32>\n");
     log_printf("  umount\n");
     log_printf("  dd <src> <dst>\n");
@@ -216,6 +220,111 @@ static void cmd_pidns(void) {
     }
     log_printf("pidns: now in namespace %u (pid=%u)\n",
                (unsigned)ns_id, (unsigned)task_pid_ns(t));
+}
+
+static void cmd_mntns(void) {
+    struct task *t = task_current();
+    if (!t) {
+        log_printf("mntns: no task\n");
+        return;
+    }
+    uint32_t ns_id = task_unshare_mntns(t);
+    if (!ns_id) {
+        log_printf("mntns: failed\n");
+        return;
+    }
+    log_printf("mntns: now in namespace %u\n", (unsigned)ns_id);
+}
+
+static void cmd_netns(void) {
+    struct task *t = task_current();
+    if (!t) {
+        log_printf("netns: no task\n");
+        return;
+    }
+    uint32_t ns_id = task_unshare_netns(t);
+    if (!ns_id) {
+        log_printf("netns: failed\n");
+        return;
+    }
+    log_printf("netns: now in namespace %u\n", (unsigned)ns_id);
+}
+
+static void print_limit_u32(const char *label, uint32_t cur, uint32_t max) {
+    if (max == 0) {
+        log_printf("  %s: %u/unlimited\n", label, (unsigned)cur);
+    } else {
+        log_printf("  %s: %u/%u\n", label, (unsigned)cur, (unsigned)max);
+    }
+}
+
+static void print_limit_u64(const char *label, uint64_t cur, uint64_t max) {
+    if (max == 0) {
+        log_printf("  %s: %llu/unlimited\n", label, (unsigned long long)cur);
+    } else {
+        log_printf("  %s: %llu/%llu\n", label,
+                   (unsigned long long)cur, (unsigned long long)max);
+    }
+}
+
+static void cmd_rlimit(int argc, char **argv) {
+    struct task *t = task_current();
+    if (!t || !t->res_grp) {
+        log_printf("rlimit: no task\n");
+        return;
+    }
+    struct res_group *g = t->res_grp;
+    if (argc < 2 || str_eq(argv[1], "show")) {
+        log_printf("rlimit: group=%u\n", (unsigned)g->id);
+        print_limit_u32("tasks", g->cur_tasks, g->max_tasks);
+        print_limit_u32("fds", g->cur_fds, g->max_fds);
+        print_limit_u32("sockets", g->cur_sockets, g->max_sockets);
+        print_limit_u64("mem(bytes)", g->cur_mem_bytes, g->max_mem_bytes);
+        return;
+    }
+    if (str_eq(argv[1], "unshare")) {
+        uint32_t id = task_unshare_resgroup(t);
+        if (!id) log_printf("rlimit: failed\n");
+        else log_printf("rlimit: new group %u\n", (unsigned)id);
+        return;
+    }
+    if (str_eq(argv[1], "set")) {
+        if (argc < 4) {
+            log_printf("rlimit: set <tasks|fds|sockets|mem> <value|unlimited>\n");
+            return;
+        }
+        const char *key = argv[2];
+        const char *val = argv[3];
+        if (str_eq(key, "tasks") || str_eq(key, "fds") || str_eq(key, "sockets")) {
+            uint64_t num = 0;
+            if (str_eq(val, "unlimited")) {
+                num = 0;
+            } else if (!str_to_u64(val, &num) || num > 0xFFFFFFFFu) {
+                log_printf("rlimit: bad value\n");
+                return;
+            }
+            if (str_eq(key, "tasks")) g->max_tasks = (uint32_t)num;
+            else if (str_eq(key, "fds")) g->max_fds = (uint32_t)num;
+            else g->max_sockets = (uint32_t)num;
+            log_printf("rlimit: %s set\n", key);
+            return;
+        }
+        if (str_eq(key, "mem")) {
+            uint64_t bytes = 0;
+            if (str_eq(val, "unlimited")) {
+                bytes = 0;
+            } else if (!str_parse_size_bytes(val, &bytes)) {
+                log_printf("rlimit: bad value\n");
+                return;
+            }
+            g->max_mem_bytes = bytes;
+            log_printf("rlimit: mem set\n");
+            return;
+        }
+        log_printf("rlimit: unknown key\n");
+        return;
+    }
+    log_printf("rlimit: show|set|unshare\n");
 }
 
 static int parse_ipv6(const char *s, uint8_t out[16]) {
@@ -767,6 +876,12 @@ int commands_exec(int argc, char **argv, struct command_ctx *ctx) {
         cmd_fw(argc, argv);
     } else if (str_eq(argv[0], "pidns")) {
         cmd_pidns();
+    } else if (str_eq(argv[0], "mntns")) {
+        cmd_mntns();
+    } else if (str_eq(argv[0], "netns")) {
+        cmd_netns();
+    } else if (str_eq(argv[0], "rlimit")) {
+        cmd_rlimit(argc, argv);
     } else if (str_eq(argv[0], "mount")) {
         if (argc < 3) {
             log_printf("mount: usage: mount <part> <ext2|fat32>\n");

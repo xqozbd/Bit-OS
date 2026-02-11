@@ -12,6 +12,7 @@
 #include "lib/log.h"
 #include "kernel/slab.h"
 #include "sys/journal.h"
+#include "kernel/task.h"
 enum { VFS_MAX_NODES = 512 };
 
 struct vfs_node {
@@ -30,10 +31,7 @@ struct vfs_mount {
 
 static struct vfs_node *g_nodes[VFS_MAX_NODES];
 static int g_node_count = 0;
-static struct vfs_mount g_mounts[12];
-static int g_mount_count = 0;
-static int g_root = 0;
-static int g_root_backend = VFS_BACKEND_MOCK;
+static struct mount_namespace g_root_ns;
 
 static void nodes_reset(void) {
     for (int i = 0; i < g_node_count; ++i) {
@@ -61,36 +59,84 @@ static int node_new(int backend, int node, int parent, const char *name, int is_
 
 static int ensure_root(void) {
     nodes_reset();
-    g_root = node_new(VFS_BACKEND_MOCK, 0, -1, "/", 1);
-    return g_root;
+    g_root_ns.root_backend = VFS_BACKEND_MOCK;
+    g_root_ns.root_node = 0;
+    g_root_ns.root_index = node_new(VFS_BACKEND_MOCK, 0, -1, "/", 1);
+    g_root_ns.mount_count = 0;
+    g_root_ns.mounts[g_root_ns.mount_count].path = "/";
+    g_root_ns.mounts[g_root_ns.mount_count].backend = g_root_ns.root_backend;
+    g_root_ns.mounts[g_root_ns.mount_count].root = g_root_ns.root_node;
+    g_root_ns.mount_count++;
+    return g_root_ns.root_index;
 }
 
 void vfs_init(void) {
+    g_root_ns.id = 1;
+    g_root_ns.refcount = 1;
     ensure_root();
-    g_mount_count = 0;
-    g_mounts[g_mount_count].path = "/";
-    g_mounts[g_mount_count].backend = g_nodes[g_root]->backend;
-    g_mounts[g_mount_count].root = g_nodes[g_root]->node;
-    g_mount_count++;
+}
+
+struct mount_namespace *vfs_root_namespace(void) {
+    return &g_root_ns;
+}
+
+static struct mount_namespace *vfs_ns_current(void) {
+    struct task *t = task_current();
+    if (t && t->mnt_ns) return t->mnt_ns;
+    return &g_root_ns;
+}
+
+void vfs_ns_clone(struct mount_namespace *dst, const struct mount_namespace *src) {
+    if (!dst || !src) return;
+    dst->root_backend = src->root_backend;
+    dst->root_node = src->root_node;
+    dst->root_index = node_new(dst->root_backend, dst->root_node, -1, "/", 1);
+    dst->mount_count = 0;
+    for (int i = 0; i < src->mount_count && i < VFS_MAX_MOUNTS; ++i) {
+        dst->mounts[dst->mount_count] = src->mounts[i];
+        dst->mount_count++;
+    }
+    if (dst->mount_count == 0) {
+        dst->mounts[0].path = "/";
+        dst->mounts[0].backend = dst->root_backend;
+        dst->mounts[0].root = dst->root_node;
+        dst->mount_count = 1;
+    } else {
+        dst->mounts[0].path = "/";
+        dst->mounts[0].backend = dst->root_backend;
+        dst->mounts[0].root = dst->root_node;
+    }
 }
 
 void vfs_set_root(int backend, int root_node) {
-    ensure_root();
-    g_nodes[g_root]->backend = backend;
-    g_nodes[g_root]->node = root_node;
-    g_root_backend = backend;
-    if (g_mount_count > 0) {
-        g_mounts[0].backend = backend;
-        g_mounts[0].root = root_node;
+    struct mount_namespace *ns = vfs_ns_current();
+    if (!ns) return;
+    if (ns->root_index < 0) {
+        ns->root_index = node_new(backend, root_node, -1, "/", 1);
+    }
+    g_nodes[ns->root_index]->backend = backend;
+    g_nodes[ns->root_index]->node = root_node;
+    ns->root_backend = backend;
+    ns->root_node = root_node;
+    if (ns->mount_count > 0) {
+        ns->mounts[0].backend = backend;
+        ns->mounts[0].root = root_node;
+    } else {
+        ns->mounts[0].path = "/";
+        ns->mounts[0].backend = backend;
+        ns->mounts[0].root = root_node;
+        ns->mount_count = 1;
     }
 }
 
 int vfs_mount(const char *path, int backend, int root_node) {
-    if (!path || g_mount_count >= (int)(sizeof(g_mounts) / sizeof(g_mounts[0]))) return -1;
-    g_mounts[g_mount_count].path = path;
-    g_mounts[g_mount_count].backend = backend;
-    g_mounts[g_mount_count].root = root_node;
-    return g_mount_count++;
+    struct mount_namespace *ns = vfs_ns_current();
+    if (!ns) return -1;
+    if (!path || ns->mount_count >= VFS_MAX_MOUNTS) return -1;
+    ns->mounts[ns->mount_count].path = path;
+    ns->mounts[ns->mount_count].backend = backend;
+    ns->mounts[ns->mount_count].root = root_node;
+    return ns->mount_count++;
 }
 
 static int backend_is_dir(int backend, int node) {
@@ -190,7 +236,8 @@ static void normalize_path(const char *path, char *out, size_t out_size) {
 }
 
 int vfs_root_backend(void) {
-    return g_root_backend;
+    struct mount_namespace *ns = vfs_ns_current();
+    return ns ? ns->root_backend : VFS_BACKEND_MOCK;
 }
 
 int vfs_build_path(int node, char *out, size_t out_len) {
@@ -206,7 +253,7 @@ int vfs_build_path(int node, char *out, size_t out_len) {
         parts[depth] = name;
         part_len[depth] = str_len(name);
         depth++;
-        if (cur == g_root) break;
+        if (cur == vfs_ns_current()->root_index) break;
         cur = n->parent;
     }
     size_t w = 0;
@@ -261,10 +308,12 @@ static int split_path(const char *path, char *parent_out, size_t parent_len,
 }
 
 static int mount_match(const char *path) {
+    struct mount_namespace *ns = vfs_ns_current();
+    if (!ns) return -1;
     int best = -1;
     size_t best_len = 0;
-    for (int i = 0; i < g_mount_count; ++i) {
-        const char *mp = g_mounts[i].path;
+    for (int i = 0; i < ns->mount_count; ++i) {
+        const char *mp = ns->mounts[i].path;
         size_t len = str_len(mp);
         if (len > best_len && str_eq(mp, "/")) {
             best = i;
@@ -284,13 +333,14 @@ static int mount_match(const char *path) {
 }
 
 static int vfs_wrap_node(int backend, int node) {
+    struct mount_namespace *ns = vfs_ns_current();
     if (node < 0) return -1;
     for (int i = 0; i < g_node_count; ++i) {
         if (g_nodes[i] && g_nodes[i]->backend == backend && g_nodes[i]->node == node) return i;
     }
     const char *name = "/";
     int is_dir = backend_is_dir(backend, node);
-    return node_new(backend, node, g_root, name, is_dir);
+    return node_new(backend, node, ns ? ns->root_index : -1, name, is_dir);
 }
 
 int vfs_resolve(int cwd, const char *path) {
@@ -299,13 +349,14 @@ int vfs_resolve(int cwd, const char *path) {
     normalize_path(path, norm, sizeof(norm));
 
     int m = mount_match(norm);
-    int backend = g_nodes[g_root]->backend;
-    int root_node = g_nodes[g_root]->node;
+    struct mount_namespace *ns = vfs_ns_current();
+    int backend = g_nodes[ns->root_index]->backend;
+    int root_node = g_nodes[ns->root_index]->node;
     const char *sub = norm;
     if (m >= 0) {
-        backend = g_mounts[m].backend;
-        root_node = g_mounts[m].root;
-        size_t len = str_len(g_mounts[m].path);
+        backend = ns->mounts[m].backend;
+        root_node = ns->mounts[m].root;
+        size_t len = str_len(ns->mounts[m].path);
         sub = norm + len;
         if (sub[0] == '/') sub++;
         if (sub[0] == '\0') sub = "/";
@@ -430,11 +481,12 @@ void vfs_pwd(int cwd) {
 void vfs_ls(int node) {
     if (node < 0 || node >= g_node_count || !g_nodes[node]) return;
     const struct vfs_node *n = g_nodes[node];
-    if (node == g_root) {
+    struct mount_namespace *ns = vfs_ns_current();
+    if (ns && node == ns->root_index) {
         /* List mount points that aren't part of the backend root. */
         int printed = 0;
-        for (int i = 0; i < g_mount_count; ++i) {
-            const char *mp = g_mounts[i].path;
+        for (int i = 0; i < ns->mount_count; ++i) {
+            const char *mp = ns->mounts[i].path;
             if (!mp || str_eq(mp, "/")) continue;
             if (mp[0] == '/') mp++;
             if (*mp == '\0') continue;
@@ -500,9 +552,10 @@ int vfs_list_dir(const char *path, char *out, uint64_t out_len) {
     char *w = out;
     uint64_t rem = out_len;
 
-    if (node == g_root) {
-        for (int i = 0; i < g_mount_count; ++i) {
-            const char *mp = g_mounts[i].path;
+    struct mount_namespace *ns = vfs_ns_current();
+    if (ns && node == ns->root_index) {
+        for (int i = 0; i < ns->mount_count; ++i) {
+            const char *mp = ns->mounts[i].path;
             if (!mp || str_eq(mp, "/")) continue;
             const char *name = mp;
             if (name[0] == '/') name++;

@@ -3,6 +3,8 @@
 
 #include <stdint.h>
 
+#define FW_RULES_MAX 32
+
 enum fw_action {
     FW_ACTION_ACCEPT = 0,
     FW_ACTION_DROP = 1

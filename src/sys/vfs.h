@@ -13,9 +13,29 @@
 #define VFS_BACKEND_SYS 7
 #define VFS_BACKEND_EXT2 8
 
+#define VFS_MAX_MOUNTS 12
+
+struct vfs_mount_entry {
+    const char *path;
+    int backend;
+    int root;
+};
+
+struct mount_namespace {
+    uint32_t id;
+    uint32_t refcount;
+    int root_backend;
+    int root_node;
+    int root_index;
+    int mount_count;
+    struct vfs_mount_entry mounts[VFS_MAX_MOUNTS];
+};
+
 void vfs_init(void);
 void vfs_set_root(int backend, int root_node);
 int vfs_mount(const char *path, int backend, int root_node);
+struct mount_namespace *vfs_root_namespace(void);
+void vfs_ns_clone(struct mount_namespace *dst, const struct mount_namespace *src);
 
 int vfs_resolve(int cwd, const char *path);
 int vfs_is_dir(int node);

@@ -49,7 +49,7 @@ Kernel & Architecture: Interrupt masking / IRQ priority routing, GDT/TSS + Ring-
 
 Scheduling & Memory: Per-CPU run queue load balancing, user address space layout defaults + page-table clone helpers, and userland mmap/munmap support.
 
-Process & Syscalls: Userspace fork/exec/exit support, per-process file descriptor table + basic open/read/close syscalls, signals (kill/ignore) with default handlers, and PID namespaces (isolated ps/proc view).
+Process & Syscalls: Userspace fork/exec/exit support, per-process file descriptor table + basic open/read/close syscalls, signals (kill/ignore) with default handlers, PID namespaces (isolated ps/proc view), mount namespaces (isolated VFS root/mounts), network namespaces (isolated sockets and firewall state), and resource limits / cgroup-like groups (tasks, fds, sockets, memory).
 
 Storage & Filesystems: Block device layer + buffered IO, MBR/GPT partition parsing, VMware ATA PIO and AHCI SATA driver, VFS mount root, FAT32 write support (create/write/truncate), ext2 read-only driver (superblock/group/inode/dir), ext2 bitmap allocators (block/inode), ext2 create/write/truncate, ext2 unlink/rename, ext2 fsck-lite at mount, and block cache writeback polling.
 

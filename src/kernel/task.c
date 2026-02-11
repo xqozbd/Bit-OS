@@ -10,9 +10,14 @@
 #include "kernel/thread.h"
 #include "kernel/sched.h"
 #include "kernel/socket.h"
+#include "kernel/netns.h"
+#include "kernel/resgroup.h"
+#include "sys/vfs.h"
 
 static uint32_t g_next_pid = 2;
 static uint32_t g_next_pidns_id = 1;
+static uint32_t g_next_mntns_id = 1;
+static uint32_t g_next_netns_id = 2;
 static struct pid_namespace g_root_pidns;
 static struct task g_boot_task;
 static struct task *g_task_head = NULL;
@@ -52,10 +57,67 @@ static void pidns_unref(struct pid_namespace *ns) {
     }
 }
 
+static void mntns_ref(struct mount_namespace *ns) {
+    if (!ns) return;
+    __atomic_fetch_add(&ns->refcount, 1u, __ATOMIC_SEQ_CST);
+}
+
+static void mntns_unref(struct mount_namespace *ns) {
+    if (!ns) return;
+    if (__atomic_fetch_sub(&ns->refcount, 1u, __ATOMIC_SEQ_CST) == 1u) {
+        if (ns != vfs_root_namespace()) kfree(ns);
+    }
+}
+
 struct task *task_current(void) {
     struct thread *t = thread_current();
     if (!t) return NULL;
     return t->task;
+}
+
+int task_charge_mem(struct task *t, uint64_t bytes) {
+    if (!t || bytes == 0) return 1;
+    if (!t->res_grp) return 0;
+    if (!resgroup_charge_mem(t->res_grp, bytes)) return 0;
+    t->res_mem_bytes += bytes;
+    return 1;
+}
+
+void task_uncharge_mem(struct task *t, uint64_t bytes) {
+    if (!t || bytes == 0 || !t->res_grp) return;
+    if (t->res_mem_bytes < bytes) t->res_mem_bytes = 0;
+    else t->res_mem_bytes -= bytes;
+    resgroup_uncharge_mem(t->res_grp, bytes);
+}
+
+int task_charge_fd(struct task *t, uint32_t count) {
+    if (!t || count == 0) return 1;
+    if (!t->res_grp) return 0;
+    if (!resgroup_charge_fd(t->res_grp, count)) return 0;
+    t->res_fd_count += count;
+    return 1;
+}
+
+void task_uncharge_fd(struct task *t, uint32_t count) {
+    if (!t || count == 0 || !t->res_grp) return;
+    if (t->res_fd_count < count) t->res_fd_count = 0;
+    else t->res_fd_count -= count;
+    resgroup_uncharge_fd(t->res_grp, count);
+}
+
+int task_charge_socket(struct task *t, uint32_t count) {
+    if (!t || count == 0) return 1;
+    if (!t->res_grp) return 0;
+    if (!resgroup_charge_socket(t->res_grp, count)) return 0;
+    t->res_sock_count += count;
+    return 1;
+}
+
+void task_uncharge_socket(struct task *t, uint32_t count) {
+    if (!t || count == 0 || !t->res_grp) return;
+    if (t->res_sock_count < count) t->res_sock_count = 0;
+    else t->res_sock_count -= count;
+    resgroup_uncharge_socket(t->res_grp, count);
 }
 
 void task_fd_init(struct task *t) {
@@ -75,6 +137,7 @@ void task_fd_init(struct task *t) {
     fd_set_console(&t->fds[0]);
     fd_set_console(&t->fds[1]);
     fd_set_console(&t->fds[2]);
+    task_charge_fd(t, 3);
 }
 
 struct task_fd *task_fd_get(struct task *t, int fd) {
@@ -86,6 +149,7 @@ struct task_fd *task_fd_get(struct task *t, int fd) {
 
 int task_fd_alloc(struct task *t, int node, uint32_t flags) {
     if (!t || !t->fds) return -1;
+    if (!task_charge_fd(t, 1)) return -1;
     for (int i = 0; i < 16; ++i) {
         if (!t->fds[i].used) {
             t->fds[i].used = 1;
@@ -97,11 +161,17 @@ int task_fd_alloc(struct task *t, int node, uint32_t flags) {
             return i;
         }
     }
+    task_uncharge_fd(t, 1);
     return -1;
 }
 
 int task_fd_alloc_socket(struct task *t, int sock_id) {
     if (!t || !t->fds) return -1;
+    if (!task_charge_fd(t, 1)) return -1;
+    if (!task_charge_socket(t, 1)) {
+        task_uncharge_fd(t, 1);
+        return -1;
+    }
     for (int i = 0; i < 16; ++i) {
         if (!t->fds[i].used) {
             t->fds[i].used = 1;
@@ -113,6 +183,8 @@ int task_fd_alloc_socket(struct task *t, int sock_id) {
             return i;
         }
     }
+    task_uncharge_socket(t, 1);
+    task_uncharge_fd(t, 1);
     return -1;
 }
 
@@ -122,6 +194,7 @@ int task_fd_close(struct task *t, int fd) {
     if (!t->fds[fd].used) return -1;
     if (t->fds[fd].type == FD_TYPE_SOCKET && t->fds[fd].sock_id >= 0) {
         socket_close(t->fds[fd].sock_id);
+        if (t->res_sock_count > 0) task_uncharge_socket(t, 1);
     }
     t->fds[fd].used = 0;
     t->fds[fd].type = 0;
@@ -129,6 +202,7 @@ int task_fd_close(struct task *t, int fd) {
     t->fds[fd].sock_id = -1;
     t->fds[fd].offset = 0;
     t->fds[fd].flags = 0;
+    if (t->res_fd_count > 0) task_uncharge_fd(t, 1);
     return 0;
 }
 
@@ -140,6 +214,13 @@ void task_init_bootstrap(struct thread *t) {
     g_boot_task.pid = 1;
     g_boot_task.pid_ns = &g_root_pidns;
     g_boot_task.pid_ns_pid = 1;
+    g_boot_task.mnt_ns = vfs_root_namespace();
+    mntns_ref(g_boot_task.mnt_ns);
+    g_boot_task.net_ns = netns_root();
+    netns_ref(g_boot_task.net_ns);
+    g_boot_task.res_grp = resgroup_root();
+    resgroup_ref(g_boot_task.res_grp);
+    resgroup_acquire_task(g_boot_task.res_grp);
     g_boot_task.tid = t->id;
     g_boot_task.state = TASK_RUNNING;
     g_boot_task.is_user = 0;
@@ -153,6 +234,9 @@ void task_init_bootstrap(struct thread *t) {
     g_boot_task.user_stack_size = 0;
     g_boot_task.mmap_base = g_mmap_base_default;
     g_boot_task.mmap_limit = g_mmap_limit_default;
+    g_boot_task.res_mem_bytes = 0;
+    g_boot_task.res_fd_count = 0;
+    g_boot_task.res_sock_count = 0;
     g_boot_task.pending_signals = 0;
     for (int i = 0; i < 32; ++i) g_boot_task.sig_handlers[i] = 0;
     g_boot_task.name = t->name ? t->name : "bootstrap";
@@ -178,6 +262,35 @@ struct task *task_create_for_thread(struct thread *t, const char *name) {
         task->pid_ns = &g_root_pidns;
         pidns_ref(task->pid_ns);
     }
+    if (cur && cur->mnt_ns) {
+        task->mnt_ns = cur->mnt_ns;
+        mntns_ref(task->mnt_ns);
+    } else {
+        task->mnt_ns = vfs_root_namespace();
+        mntns_ref(task->mnt_ns);
+    }
+    if (cur && cur->net_ns) {
+        task->net_ns = cur->net_ns;
+        netns_ref(task->net_ns);
+    } else {
+        task->net_ns = netns_root();
+        netns_ref(task->net_ns);
+    }
+    if (cur && cur->res_grp) {
+        task->res_grp = cur->res_grp;
+        resgroup_ref(task->res_grp);
+    } else {
+        task->res_grp = resgroup_root();
+        resgroup_ref(task->res_grp);
+    }
+    if (!resgroup_acquire_task(task->res_grp)) {
+        if (task->pid_ns) pidns_unref(task->pid_ns);
+        if (task->mnt_ns) mntns_unref(task->mnt_ns);
+        if (task->net_ns) netns_unref(task->net_ns);
+        resgroup_unref(task->res_grp);
+        kfree(task);
+        return NULL;
+    }
     task->pid_ns_pid = pidns_next_pid(task->pid_ns);
     task->tid = t->id;
     task->state = TASK_READY;
@@ -200,6 +313,9 @@ struct task *task_create_for_thread(struct thread *t, const char *name) {
     task->user_stack_size = 0;
     task->mmap_base = g_mmap_base_default;
     task->mmap_limit = g_mmap_limit_default;
+    task->res_mem_bytes = 0;
+    task->res_fd_count = 0;
+    task->res_sock_count = 0;
     task->pending_signals = 0;
     for (int i = 0; i < 32; ++i) task->sig_handlers[i] = 0;
     task->name = name ? name : "task";
@@ -243,6 +359,13 @@ void task_clone_from(struct task *dst, const struct task *src) {
     dst->pid_ns = src->pid_ns;
     if (dst->pid_ns) pidns_ref(dst->pid_ns);
     dst->pid_ns_pid = pidns_next_pid(dst->pid_ns);
+    if (dst->mnt_ns) mntns_unref(dst->mnt_ns);
+    dst->mnt_ns = src->mnt_ns;
+    if (dst->mnt_ns) mntns_ref(dst->mnt_ns);
+    if (dst->net_ns) netns_unref(dst->net_ns);
+    dst->net_ns = src->net_ns;
+    if (dst->net_ns) netns_ref(dst->net_ns);
+    struct res_group *old_rg = dst->res_grp;
     dst->is_user = src->is_user;
     dst->pml4_phys = src->pml4_phys;
     dst->brk_base = src->brk_base;
@@ -252,6 +375,26 @@ void task_clone_from(struct task *dst, const struct task *src) {
     dst->user_stack_size = src->user_stack_size;
     dst->mmap_base = src->mmap_base;
     dst->mmap_limit = src->mmap_limit;
+    if (old_rg) {
+        resgroup_uncharge_fd(old_rg, dst->res_fd_count);
+        resgroup_uncharge_socket(old_rg, dst->res_sock_count);
+        resgroup_uncharge_mem(old_rg, dst->res_mem_bytes);
+    }
+    if (old_rg && old_rg != src->res_grp) {
+        resgroup_unref(old_rg);
+    }
+    dst->res_grp = src->res_grp;
+    if (dst->res_grp && dst->res_grp != old_rg) {
+        resgroup_ref(dst->res_grp);
+    }
+    dst->res_fd_count = src->res_fd_count;
+    dst->res_sock_count = src->res_sock_count;
+    dst->res_mem_bytes = src->res_mem_bytes;
+    if (dst->res_grp) {
+        resgroup_charge_fd(dst->res_grp, dst->res_fd_count);
+        resgroup_charge_socket(dst->res_grp, dst->res_sock_count);
+        resgroup_charge_mem(dst->res_grp, dst->res_mem_bytes);
+    }
     dst->pending_signals = 0;
     for (int i = 0; i < 32; ++i) {
         dst->sig_handlers[i] = src->sig_handlers[i];
@@ -331,10 +474,17 @@ uint64_t task_mmap_anonymous(struct task *t, uint64_t addr, uint64_t len, uint32
         if (base + size > t->mmap_limit) return 0;
     }
 
+    if (!task_charge_mem(t, size)) return 0;
     for (uint64_t va = base; va < base + size; va += 0x1000ull) {
         uint64_t phys = pmm_alloc_frame();
-        if (phys == 0) return 0;
-        if (paging_map_user_4k(t->pml4_phys, va, phys, 0) != 0) return 0;
+        if (phys == 0) {
+            task_uncharge_mem(t, size);
+            return 0;
+        }
+        if (paging_map_user_4k(t->pml4_phys, va, phys, 0) != 0) {
+            task_uncharge_mem(t, size);
+            return 0;
+        }
     }
 
     struct task_map *m = (struct task_map *)kmalloc(sizeof(*m));
@@ -371,15 +521,35 @@ int task_munmap(struct task *t, uint64_t addr, uint64_t len) {
     if (prev) prev->next = cur->next;
     else t->maps = cur->next;
     kfree(cur);
+    task_uncharge_mem(t, size);
     return 0;
 }
 
 void task_on_thread_exit(struct thread *t) {
     if (!t || !t->task) return;
     t->task->state = TASK_DEAD;
+    if (t->task->res_grp) {
+        resgroup_uncharge_fd(t->task->res_grp, t->task->res_fd_count);
+        resgroup_uncharge_socket(t->task->res_grp, t->task->res_sock_count);
+        resgroup_uncharge_mem(t->task->res_grp, t->task->res_mem_bytes);
+        resgroup_release_task(t->task->res_grp);
+        resgroup_unref(t->task->res_grp);
+        t->task->res_grp = NULL;
+        t->task->res_fd_count = 0;
+        t->task->res_sock_count = 0;
+        t->task->res_mem_bytes = 0;
+    }
     if (t->task->pid_ns) {
         pidns_unref(t->task->pid_ns);
         t->task->pid_ns = NULL;
+    }
+    if (t->task->mnt_ns) {
+        mntns_unref(t->task->mnt_ns);
+        t->task->mnt_ns = NULL;
+    }
+    if (t->task->net_ns) {
+        netns_unref(t->task->net_ns);
+        t->task->net_ns = NULL;
     }
 }
 
@@ -406,6 +576,45 @@ uint32_t task_unshare_pidns(struct task *t) {
     t->pid_ns = ns;
     t->pid_ns_pid = 1;
     return ns->id;
+}
+
+uint32_t task_unshare_mntns(struct task *t) {
+    if (!t) return 0;
+    struct mount_namespace *cur = t->mnt_ns;
+    struct mount_namespace *ns = (struct mount_namespace *)kmalloc(sizeof(*ns));
+    if (!ns) return 0;
+    vfs_ns_clone(ns, cur);
+    ns->id = g_next_mntns_id++;
+    ns->refcount = 1;
+    if (t->mnt_ns) mntns_unref(t->mnt_ns);
+    t->mnt_ns = ns;
+    return ns->id;
+}
+
+uint32_t task_unshare_netns(struct task *t) {
+    if (!t) return 0;
+    struct net_namespace *cur = t->net_ns ? t->net_ns : netns_root();
+    struct net_namespace *ns = (struct net_namespace *)kmalloc(sizeof(*ns));
+    if (!ns) return 0;
+    netns_clone(ns, cur);
+    ns->id = g_next_netns_id++;
+    if (t->net_ns) netns_unref(t->net_ns);
+    t->net_ns = ns;
+    return ns->id;
+}
+
+uint32_t task_unshare_resgroup(struct task *t) {
+    if (!t) return 0;
+    struct res_group *cur = t->res_grp ? t->res_grp : resgroup_root();
+    struct res_group *g = (struct res_group *)kmalloc(sizeof(*g));
+    if (!g) return 0;
+    resgroup_clone(g, cur);
+    g->id = resgroup_new_id();
+    if (!resgroup_move_task(t, g)) {
+        kfree(g);
+        return 0;
+    }
+    return g->id;
 }
 
 struct task *task_find_pid(uint32_t pid) {

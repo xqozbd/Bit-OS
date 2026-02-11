@@ -132,6 +132,14 @@ static inline long sys_unshare_pid(void) {
     return __syscall6(30, 0, 0, 0, 0, 0, 0);
 }
 
+static inline long sys_unshare_mnt(void) {
+    return __syscall6(31, 0, 0, 0, 0, 0, 0);
+}
+
+static inline long sys_unshare_net(void) {
+    return __syscall6(32, 0, 0, 0, 0, 0, 0);
+}
+
 /* Userspace DNS stub: accepts dotted-quad literals only. */
 static inline int dns_resolve(const char *name, uint8_t out_ip[4]) {
     if (!name || !out_ip) return -1;
