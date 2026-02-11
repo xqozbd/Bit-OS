@@ -218,7 +218,7 @@ static uint64_t sys_fork_impl(struct syscall_frame *f) {
         child->task->pml4_phys = ctx->pml4_phys;
     }
     paging_switch_to(parent->pml4_phys);
-    return (uint64_t)task_pid(child->task);
+    return (uint64_t)task_pid_ns(child->task);
 }
 
 static uint64_t sys_exec_impl(uint64_t a1, uint64_t a2, uint64_t a3) {
@@ -342,6 +342,17 @@ static uint64_t sys_connect_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t
     return (uint64_t)socket_connect(sid, ip, port);
 }
 
+static uint64_t sys_connect6_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a4; (void)a5; (void)a6;
+    int fd = (int)a1;
+    const uint8_t *ip = (const uint8_t *)a2;
+    uint16_t port = (uint16_t)a3;
+    struct task *t = task_current();
+    int sid = fd_to_socket(t, fd);
+    if (sid < 0) return (uint64_t)-1;
+    return (uint64_t)socket_connect6(sid, ip, port);
+}
+
 static uint64_t sys_sendto_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
     (void)a6;
     int fd = (int)a1;
@@ -355,6 +366,19 @@ static uint64_t sys_sendto_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t 
     return (uint64_t)socket_sendto(sid, buf, len, ip, port);
 }
 
+static uint64_t sys_sendto6_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a6;
+    int fd = (int)a1;
+    const uint8_t *buf = (const uint8_t *)a2;
+    uint16_t len = (uint16_t)a3;
+    const uint8_t *ip = (const uint8_t *)a4;
+    uint16_t port = (uint16_t)a5;
+    struct task *t = task_current();
+    int sid = fd_to_socket(t, fd);
+    if (sid < 0) return (uint64_t)-1;
+    return (uint64_t)socket_sendto6(sid, buf, len, ip, port);
+}
+
 static uint64_t sys_recvfrom_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
     (void)a6;
     int fd = (int)a1;
@@ -366,6 +390,19 @@ static uint64_t sys_recvfrom_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_
     int sid = fd_to_socket(t, fd);
     if (sid < 0) return (uint64_t)-1;
     return (uint64_t)socket_recvfrom(sid, buf, len, out_ip, out_port);
+}
+
+static uint64_t sys_recvfrom6_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a6;
+    int fd = (int)a1;
+    uint8_t *buf = (uint8_t *)a2;
+    uint16_t len = (uint16_t)a3;
+    uint8_t *out_ip = (uint8_t *)a4;
+    uint16_t *out_port = (uint16_t *)a5;
+    struct task *t = task_current();
+    int sid = fd_to_socket(t, fd);
+    if (sid < 0) return (uint64_t)-1;
+    return (uint64_t)socket_recvfrom6(sid, buf, len, out_ip, out_port);
 }
 
 static uint64_t sys_listen_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
@@ -483,6 +520,14 @@ static uint64_t sys_umount_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t 
     return 0;
 }
 
+static uint64_t sys_unshare_pid_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a1; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    struct task *t = task_current();
+    if (!t) return (uint64_t)-1;
+    uint32_t ns_id = task_unshare_pidns(t);
+    return ns_id ? (uint64_t)ns_id : (uint64_t)-1;
+}
+
 static syscall_fn g_syscalls[SYS_MAX] = {
     0,
     sys_write_impl,
@@ -510,7 +555,11 @@ static syscall_fn g_syscalls[SYS_MAX] = {
     sys_getdns_impl,
     sys_listdir_impl,
     sys_mount_impl,
-    sys_umount_impl
+    sys_umount_impl,
+    sys_connect6_impl,
+    sys_sendto6_impl,
+    sys_recvfrom6_impl,
+    sys_unshare_pid_impl
 };
 
 uint64_t syscall_dispatch(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3,

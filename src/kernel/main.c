@@ -46,6 +46,7 @@
 #include "kernel/driver_registry.h"
 #include "kernel/init.h"
 #include "kernel/dhcp.h"
+#include "kernel/firewall.h"
 #include "sys/boot_params.h"
 
 /* Bootstrap stack: keep it inside the kernel image so it's mapped in our page tables. */
@@ -256,6 +257,7 @@ static void kmain_stage2(void) {
         driver_set_status_idx(drv_usbmgr, DRIVER_STATUS_SKIPPED, "xhci not ready");
     }
     socket_init();
+    firewall_init();
     log_printf("Boot: socket layer ready\n");
     if (pcnet_is_ready()) {
         if (dhcp_request() == 0) {

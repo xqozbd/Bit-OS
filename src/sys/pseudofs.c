@@ -111,7 +111,7 @@ int pseudofs_read_file(int fs_id, int node, const uint8_t **data, uint64_t *size
             append_u64(&w, &remain, usable);
             append_char(&w, &remain, '\n');
         } else if (node == 3) {
-            size_t used = task_format_list(w, remain);
+            size_t used = task_format_list(task_current(), w, remain);
             w += used;
             remain = (remain > used) ? (remain - used) : 0;
         }

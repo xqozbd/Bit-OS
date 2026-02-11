@@ -10,6 +10,7 @@
 #include "kernel/pmm.h"
 #include "kernel/socket.h"
 #include "kernel/tcp.h"
+#include "kernel/firewall.h"
 #include "lib/log.h"
 
 void *memset(void *s, int c, size_t n);
@@ -72,10 +73,31 @@ static uint32_t g_last_arp_tick = 0;
 static uint8_t g_ip_addr[4] = {10, 0, 2, 15};
 static uint8_t g_gw_addr[4] = {10, 0, 2, 2};
 static uint8_t g_netmask[4] = {255, 255, 255, 0};
+static uint8_t g_ipv6_addr[16];
+static uint8_t g_ipv6_ready = 0;
+static uint8_t g_ipv6_forwarding = 0;
 static uint8_t g_arp_ip[4];
 static uint8_t g_arp_mac[6];
 static uint8_t g_arp_valid = 0;
 static uint16_t g_ip_ident = 1;
+
+enum { IPV6_ND_CACHE_MAX = 8, IPV6_ROUTE_MAX = 4 };
+
+struct ipv6_neighbor {
+    uint8_t ip[16];
+    uint8_t mac[6];
+    uint8_t valid;
+};
+
+struct ipv6_route {
+    uint8_t prefix[16];
+    uint8_t prefix_len;
+    uint8_t next_hop[16];
+    uint8_t valid;
+};
+
+static struct ipv6_neighbor g_ipv6_neighbors[IPV6_ND_CACHE_MAX];
+static struct ipv6_route g_ipv6_routes[IPV6_ROUTE_MAX];
 
 static inline void pcnet_write_rap(uint16_t io_base, uint16_t reg) {
     outw((uint16_t)(io_base + PCNET_PORT_RAP), reg);
@@ -109,6 +131,21 @@ static void pcnet_read_mac(uint16_t io_base, uint8_t mac[6]) {
     for (uint8_t i = 0; i < 6; ++i) {
         mac[i] = inb((uint16_t)(io_base + i));
     }
+}
+
+static void pcnet_init_ipv6_from_mac(void) {
+    for (int i = 0; i < 16; ++i) g_ipv6_addr[i] = 0;
+    g_ipv6_addr[0] = 0xfe;
+    g_ipv6_addr[1] = 0x80;
+    g_ipv6_addr[8] = (uint8_t)(g_pcnet_mac[0] ^ 0x02);
+    g_ipv6_addr[9] = g_pcnet_mac[1];
+    g_ipv6_addr[10] = g_pcnet_mac[2];
+    g_ipv6_addr[11] = 0xff;
+    g_ipv6_addr[12] = 0xfe;
+    g_ipv6_addr[13] = g_pcnet_mac[3];
+    g_ipv6_addr[14] = g_pcnet_mac[4];
+    g_ipv6_addr[15] = g_pcnet_mac[5];
+    g_ipv6_ready = 1;
 }
 
 static inline void *pcnet_phys_to_virt(uint64_t phys) {
@@ -250,6 +287,165 @@ static uint16_t net_checksum(const void *data, uint16_t len) {
     if (len & 1) sum += (uint16_t)(p[len - 1] << 8);
     while (sum >> 16) sum = (sum & 0xFFFFu) + (sum >> 16);
     return (uint16_t)(~sum);
+}
+
+static uint16_t net_checksum_ipv6(const uint8_t src[16], const uint8_t dst[16],
+                                  uint8_t next_header,
+                                  const uint8_t *payload, uint16_t payload_len) {
+    uint32_t sum = 0;
+    for (int i = 0; i < 16; i += 2) {
+        sum += (uint16_t)((src[i] << 8) | src[i + 1]);
+        sum += (uint16_t)((dst[i] << 8) | dst[i + 1]);
+    }
+    sum += (uint16_t)((payload_len >> 16) & 0xFFFFu);
+    sum += (uint16_t)(payload_len & 0xFFFFu);
+    sum += (uint16_t)next_header;
+    const uint8_t *p = payload;
+    for (uint16_t i = 0; i + 1 < payload_len; i += 2) {
+        sum += (uint16_t)((p[i] << 8) | p[i + 1]);
+    }
+    if (payload_len & 1) sum += (uint16_t)(p[payload_len - 1] << 8);
+    while (sum >> 16) sum = (sum & 0xFFFFu) + (sum >> 16);
+    return (uint16_t)(~sum);
+}
+
+static int ipv6_eq(const uint8_t a[16], const uint8_t b[16]) {
+    for (int i = 0; i < 16; ++i) if (a[i] != b[i]) return 0;
+    return 1;
+}
+
+static int ipv6_is_linklocal(const uint8_t ip[16]) {
+    return ip[0] == 0xfe && (ip[1] & 0xc0u) == 0x80u;
+}
+
+static void ipv6_solicited_node(const uint8_t target[16], uint8_t out[16]) {
+    for (int i = 0; i < 16; ++i) out[i] = 0;
+    out[0] = 0xff;
+    out[1] = 0x02;
+    out[11] = 0x01;
+    out[12] = 0xff;
+    out[13] = target[13];
+    out[14] = target[14];
+    out[15] = target[15];
+}
+
+static void ipv6_multicast_mac(const uint8_t ip[16], uint8_t out[6]) {
+    out[0] = 0x33;
+    out[1] = 0x33;
+    out[2] = ip[12];
+    out[3] = ip[13];
+    out[4] = ip[14];
+    out[5] = ip[15];
+}
+
+static void ipv6_neighbor_cache_set(const uint8_t ip[16], const uint8_t mac[6]) {
+    for (int i = 0; i < IPV6_ND_CACHE_MAX; ++i) {
+        if (g_ipv6_neighbors[i].valid && ipv6_eq(g_ipv6_neighbors[i].ip, ip)) {
+            for (int j = 0; j < 6; ++j) g_ipv6_neighbors[i].mac[j] = mac[j];
+            return;
+        }
+    }
+    for (int i = 0; i < IPV6_ND_CACHE_MAX; ++i) {
+        if (!g_ipv6_neighbors[i].valid) {
+            for (int j = 0; j < 16; ++j) g_ipv6_neighbors[i].ip[j] = ip[j];
+            for (int j = 0; j < 6; ++j) g_ipv6_neighbors[i].mac[j] = mac[j];
+            g_ipv6_neighbors[i].valid = 1;
+            return;
+        }
+    }
+    for (int j = 0; j < 16; ++j) g_ipv6_neighbors[0].ip[j] = ip[j];
+    for (int j = 0; j < 6; ++j) g_ipv6_neighbors[0].mac[j] = mac[j];
+    g_ipv6_neighbors[0].valid = 1;
+}
+
+static int ipv6_neighbor_cache_get(const uint8_t ip[16], uint8_t out_mac[6]) {
+    for (int i = 0; i < IPV6_ND_CACHE_MAX; ++i) {
+        if (g_ipv6_neighbors[i].valid && ipv6_eq(g_ipv6_neighbors[i].ip, ip)) {
+            for (int j = 0; j < 6; ++j) out_mac[j] = g_ipv6_neighbors[i].mac[j];
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void ipv6_route_init(void) {
+    for (int i = 0; i < IPV6_ROUTE_MAX; ++i) g_ipv6_routes[i].valid = 0;
+}
+
+static int ipv6_prefix_match(const uint8_t ip[16], const uint8_t prefix[16], uint8_t prefix_len) {
+    uint8_t full = (uint8_t)(prefix_len / 8);
+    uint8_t rem = (uint8_t)(prefix_len % 8);
+    for (uint8_t i = 0; i < full; ++i) {
+        if (ip[i] != prefix[i]) return 0;
+    }
+    if (rem) {
+        uint8_t mask = (uint8_t)(0xFFu << (8u - rem));
+        if ((ip[full] & mask) != (prefix[full] & mask)) return 0;
+    }
+    return 1;
+}
+
+static int ipv6_route_lookup(const uint8_t dst[16], uint8_t next_hop[16]) {
+    int best = -1;
+    uint8_t best_len = 0;
+    for (int i = 0; i < IPV6_ROUTE_MAX; ++i) {
+        if (!g_ipv6_routes[i].valid) continue;
+        if (ipv6_prefix_match(dst, g_ipv6_routes[i].prefix, g_ipv6_routes[i].prefix_len)) {
+            if (best < 0 || g_ipv6_routes[i].prefix_len > best_len) {
+                best = i;
+                best_len = g_ipv6_routes[i].prefix_len;
+            }
+        }
+    }
+    if (best < 0) return 0;
+    for (int i = 0; i < 16; ++i) next_hop[i] = g_ipv6_routes[best].next_hop[i];
+    return 1;
+}
+
+int pcnet_ipv6_route_add(const uint8_t prefix[16], uint8_t prefix_len, const uint8_t next_hop[16]) {
+    if (!prefix || !next_hop || prefix_len > 128) return -1;
+    for (int i = 0; i < IPV6_ROUTE_MAX; ++i) {
+        if (!g_ipv6_routes[i].valid) {
+            for (int j = 0; j < 16; ++j) g_ipv6_routes[i].prefix[j] = prefix[j];
+            for (int j = 0; j < 16; ++j) g_ipv6_routes[i].next_hop[j] = next_hop[j];
+            g_ipv6_routes[i].prefix_len = prefix_len;
+            g_ipv6_routes[i].valid = 1;
+            return 0;
+        }
+    }
+    return -1;
+}
+
+void pcnet_ipv6_route_list(void) {
+    for (int i = 0; i < IPV6_ROUTE_MAX; ++i) {
+        if (!g_ipv6_routes[i].valid) continue;
+        log_printf("ip6 route %02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x/%u -> %02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x\n",
+                   g_ipv6_routes[i].prefix[0], g_ipv6_routes[i].prefix[1],
+                   g_ipv6_routes[i].prefix[2], g_ipv6_routes[i].prefix[3],
+                   g_ipv6_routes[i].prefix[4], g_ipv6_routes[i].prefix[5],
+                   g_ipv6_routes[i].prefix[6], g_ipv6_routes[i].prefix[7],
+                   g_ipv6_routes[i].prefix[8], g_ipv6_routes[i].prefix[9],
+                   g_ipv6_routes[i].prefix[10], g_ipv6_routes[i].prefix[11],
+                   g_ipv6_routes[i].prefix[12], g_ipv6_routes[i].prefix[13],
+                   g_ipv6_routes[i].prefix[14], g_ipv6_routes[i].prefix[15],
+                   g_ipv6_routes[i].prefix_len,
+                   g_ipv6_routes[i].next_hop[0], g_ipv6_routes[i].next_hop[1],
+                   g_ipv6_routes[i].next_hop[2], g_ipv6_routes[i].next_hop[3],
+                   g_ipv6_routes[i].next_hop[4], g_ipv6_routes[i].next_hop[5],
+                   g_ipv6_routes[i].next_hop[6], g_ipv6_routes[i].next_hop[7],
+                   g_ipv6_routes[i].next_hop[8], g_ipv6_routes[i].next_hop[9],
+                   g_ipv6_routes[i].next_hop[10], g_ipv6_routes[i].next_hop[11],
+                   g_ipv6_routes[i].next_hop[12], g_ipv6_routes[i].next_hop[13],
+                   g_ipv6_routes[i].next_hop[14], g_ipv6_routes[i].next_hop[15]);
+    }
+}
+
+void pcnet_ipv6_set_forwarding(int enabled) {
+    g_ipv6_forwarding = enabled ? 1 : 0;
+}
+
+int pcnet_ipv6_get_forwarding(void) {
+    return g_ipv6_forwarding ? 1 : 0;
 }
 
 static uint16_t net_tcp_checksum(const uint8_t src_ip[4], const uint8_t dst_ip[4],
@@ -420,6 +616,165 @@ static void pcnet_send_ipv4_tcp(const uint8_t dst_ip[4], const uint8_t dst_mac[6
     pcnet_send_raw(pkt, frame_len);
 }
 
+static void pcnet_send_ipv6_icmp(uint8_t type, uint8_t code,
+                                 const uint8_t dst_ip[16],
+                                 const uint8_t dst_mac[6],
+                                 uint16_t id, uint16_t seq,
+                                 const uint8_t *payload, uint16_t payload_len) {
+    if (!g_ipv6_ready) return;
+    if (payload_len > 32) payload_len = 32;
+    uint16_t icmp_len = (uint16_t)(8 + payload_len);
+    uint16_t frame_len = (uint16_t)(14 + 40 + icmp_len);
+    uint8_t pkt[14 + 40 + 8 + 32];
+
+    for (uint8_t i = 0; i < 6; ++i) pkt[i] = dst_mac[i];
+    for (uint8_t i = 0; i < 6; ++i) pkt[6 + i] = g_pcnet_mac[i];
+    pkt[12] = 0x86; pkt[13] = 0xdd;
+
+    uint8_t *ip6 = &pkt[14];
+    ip6[0] = 0x60;
+    ip6[1] = 0x00; ip6[2] = 0x00; ip6[3] = 0x00;
+    ip6[4] = (uint8_t)(icmp_len >> 8);
+    ip6[5] = (uint8_t)(icmp_len & 0xFF);
+    ip6[6] = 58;
+    ip6[7] = 64;
+    for (uint8_t i = 0; i < 16; ++i) ip6[8 + i] = g_ipv6_addr[i];
+    for (uint8_t i = 0; i < 16; ++i) ip6[24 + i] = dst_ip[i];
+
+    uint8_t *icmp = &ip6[40];
+    icmp[0] = type;
+    icmp[1] = code;
+    icmp[2] = 0; icmp[3] = 0;
+    icmp[4] = (uint8_t)(id >> 8);
+    icmp[5] = (uint8_t)(id & 0xFF);
+    icmp[6] = (uint8_t)(seq >> 8);
+    icmp[7] = (uint8_t)(seq & 0xFF);
+    for (uint16_t i = 0; i < payload_len; ++i) icmp[8 + i] = payload ? payload[i] : 0;
+    uint16_t csum = net_checksum_ipv6(g_ipv6_addr, dst_ip, 58, icmp, icmp_len);
+    icmp[2] = (uint8_t)(csum >> 8);
+    icmp[3] = (uint8_t)(csum & 0xFF);
+
+    pcnet_send_raw(pkt, frame_len);
+}
+
+static void pcnet_send_ipv6_udp(const uint8_t dst_ip[16], const uint8_t dst_mac[6],
+                                uint16_t src_port, uint16_t dst_port,
+                                const uint8_t *payload, uint16_t payload_len) {
+    if (!g_ipv6_ready) return;
+    if (payload_len > 1200) payload_len = 1200;
+    uint16_t udp_len = (uint16_t)(8 + payload_len);
+    uint16_t frame_len = (uint16_t)(14 + 40 + udp_len);
+    uint8_t pkt[14 + 40 + 8 + 1200];
+
+    for (uint8_t i = 0; i < 6; ++i) pkt[i] = dst_mac[i];
+    for (uint8_t i = 0; i < 6; ++i) pkt[6 + i] = g_pcnet_mac[i];
+    pkt[12] = 0x86; pkt[13] = 0xdd;
+
+    uint8_t *ip6 = &pkt[14];
+    ip6[0] = 0x60;
+    ip6[1] = 0x00; ip6[2] = 0x00; ip6[3] = 0x00;
+    ip6[4] = (uint8_t)(udp_len >> 8);
+    ip6[5] = (uint8_t)(udp_len & 0xFF);
+    ip6[6] = 17;
+    ip6[7] = 64;
+    for (uint8_t i = 0; i < 16; ++i) ip6[8 + i] = g_ipv6_addr[i];
+    for (uint8_t i = 0; i < 16; ++i) ip6[24 + i] = dst_ip[i];
+
+    uint8_t *udp = &ip6[40];
+    udp[0] = (uint8_t)(src_port >> 8);
+    udp[1] = (uint8_t)(src_port & 0xFF);
+    udp[2] = (uint8_t)(dst_port >> 8);
+    udp[3] = (uint8_t)(dst_port & 0xFF);
+    udp[4] = (uint8_t)(udp_len >> 8);
+    udp[5] = (uint8_t)(udp_len & 0xFF);
+    udp[6] = 0x00;
+    udp[7] = 0x00;
+    for (uint16_t i = 0; i < payload_len; ++i) udp[8 + i] = payload ? payload[i] : 0;
+
+    uint16_t csum = net_checksum_ipv6(g_ipv6_addr, dst_ip, 17, udp, udp_len);
+    udp[6] = (uint8_t)(csum >> 8);
+    udp[7] = (uint8_t)(csum & 0xFF);
+
+    pcnet_send_raw(pkt, frame_len);
+}
+
+static void pcnet_send_ipv6_ns(const uint8_t target_ip[16]) {
+    if (!g_ipv6_ready) return;
+    uint8_t mcast_ip[16];
+    ipv6_solicited_node(target_ip, mcast_ip);
+    uint8_t dst_mac[6];
+    ipv6_multicast_mac(mcast_ip, dst_mac);
+
+    uint8_t pkt[14 + 40 + 32];
+    uint16_t icmp_len = 32;
+    uint16_t frame_len = (uint16_t)(14 + 40 + icmp_len);
+
+    for (uint8_t i = 0; i < 6; ++i) pkt[i] = dst_mac[i];
+    for (uint8_t i = 0; i < 6; ++i) pkt[6 + i] = g_pcnet_mac[i];
+    pkt[12] = 0x86; pkt[13] = 0xdd;
+
+    uint8_t *ip6 = &pkt[14];
+    ip6[0] = 0x60;
+    ip6[1] = 0x00; ip6[2] = 0x00; ip6[3] = 0x00;
+    ip6[4] = 0x00; ip6[5] = (uint8_t)icmp_len;
+    ip6[6] = 58;
+    ip6[7] = 255;
+    for (uint8_t i = 0; i < 16; ++i) ip6[8 + i] = g_ipv6_addr[i];
+    for (uint8_t i = 0; i < 16; ++i) ip6[24 + i] = mcast_ip[i];
+
+    uint8_t *icmp = &ip6[40];
+    icmp[0] = 135;
+    icmp[1] = 0;
+    icmp[2] = 0; icmp[3] = 0;
+    icmp[4] = 0; icmp[5] = 0; icmp[6] = 0; icmp[7] = 0;
+    for (uint8_t i = 0; i < 16; ++i) icmp[8 + i] = target_ip[i];
+    icmp[24] = 1; /* option: source link-layer addr */
+    icmp[25] = 1; /* length in 8-byte units */
+    for (uint8_t i = 0; i < 6; ++i) icmp[26 + i] = g_pcnet_mac[i];
+
+    uint16_t csum = net_checksum_ipv6(g_ipv6_addr, mcast_ip, 58, icmp, icmp_len);
+    icmp[2] = (uint8_t)(csum >> 8);
+    icmp[3] = (uint8_t)(csum & 0xFF);
+    pcnet_send_raw(pkt, frame_len);
+}
+
+static void pcnet_send_ipv6_na(const uint8_t dst_ip[16], const uint8_t dst_mac[6],
+                               const uint8_t target_ip[16], uint8_t solicited) {
+    if (!g_ipv6_ready) return;
+    uint8_t pkt[14 + 40 + 32];
+    uint16_t icmp_len = 32;
+    uint16_t frame_len = (uint16_t)(14 + 40 + icmp_len);
+
+    for (uint8_t i = 0; i < 6; ++i) pkt[i] = dst_mac[i];
+    for (uint8_t i = 0; i < 6; ++i) pkt[6 + i] = g_pcnet_mac[i];
+    pkt[12] = 0x86; pkt[13] = 0xdd;
+
+    uint8_t *ip6 = &pkt[14];
+    ip6[0] = 0x60;
+    ip6[1] = 0x00; ip6[2] = 0x00; ip6[3] = 0x00;
+    ip6[4] = 0x00; ip6[5] = (uint8_t)icmp_len;
+    ip6[6] = 58;
+    ip6[7] = 255;
+    for (uint8_t i = 0; i < 16; ++i) ip6[8 + i] = g_ipv6_addr[i];
+    for (uint8_t i = 0; i < 16; ++i) ip6[24 + i] = dst_ip[i];
+
+    uint8_t *icmp = &ip6[40];
+    icmp[0] = 136;
+    icmp[1] = 0;
+    icmp[2] = 0; icmp[3] = 0;
+    icmp[4] = (uint8_t)(0x60u | (solicited ? 0x40u : 0x00u));
+    icmp[5] = 0; icmp[6] = 0; icmp[7] = 0;
+    for (uint8_t i = 0; i < 16; ++i) icmp[8 + i] = target_ip[i];
+    icmp[24] = 2; /* option: target link-layer addr */
+    icmp[25] = 1; /* length in 8-byte units */
+    for (uint8_t i = 0; i < 6; ++i) icmp[26 + i] = g_pcnet_mac[i];
+
+    uint16_t csum = net_checksum_ipv6(g_ipv6_addr, dst_ip, 58, icmp, icmp_len);
+    icmp[2] = (uint8_t)(csum >> 8);
+    icmp[3] = (uint8_t)(csum & 0xFF);
+    pcnet_send_raw(pkt, frame_len);
+}
+
 static void pcnet_handle_ipv4(const uint8_t *pkt, uint16_t len) {
     if (len < 14 + 20) return;
     const uint8_t *ip = &pkt[14];
@@ -439,6 +794,7 @@ static void pcnet_handle_ipv4(const uint8_t *pkt, uint16_t len) {
         const uint8_t *icmp = ip + ihl * 4;
         uint16_t icmp_len = (uint16_t)(ip_len - ihl * 4);
         if (icmp_len < 8) return;
+        if (!firewall_ipv4_allow(1, &ip[12], &ip[16], 0, 0)) return;
         uint8_t type = icmp[0];
         if (type == 8) {
             uint16_t id = (uint16_t)((icmp[4] << 8) | icmp[5]);
@@ -457,6 +813,7 @@ static void pcnet_handle_ipv4(const uint8_t *pkt, uint16_t len) {
         if (udp_len > (uint16_t)(ip_len - ihl * 4)) return;
         uint16_t src_port = (uint16_t)((udp[0] << 8) | udp[1]);
         uint16_t dst_port = (uint16_t)((udp[2] << 8) | udp[3]);
+        if (!firewall_ipv4_allow(17, &ip[12], &ip[16], src_port, dst_port)) return;
         const uint8_t *payload = udp + 8;
         uint16_t payload_len = (uint16_t)(udp_len - 8);
         socket_net_rx(&ip[12], src_port, dst_port, payload, payload_len);
@@ -468,6 +825,7 @@ static void pcnet_handle_ipv4(const uint8_t *pkt, uint16_t len) {
         if (tcp_len < 20) return;
         uint16_t src_port = (uint16_t)((tcp[0] << 8) | tcp[1]);
         uint16_t dst_port = (uint16_t)((tcp[2] << 8) | tcp[3]);
+        if (!firewall_ipv4_allow(6, &ip[12], &ip[16], src_port, dst_port)) return;
         uint32_t seq = ((uint32_t)tcp[4] << 24) | ((uint32_t)tcp[5] << 16) |
                        ((uint32_t)tcp[6] << 8) | (uint32_t)tcp[7];
         uint32_t ack = ((uint32_t)tcp[8] << 24) | ((uint32_t)tcp[9] << 16) |
@@ -479,6 +837,56 @@ static void pcnet_handle_ipv4(const uint8_t *pkt, uint16_t len) {
         const uint8_t *payload = tcp + hdr_len;
         uint16_t payload_len = (uint16_t)(tcp_len - hdr_len);
         tcp_on_rx(&ip[12], &ip[16], src_port, dst_port, seq, ack, flags, payload, payload_len);
+    }
+}
+
+static void pcnet_handle_ipv6(const uint8_t *pkt, uint16_t len) {
+    if (len < 14 + 40) return;
+    const uint8_t *ip6 = &pkt[14];
+    if ((ip6[0] >> 4) != 6) return;
+    uint16_t payload_len = (uint16_t)((ip6[4] << 8) | ip6[5]);
+    if (payload_len + 40u > (uint16_t)(len - 14)) return;
+    uint8_t next = ip6[6];
+    if (next == 58) {
+        const uint8_t *icmp = ip6 + 40;
+        if (payload_len < 8) return;
+        uint8_t type = icmp[0];
+        if (type == 128) {
+            if (!g_ipv6_ready) return;
+            int dst_is_me = 1;
+            for (int i = 0; i < 16; ++i) {
+                if (ip6[24 + i] != g_ipv6_addr[i]) { dst_is_me = 0; break; }
+            }
+            if (!dst_is_me) return;
+            uint16_t id = (uint16_t)((icmp[4] << 8) | icmp[5]);
+            uint16_t seq = (uint16_t)((icmp[6] << 8) | icmp[7]);
+            pcnet_send_ipv6_icmp(129, 0, &ip6[8], &pkt[6], id, seq,
+                                 &icmp[8], (uint16_t)(payload_len - 8));
+        } else if (type == 135) {
+            if (payload_len < 24) return;
+            const uint8_t *target = &icmp[8];
+            if (!ipv6_eq(target, g_ipv6_addr)) return;
+            uint8_t dst_ip[16];
+            for (int i = 0; i < 16; ++i) dst_ip[i] = ip6[8 + i];
+            pcnet_send_ipv6_na(dst_ip, &pkt[6], target, 1);
+        } else if (type == 136) {
+            if (payload_len < 24) return;
+            const uint8_t *target = &icmp[8];
+            ipv6_neighbor_cache_set(target, &pkt[6]);
+        }
+        return;
+    }
+    if (next == 17) {
+        const uint8_t *udp = ip6 + 40;
+        if (payload_len < 8) return;
+        uint16_t udp_len = (uint16_t)((udp[4] << 8) | udp[5]);
+        if (udp_len < 8 || udp_len > payload_len) return;
+        uint16_t src_port = (uint16_t)((udp[0] << 8) | udp[1]);
+        uint16_t dst_port = (uint16_t)((udp[2] << 8) | udp[3]);
+        const uint8_t *payload = udp + 8;
+        uint16_t payload_len2 = (uint16_t)(udp_len - 8);
+        socket_net6_rx(&ip6[8], src_port, dst_port, payload, payload_len2);
+        return;
     }
 }
 
@@ -495,6 +903,8 @@ static void pcnet_poll_rx(void) {
                 pcnet_handle_arp(buf, len);
             } else if (eth == 0x0800) {
                 pcnet_handle_ipv4(buf, len);
+            } else if (eth == 0x86DD) {
+                pcnet_handle_ipv6(buf, len);
             }
         }
         pcnet_desc_init_rx(d, (uint64_t)(d->addr));
@@ -523,6 +933,8 @@ static int pcnet_probe(const struct pci_device *dev) {
     pcnet_write_csr(io_base, 0, PCNET_CSR0_STOP);
 
     pcnet_read_mac(io_base, g_pcnet_mac);
+    pcnet_init_ipv6_from_mac();
+    ipv6_route_init();
     g_pcnet_io = io_base;
     g_pcnet_irq = dev->irq_line;
     log_printf("PCNet: io=0x%x irq=%u mac=%02x:%02x:%02x:%02x:%02x:%02x\n",
@@ -662,6 +1074,31 @@ int pcnet_udp_send(const uint8_t dst_ip[4], uint16_t src_port, uint16_t dst_port
     return 0;
 }
 
+int pcnet_udp6_send(const uint8_t dst_ip[16], uint16_t src_port, uint16_t dst_port,
+                    const uint8_t *data, uint16_t len) {
+    if (!g_pcnet_ready || !g_ipv6_ready || !dst_ip || !data || len == 0) return -1;
+    uint8_t dst_mac[6];
+    uint8_t nh[16];
+    const uint8_t *target = dst_ip;
+    if (dst_ip[0] == 0xff) {
+        ipv6_multicast_mac(dst_ip, dst_mac);
+        pcnet_send_ipv6_udp(dst_ip, dst_mac, src_port, dst_port, data, len);
+        return 0;
+    }
+    if (ipv6_is_linklocal(dst_ip)) {
+        for (int i = 0; i < 16; ++i) nh[i] = dst_ip[i];
+    } else {
+        if (!ipv6_route_lookup(dst_ip, nh)) return -1;
+        target = nh;
+    }
+    if (!ipv6_neighbor_cache_get(target, dst_mac)) {
+        pcnet_send_ipv6_ns(target);
+        return -1;
+    }
+    pcnet_send_ipv6_udp(dst_ip, dst_mac, src_port, dst_port, data, len);
+    return 0;
+}
+
 int pcnet_udp_send_broadcast(uint16_t src_port, uint16_t dst_port,
                              const uint8_t *data, uint16_t len) {
     uint8_t bcast[4] = {255, 255, 255, 255};
@@ -712,6 +1149,39 @@ void pcnet_ping(const uint8_t ip[4]) {
     log_printf("ping: sent to %u.%u.%u.%u\n", ip[0], ip[1], ip[2], ip[3]);
 }
 
+void pcnet_ping6(const uint8_t ip[16]) {
+    if (!g_pcnet_ready || !ip) {
+        log_printf("ping6: network not ready\n");
+        return;
+    }
+    if (!g_ipv6_ready) {
+        log_printf("ping6: IPv6 not ready\n");
+        return;
+    }
+    uint8_t dst_mac[6];
+    uint8_t dst_ip[16];
+    for (int i = 0; i < 16; ++i) dst_ip[i] = ip[i];
+    if (ip[0] == 0xff) {
+        ipv6_multicast_mac(dst_ip, dst_mac);
+    } else {
+        uint8_t nh[16];
+        if (ipv6_is_linklocal(dst_ip)) {
+            for (int i = 0; i < 16; ++i) nh[i] = dst_ip[i];
+        } else if (!ipv6_route_lookup(dst_ip, nh)) {
+            log_printf("ping6: no route\n");
+            return;
+        }
+        if (!ipv6_neighbor_cache_get(nh, dst_mac)) {
+            pcnet_send_ipv6_ns(nh);
+            log_printf("ping6: resolving neighbor\n");
+            return;
+        }
+    }
+    const uint8_t payload[8] = {'b','i','t','o','s','6','p','n'};
+    pcnet_send_ipv6_icmp(128, 0, dst_ip, dst_mac, 0x1234, 1, payload, sizeof(payload));
+    log_printf("ping6: sent\n");
+}
+
 void pcnet_set_ip(const uint8_t ip[4]) {
     if (!ip) return;
     for (uint8_t i = 0; i < 4; ++i) g_ip_addr[i] = ip[i];
@@ -747,4 +1217,9 @@ void pcnet_get_mask(uint8_t out[4]) {
 void pcnet_get_mac(uint8_t out[6]) {
     if (!out) return;
     for (uint8_t i = 0; i < 6; ++i) out[i] = g_pcnet_mac[i];
+}
+
+void pcnet_get_ipv6(uint8_t out[16]) {
+    if (!out) return;
+    for (uint8_t i = 0; i < 16; ++i) out[i] = g_ipv6_addr[i];
 }

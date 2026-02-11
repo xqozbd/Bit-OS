@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 struct thread;
+struct pid_namespace;
 
 enum task_state {
     TASK_READY = 0,
@@ -19,6 +20,8 @@ enum task_state {
 
 struct task {
     uint32_t pid;
+    struct pid_namespace *pid_ns;
+    uint32_t pid_ns_pid;
     uint32_t tid;
     uint32_t state;
     uint8_t is_user;
@@ -38,6 +41,12 @@ struct task {
     struct task_fd *fds;
     struct task_map *maps;
     struct task *next;
+};
+
+struct pid_namespace {
+    uint32_t id;
+    uint32_t next_pid;
+    uint32_t refcount;
 };
 
 struct task_fd {
@@ -77,7 +86,10 @@ struct task *task_create_for_thread(struct thread *t, const char *name);
 void task_init_bootstrap(struct thread *t);
 void task_on_thread_exit(struct thread *t);
 uint32_t task_pid(struct task *t);
+uint32_t task_pid_ns(struct task *t);
+uint32_t task_pid_ns_id(struct task *t);
+uint32_t task_unshare_pidns(struct task *t);
 void task_dump_list(void);
-size_t task_format_list(char *buf, size_t buf_len);
+size_t task_format_list(struct task *viewer, char *buf, size_t buf_len);
 
 #endif /* KERNEL_TASK_H */

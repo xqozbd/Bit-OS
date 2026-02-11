@@ -72,12 +72,24 @@ static inline long sys_connect(int fd, const uint8_t ip[4], uint16_t port) {
     return __syscall6(14, (long)fd, (long)ip, (long)port, 0, 0, 0);
 }
 
+static inline long sys_connect6(int fd, const uint8_t ip[16], uint16_t port) {
+    return __syscall6(27, (long)fd, (long)ip, (long)port, 0, 0, 0);
+}
+
 static inline long sys_sendto(int fd, const void *buf, size_t len, const uint8_t ip[4], uint16_t port) {
     return __syscall6(15, (long)fd, (long)buf, (long)len, (long)ip, (long)port, 0);
 }
 
+static inline long sys_sendto6(int fd, const void *buf, size_t len, const uint8_t ip[16], uint16_t port) {
+    return __syscall6(28, (long)fd, (long)buf, (long)len, (long)ip, (long)port, 0);
+}
+
 static inline long sys_recvfrom(int fd, void *buf, size_t len, uint8_t ip[4], uint16_t *port) {
     return __syscall6(16, (long)fd, (long)buf, (long)len, (long)ip, (long)port, 0);
+}
+
+static inline long sys_recvfrom6(int fd, void *buf, size_t len, uint8_t ip[16], uint16_t *port) {
+    return __syscall6(29, (long)fd, (long)buf, (long)len, (long)ip, (long)port, 0);
 }
 
 static inline long sys_listen(int fd) {
@@ -116,6 +128,10 @@ static inline long sys_umount(void) {
     return __syscall6(26, 0, 0, 0, 0, 0, 0);
 }
 
+static inline long sys_unshare_pid(void) {
+    return __syscall6(30, 0, 0, 0, 0, 0, 0);
+}
+
 /* Userspace DNS stub: accepts dotted-quad literals only. */
 static inline int dns_resolve(const char *name, uint8_t out_ip[4]) {
     if (!name || !out_ip) return -1;
@@ -150,6 +166,16 @@ enum {
     SIGSEGV = 11,
     SIGTERM = 15,
     SIGCHLD = 17
+};
+
+enum {
+    AF_INET = 2,
+    AF_INET6 = 10
+};
+
+enum {
+    SOCK_STREAM = 1,
+    SOCK_DGRAM = 2
 };
 
 #endif /* SYS_LIBC_H */

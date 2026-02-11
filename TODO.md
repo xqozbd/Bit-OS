@@ -98,16 +98,22 @@
 - [x] Writeback cache + dirty block flush for block devices.
 - [x] FAT32 write support (create/write/truncate).
 - [x] Buffer cache + writeback for block devices.
+- [x] Basic firewall/netfilter rules.
+- [x] IPv6: packet parsing + basic header validation.
+- [x] IPv6: ICMPv6 echo request/reply (ping6).
+- [x] IPv6: neighbor discovery (NS/NA) + link-local addressing.
+- [x] IPv6: route table (static) + forwarding off by default.
+- [x] IPv6: UDP over IPv6 (basic send/recv).
 - [x] VFS write API + open flags (O_CREAT/O_TRUNC/O_APPEND).
 - [x] FS journal + recovery for root FS.
 - [x] Userland `ps`, `top`, `ls`, `mount`, `umount`, `dd` utilities.
 - [x] Simple init system with service units/dependencies.
 - [x] Root filesystem journaling.
+- [x] Namespaces: PID isolation (ps and /proc view).
 
 ## Next
-- [ ] Basic firewall/netfilter rules.
-- [ ] IPv6 support (optional).
-- [ ] Namespaces: PID, mount, network isolation.
+- [ ] Namespaces: mount isolation.
+- [ ] Namespaces: network isolation.
 - [ ] Resource limits / cgroup-like system.
 - [ ] Stack canaries / basic ASLR support.
 - [ ] NX bit enforcement for kernel/user separation.

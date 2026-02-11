@@ -10,6 +10,7 @@
 #include "drivers/video/fb_printf.h"
 #include "sys/initramfs.h"
 #include "sys/vfs.h"
+#include "sys/fs_mock.h"
 #include "sys/ext2.h"
 #include "sys/fat32.h"
 #include "sys/journal.h"
@@ -29,12 +30,15 @@
 #include "kernel/task.h"
 #include "sys/acpi.h"
 #include "kernel/driver_registry.h"
+#include "kernel/firewall.h"
 
 static const char *const g_commands[] = {
     "help", "clear", "time", "mem", "memtest", "cputest", "ps",
     "ls", "cd", "pwd", "cat", "run", "echo", "ver", "debug", "ping",
+    "ping6", "ip6",
     "mount", "umount", "dd",
-    "shutdown", "restart", "s3", "s4", "thermal", "acpi", "dmesg", "drivers"
+    "shutdown", "restart", "s3", "s4", "thermal", "acpi", "dmesg", "drivers",
+    "fw", "pidns"
 };
 
 
@@ -55,6 +59,11 @@ static void cmd_help(void) {
     log_printf("  memtest [--size N] [--time T] [--pages N]\n");
     log_printf("  run <path> (ELF64, higher-half)\n");
     log_printf("  ping <ip>\n");
+    log_printf("  ping6 <ipv6>\n");
+    log_printf("  ip6 addr\n");
+    log_printf("  ip6 route list\n");
+    log_printf("  ip6 route add <prefix>/<len> <nexthop>\n");
+    log_printf("  ip6 forward <on|off>\n");
     log_printf("  ps\n");
     log_printf("  debug\n");
     log_printf("  shutdown\n");
@@ -65,6 +74,8 @@ static void cmd_help(void) {
     log_printf("  acpi (ACPI table list)\n");
     log_printf("  dmesg (dump ring buffer log)\n");
     log_printf("  drivers (driver registry status)\n");
+    log_printf("  fw list|clear|add <proto> <src_ip|any> <dst_ip|any> <src_port|any> <dst_port|any> <accept|drop>\n");
+    log_printf("  pidns (create a new PID namespace for this shell)\n");
     log_printf("  mount <part> <ext2|fat32>\n");
     log_printf("  umount\n");
     log_printf("  dd <src> <dst>\n");
@@ -190,6 +201,248 @@ static void cmd_ps(void) {
 
 static void cmd_drivers(void) {
     driver_log_status();
+}
+
+static void cmd_pidns(void) {
+    struct task *t = task_current();
+    if (!t) {
+        log_printf("pidns: no task\n");
+        return;
+    }
+    uint32_t ns_id = task_unshare_pidns(t);
+    if (!ns_id) {
+        log_printf("pidns: failed\n");
+        return;
+    }
+    log_printf("pidns: now in namespace %u (pid=%u)\n",
+               (unsigned)ns_id, (unsigned)task_pid_ns(t));
+}
+
+static int parse_ipv6(const char *s, uint8_t out[16]) {
+    if (!s || !out) return 0;
+    uint16_t parts[8];
+    int part_count = 0;
+    int dbl = -1;
+    const char *p = s;
+    if (*p == ':') {
+        if (p[1] != ':') return 0;
+        dbl = 0;
+        p += 2;
+    }
+    while (*p) {
+        if (part_count >= 8) return 0;
+        if (*p == ':') {
+            if (dbl >= 0) return 0;
+            dbl = part_count;
+            p++;
+            if (*p == ':') {
+                p++;
+            }
+            continue;
+        }
+        uint32_t val = 0;
+        int digits = 0;
+        while (*p && *p != ':') {
+            char c = *p++;
+            if (c >= '0' && c <= '9') val = (val << 4) | (uint32_t)(c - '0');
+            else if (c >= 'a' && c <= 'f') val = (val << 4) | (uint32_t)(c - 'a' + 10);
+            else if (c >= 'A' && c <= 'F') val = (val << 4) | (uint32_t)(c - 'A' + 10);
+            else return 0;
+            if (++digits > 4) return 0;
+        }
+        if (digits == 0) return 0;
+        parts[part_count++] = (uint16_t)val;
+        if (*p == ':') {
+            p++;
+            if (*p == ':') {
+                if (dbl >= 0) return 0;
+                dbl = part_count;
+                p++;
+            }
+        }
+    }
+    if (dbl >= 0) {
+        int zeros = 8 - part_count;
+        if (zeros < 0) return 0;
+        for (int i = part_count - 1; i >= dbl; --i) parts[i + zeros] = parts[i];
+        for (int i = 0; i < zeros; ++i) parts[dbl + i] = 0;
+        part_count = 8;
+    }
+    if (part_count != 8) return 0;
+    for (int i = 0; i < 8; ++i) {
+        out[i * 2] = (uint8_t)(parts[i] >> 8);
+        out[i * 2 + 1] = (uint8_t)(parts[i] & 0xFF);
+    }
+    return 1;
+}
+
+static int parse_ipv6_prefix(const char *s, uint8_t out[16], uint8_t *out_len) {
+    if (!s || !out || !out_len) return 0;
+    const char *slash = s;
+    while (*slash && *slash != '/') slash++;
+    if (*slash != '/') return 0;
+    char buf[64];
+    size_t n = (size_t)(slash - s);
+    if (n == 0 || n >= sizeof(buf)) return 0;
+    for (size_t i = 0; i < n; ++i) buf[i] = s[i];
+    buf[n] = '\0';
+    if (!parse_ipv6(buf, out)) return 0;
+    uint64_t len = 0;
+    if (!str_to_u64(slash + 1, &len) || len > 128u) return 0;
+    *out_len = (uint8_t)len;
+    return 1;
+}
+
+static void cmd_ip6(int argc, char **argv) {
+    if (argc < 2) {
+        log_printf("ip6: addr | route list | route add <prefix>/<len> <nexthop> | forward <on|off>\n");
+        return;
+    }
+    if (str_eq(argv[1], "addr")) {
+        uint8_t ip6[16];
+        pcnet_get_ipv6(ip6);
+        log_printf("ip6: %02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x\n",
+                   ip6[0], ip6[1], ip6[2], ip6[3], ip6[4], ip6[5], ip6[6], ip6[7],
+                   ip6[8], ip6[9], ip6[10], ip6[11], ip6[12], ip6[13], ip6[14], ip6[15]);
+        return;
+    }
+    if (str_eq(argv[1], "route")) {
+        if (argc < 3) {
+            log_printf("ip6: route list|add\n");
+            return;
+        }
+        if (str_eq(argv[2], "list")) {
+            pcnet_ipv6_route_list();
+            return;
+        }
+        if (str_eq(argv[2], "add")) {
+            if (argc < 5) {
+                log_printf("ip6: route add <prefix>/<len> <nexthop>\n");
+                return;
+            }
+            uint8_t prefix[16];
+            uint8_t plen = 0;
+            uint8_t nexthop[16];
+            if (!parse_ipv6_prefix(argv[3], prefix, &plen)) {
+                log_printf("ip6: bad prefix\n");
+                return;
+            }
+            if (!parse_ipv6(argv[4], nexthop)) {
+                log_printf("ip6: bad nexthop\n");
+                return;
+            }
+            if (pcnet_ipv6_route_add(prefix, plen, nexthop) == 0) log_printf("ip6: route added\n");
+            else log_printf("ip6: route table full\n");
+            return;
+        }
+        log_printf("ip6: route list|add\n");
+        return;
+    }
+    if (str_eq(argv[1], "forward")) {
+        if (argc < 3) {
+            log_printf("ip6: forward on|off\n");
+            return;
+        }
+        if (str_eq(argv[2], "on")) {
+            pcnet_ipv6_set_forwarding(1);
+            log_printf("ip6: forwarding on\n");
+        } else if (str_eq(argv[2], "off")) {
+            pcnet_ipv6_set_forwarding(0);
+            log_printf("ip6: forwarding off\n");
+        } else {
+            log_printf("ip6: forward on|off\n");
+        }
+        return;
+    }
+    log_printf("ip6: addr | route list | route add <prefix>/<len> <nexthop> | forward <on|off>\n");
+}
+
+static int parse_port_any(const char *s, uint16_t *out, uint8_t *any) {
+    if (!s || !out || !any) return 0;
+    if (str_eq(s, "any")) {
+        *any = 1;
+        *out = 0;
+        return 1;
+    }
+    uint64_t v = 0;
+    if (!str_to_u64(s, &v) || v > 65535u) return 0;
+    *any = 0;
+    *out = (uint16_t)v;
+    return 1;
+}
+
+static int parse_ip_any(const char *s, uint8_t out[4], uint8_t *any) {
+    if (!s || !out || !any) return 0;
+    if (str_eq(s, "any")) {
+        *any = 1;
+        out[0] = out[1] = out[2] = out[3] = 0;
+        return 1;
+    }
+    if (!parse_ipv4(s, out)) return 0;
+    *any = 0;
+    return 1;
+}
+
+static int parse_proto(const char *s, uint8_t *out) {
+    if (!s || !out) return 0;
+    if (str_eq(s, "any")) { *out = FW_PROTO_ANY; return 1; }
+    if (str_eq(s, "icmp")) { *out = FW_PROTO_ICMP; return 1; }
+    if (str_eq(s, "tcp")) { *out = FW_PROTO_TCP; return 1; }
+    if (str_eq(s, "udp")) { *out = FW_PROTO_UDP; return 1; }
+    return 0;
+}
+
+static void cmd_fw(int argc, char **argv) {
+    if (argc < 2) {
+        log_printf("fw: list|clear|add <proto> <src_ip|any> <dst_ip|any> <src_port|any> <dst_port|any> <accept|drop>\n");
+        return;
+    }
+    if (str_eq(argv[1], "list")) {
+        firewall_log_rules();
+        return;
+    }
+    if (str_eq(argv[1], "clear")) {
+        firewall_clear();
+        log_printf("fw: cleared\n");
+        return;
+    }
+    if (str_eq(argv[1], "add")) {
+        if (argc < 8) {
+            log_printf("fw: usage: fw add <proto> <src_ip|any> <dst_ip|any> <src_port|any> <dst_port|any> <accept|drop>\n");
+            return;
+        }
+        struct fw_rule r;
+        if (!parse_proto(argv[2], &r.proto)) {
+            log_printf("fw: bad proto\n");
+            return;
+        }
+        if (!parse_ip_any(argv[3], r.src_ip, &r.src_ip_any)) {
+            log_printf("fw: bad src ip\n");
+            return;
+        }
+        if (!parse_ip_any(argv[4], r.dst_ip, &r.dst_ip_any)) {
+            log_printf("fw: bad dst ip\n");
+            return;
+        }
+        if (!parse_port_any(argv[5], &r.src_port, &r.src_port_any)) {
+            log_printf("fw: bad src port\n");
+            return;
+        }
+        if (!parse_port_any(argv[6], &r.dst_port, &r.dst_port_any)) {
+            log_printf("fw: bad dst port\n");
+            return;
+        }
+        if (str_eq(argv[7], "accept")) r.action = FW_ACTION_ACCEPT;
+        else if (str_eq(argv[7], "drop")) r.action = FW_ACTION_DROP;
+        else {
+            log_printf("fw: bad action\n");
+            return;
+        }
+        if (firewall_add_rule(&r) == 0) log_printf("fw: rule added\n");
+        else log_printf("fw: rule table full\n");
+        return;
+    }
+    log_printf("fw: unknown subcommand\n");
 }
 
 static void cmd_cat(const char *path, int cwd) {
@@ -481,6 +734,19 @@ int commands_exec(int argc, char **argv, struct command_ctx *ctx) {
                 pcnet_ping(ip);
             }
         }
+    } else if (str_eq(argv[0], "ping6")) {
+        if (argc < 2) {
+            log_printf("ping6: missing ipv6\n");
+        } else {
+            uint8_t ip6[16];
+            if (!parse_ipv6(argv[1], ip6)) {
+                log_printf("ping6: invalid ipv6\n");
+            } else {
+                pcnet_ping6(ip6);
+            }
+        }
+    } else if (str_eq(argv[0], "ip6")) {
+        cmd_ip6(argc, argv);
     } else if (str_eq(argv[0], "shutdown")) {
         cmd_shutdown();
     } else if (str_eq(argv[0], "restart")) {
@@ -497,6 +763,10 @@ int commands_exec(int argc, char **argv, struct command_ctx *ctx) {
         cmd_dmesg();
     } else if (str_eq(argv[0], "drivers")) {
         cmd_drivers();
+    } else if (str_eq(argv[0], "fw")) {
+        cmd_fw(argc, argv);
+    } else if (str_eq(argv[0], "pidns")) {
+        cmd_pidns();
     } else if (str_eq(argv[0], "mount")) {
         if (argc < 3) {
             log_printf("mount: usage: mount <part> <ext2|fat32>\n");

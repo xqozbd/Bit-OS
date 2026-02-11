@@ -49,13 +49,13 @@ Kernel & Architecture: Interrupt masking / IRQ priority routing, GDT/TSS + Ring-
 
 Scheduling & Memory: Per-CPU run queue load balancing, user address space layout defaults + page-table clone helpers, and userland mmap/munmap support.
 
-Process & Syscalls: Userspace fork/exec/exit support, per-process file descriptor table + basic open/read/close syscalls, and signals (kill/ignore) with default handlers.
+Process & Syscalls: Userspace fork/exec/exit support, per-process file descriptor table + basic open/read/close syscalls, signals (kill/ignore) with default handlers, and PID namespaces (isolated ps/proc view).
 
 Storage & Filesystems: Block device layer + buffered IO, MBR/GPT partition parsing, VMware ATA PIO and AHCI SATA driver, VFS mount root, FAT32 write support (create/write/truncate), ext2 read-only driver (superblock/group/inode/dir), ext2 bitmap allocators (block/inode), ext2 create/write/truncate, ext2 unlink/rename, ext2 fsck-lite at mount, and block cache writeback polling.
 
 Pseudo-FS: /dev, /proc, /sys skeletons plus /proc tasks and /sys drivers entries.
 
-Networking: UDP sockets + socket syscalls, TCP sockets (connect/listen/accept + basic retransmit), TCP three-way handshake + retransmission improvements, DHCP client, and DNS stub (dotted-quad parsing).
+Networking: UDP sockets + socket syscalls, TCP sockets (connect/listen/accept + basic retransmit), TCP three-way handshake + retransmission improvements, DHCP client, DNS stub (dotted-quad parsing), basic firewall rules, and IPv6 parsing + ICMPv6 ping6 with ND + static routes + UDP over IPv6.
 
 Init & Userland: Simple init process that spawns a user shell (init/busybox/sh).
 

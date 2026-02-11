@@ -12,6 +12,8 @@
 #include "kernel/socket.h"
 
 static uint32_t g_next_pid = 2;
+static uint32_t g_next_pidns_id = 1;
+static struct pid_namespace g_root_pidns;
 static struct task g_boot_task;
 static struct task *g_task_head = NULL;
 static struct task *g_task_tail = NULL;
@@ -31,6 +33,23 @@ static void fd_set_console(struct task_fd *fd) {
 
 static uint32_t next_pid(void) {
     return __atomic_fetch_add(&g_next_pid, 1u, __ATOMIC_SEQ_CST);
+}
+
+static uint32_t pidns_next_pid(struct pid_namespace *ns) {
+    if (!ns) return 0;
+    return __atomic_fetch_add(&ns->next_pid, 1u, __ATOMIC_SEQ_CST);
+}
+
+static void pidns_ref(struct pid_namespace *ns) {
+    if (!ns) return;
+    __atomic_fetch_add(&ns->refcount, 1u, __ATOMIC_SEQ_CST);
+}
+
+static void pidns_unref(struct pid_namespace *ns) {
+    if (!ns) return;
+    if (__atomic_fetch_sub(&ns->refcount, 1u, __ATOMIC_SEQ_CST) == 1u) {
+        if (ns != &g_root_pidns) kfree(ns);
+    }
 }
 
 struct task *task_current(void) {
@@ -115,7 +134,12 @@ int task_fd_close(struct task *t, int fd) {
 
 void task_init_bootstrap(struct thread *t) {
     if (!t) return;
+    g_root_pidns.id = g_next_pidns_id++;
+    g_root_pidns.next_pid = 2;
+    g_root_pidns.refcount = 1;
     g_boot_task.pid = 1;
+    g_boot_task.pid_ns = &g_root_pidns;
+    g_boot_task.pid_ns_pid = 1;
     g_boot_task.tid = t->id;
     g_boot_task.state = TASK_RUNNING;
     g_boot_task.is_user = 0;
@@ -146,6 +170,15 @@ struct task *task_create_for_thread(struct thread *t, const char *name) {
     struct task *task = (struct task *)kmalloc(sizeof(*task));
     if (!task) return NULL;
     task->pid = next_pid();
+    struct task *cur = task_current();
+    if (cur && cur->pid_ns) {
+        task->pid_ns = cur->pid_ns;
+        pidns_ref(task->pid_ns);
+    } else {
+        task->pid_ns = &g_root_pidns;
+        pidns_ref(task->pid_ns);
+    }
+    task->pid_ns_pid = pidns_next_pid(task->pid_ns);
     task->tid = t->id;
     task->state = TASK_READY;
     task->is_user = t->is_user;
@@ -206,6 +239,10 @@ void task_set_user_layout(struct task *t, uint64_t brk_base, uint64_t brk_limit,
 
 void task_clone_from(struct task *dst, const struct task *src) {
     if (!dst || !src) return;
+    if (dst->pid_ns) pidns_unref(dst->pid_ns);
+    dst->pid_ns = src->pid_ns;
+    if (dst->pid_ns) pidns_ref(dst->pid_ns);
+    dst->pid_ns_pid = pidns_next_pid(dst->pid_ns);
     dst->is_user = src->is_user;
     dst->pml4_phys = src->pml4_phys;
     dst->brk_base = src->brk_base;
@@ -340,10 +377,35 @@ int task_munmap(struct task *t, uint64_t addr, uint64_t len) {
 void task_on_thread_exit(struct thread *t) {
     if (!t || !t->task) return;
     t->task->state = TASK_DEAD;
+    if (t->task->pid_ns) {
+        pidns_unref(t->task->pid_ns);
+        t->task->pid_ns = NULL;
+    }
 }
 
 uint32_t task_pid(struct task *t) {
     return t ? t->pid : 0;
+}
+
+uint32_t task_pid_ns(struct task *t) {
+    return t ? t->pid_ns_pid : 0;
+}
+
+uint32_t task_pid_ns_id(struct task *t) {
+    return (t && t->pid_ns) ? t->pid_ns->id : 0;
+}
+
+uint32_t task_unshare_pidns(struct task *t) {
+    if (!t) return 0;
+    struct pid_namespace *ns = (struct pid_namespace *)kmalloc(sizeof(*ns));
+    if (!ns) return 0;
+    ns->id = g_next_pidns_id++;
+    ns->next_pid = 2;
+    ns->refcount = 1;
+    if (t->pid_ns) pidns_unref(t->pid_ns);
+    t->pid_ns = ns;
+    t->pid_ns_pid = 1;
+    return ns->id;
 }
 
 struct task *task_find_pid(uint32_t pid) {
@@ -456,7 +518,7 @@ static void buf_append_hex32(char **dst, size_t *remain, uint32_t v) {
     }
 }
 
-size_t task_format_list(char *buf, size_t buf_len) {
+size_t task_format_list(struct task *viewer, char *buf, size_t buf_len) {
     if (!buf || buf_len == 0) return 0;
     char *w = buf;
     size_t remain = buf_len;
@@ -468,7 +530,11 @@ size_t task_format_list(char *buf, size_t buf_len) {
     }
     buf_append(&w, &remain, "PID  TID  STATE    PML4        NAME\n");
     while (cur) {
-        buf_append_u32(&w, &remain, cur->pid);
+        if (viewer && viewer->pid_ns && cur->pid_ns != viewer->pid_ns) {
+            cur = cur->next;
+            continue;
+        }
+        buf_append_u32(&w, &remain, cur->pid_ns_pid ? cur->pid_ns_pid : cur->pid);
         buf_append(&w, &remain, "   ");
         buf_append_u32(&w, &remain, cur->tid);
         buf_append(&w, &remain, "   ");
@@ -485,6 +551,7 @@ size_t task_format_list(char *buf, size_t buf_len) {
 }
 
 void task_dump_list(void) {
+    struct task *viewer = task_current();
     struct task *cur = g_task_head;
     if (!cur) {
         log_printf("ps: no tasks\n");
@@ -492,8 +559,12 @@ void task_dump_list(void) {
     }
     log_printf("PID  TID  STATE    PML4        NAME\n");
     while (cur) {
+        if (viewer && viewer->pid_ns && cur->pid_ns != viewer->pid_ns) {
+            cur = cur->next;
+            continue;
+        }
         log_printf("%u   %u   %s   0x%08x %s\n",
-                   (unsigned)cur->pid,
+                   (unsigned)(cur->pid_ns_pid ? cur->pid_ns_pid : cur->pid),
                    (unsigned)cur->tid,
                    task_state_name(cur->state),
                    (unsigned)cur->pml4_phys,

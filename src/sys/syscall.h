@@ -30,6 +30,10 @@ enum {
     SYS_LISTDIR = 24,
     SYS_MOUNT = 25,
     SYS_UMOUNT = 26,
+    SYS_CONNECT6 = 27,
+    SYS_SENDTO6 = 28,
+    SYS_RECVFROM6 = 29,
+    SYS_UNSHARE_PID = 30,
     SYS_MAX
 };
 

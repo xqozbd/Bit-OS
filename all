@@ -2,7 +2,7 @@
 
 make clean
 make -j
-./iso.sh
+bash ./iso.sh
 
 echo "Run in VM Box"
 if [ -f BitOS.iso ]; then
