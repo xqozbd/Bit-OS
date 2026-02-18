@@ -8,6 +8,7 @@
 #include "sys/fat32.h"
 #include "sys/ext2.h"
 #include "sys/pseudofs.h"
+#include "sys/tmpfs.h"
 #include "lib/strutil.h"
 #include "lib/log.h"
 #include "kernel/slab.h"
@@ -147,6 +148,7 @@ static int backend_is_dir(int backend, int node) {
     if (backend == VFS_BACKEND_PROC) return pseudofs_is_dir(PSEUDOFS_PROC, node);
     if (backend == VFS_BACKEND_SYS) return pseudofs_is_dir(PSEUDOFS_SYS, node);
     if (backend == VFS_BACKEND_EXT2) return ext2_is_dir(node);
+    if (backend == VFS_BACKEND_TMPFS) return tmpfs_is_dir(node);
     return fs_is_dir(node);
 }
 
@@ -158,6 +160,7 @@ static int backend_read_file(int backend, int node, const uint8_t **data, uint64
     if (backend == VFS_BACKEND_PROC) return pseudofs_read_file(PSEUDOFS_PROC, node, data, size);
     if (backend == VFS_BACKEND_SYS) return pseudofs_read_file(PSEUDOFS_SYS, node, data, size);
     if (backend == VFS_BACKEND_EXT2) return ext2_read_file(node, data, size);
+    if (backend == VFS_BACKEND_TMPFS) return tmpfs_read_file(node, data, size);
     return fs_read_file(node, data, size);
 }
 
@@ -176,18 +179,23 @@ static int backend_write_file(int backend, int node, const uint8_t *data, uint64
             return (int)size;
         }
     }
+    if (backend == VFS_BACKEND_TMPFS) {
+        return tmpfs_write_file(node, data, size, offset);
+    }
     return -1;
 }
 
 static int backend_truncate(int backend, int node, uint64_t new_size) {
     if (backend == VFS_BACKEND_EXT2) return ext2_truncate(node, new_size);
     if (backend == VFS_BACKEND_FAT32) return fat32_truncate(node, new_size);
+    if (backend == VFS_BACKEND_TMPFS) return tmpfs_truncate(node, new_size);
     return -1;
 }
 
 static uint64_t backend_get_size(int backend, int node) {
     if (backend == VFS_BACKEND_EXT2) return ext2_get_size(node);
     if (backend == VFS_BACKEND_FAT32) return fat32_get_size(node);
+    if (backend == VFS_BACKEND_TMPFS) return tmpfs_get_size(node);
     return 0;
 }
 
@@ -199,6 +207,7 @@ static int backend_resolve(int backend, int cwd, const char *path) {
     if (backend == VFS_BACKEND_PROC) return pseudofs_resolve(PSEUDOFS_PROC, cwd, path);
     if (backend == VFS_BACKEND_SYS) return pseudofs_resolve(PSEUDOFS_SYS, cwd, path);
     if (backend == VFS_BACKEND_EXT2) return ext2_resolve(cwd, path);
+    if (backend == VFS_BACKEND_TMPFS) return tmpfs_resolve(cwd, path);
     return fs_resolve(cwd, path);
 }
 
@@ -438,6 +447,8 @@ int vfs_create(int cwd, const char *path, int is_dir) {
         raw = ext2_create(p->node, tmp, mode, is_dir);
     } else if (p->backend == VFS_BACKEND_FAT32) {
         raw = fat32_create(p->node, name, is_dir);
+    } else if (p->backend == VFS_BACKEND_TMPFS) {
+        raw = tmpfs_create(p->node, name, is_dir);
     } else {
         return -1;
     }
@@ -473,6 +484,10 @@ void vfs_pwd(int cwd) {
     }
     if (n->backend == VFS_BACKEND_EXT2) {
         ext2_pwd(n->node);
+        return;
+    }
+    if (n->backend == VFS_BACKEND_TMPFS) {
+        tmpfs_pwd(n->node);
         return;
     }
     fs_pwd(n->node);
@@ -523,6 +538,10 @@ void vfs_ls(int node) {
         ext2_ls(n->node);
         return;
     }
+    if (n->backend == VFS_BACKEND_TMPFS) {
+        tmpfs_ls(n->node);
+        return;
+    }
     fs_ls(n->node);
 }
 
@@ -545,6 +564,9 @@ int vfs_list_dir(const char *path, char *out, uint64_t out_len) {
     if (node < 0 || !vfs_is_dir(node)) return -1;
     const struct vfs_node *n = g_nodes[node];
     if (!n) return -1;
+    if (n->backend == VFS_BACKEND_TMPFS) {
+        return tmpfs_list_dir(n->node, out, out_len);
+    }
 
     if (n->backend == VFS_BACKEND_EXT2) ext2_ensure_scanned(n->node);
     if (n->backend == VFS_BACKEND_FAT32) fat32_ensure_scanned(n->node);

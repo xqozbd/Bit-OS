@@ -103,7 +103,7 @@ static uint64_t sys_sbrk_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4
                 task_uncharge_mem(task, new_page - old_page);
                 return (uint64_t)-1;
             }
-            if (paging_map_user_4k(task->pml4_phys, va, phys, 0) != 0) {
+            if (paging_map_user_4k(task->pml4_phys, va, phys, PTE_NX) != 0) {
                 task_uncharge_mem(task, new_page - old_page);
                 return (uint64_t)-1;
             }
@@ -261,9 +261,9 @@ static uint64_t sys_exec_impl(uint64_t a1, uint64_t a2, uint64_t a3) {
     uint64_t entry = 0;
     uint64_t pml4 = 0;
     uint64_t rsp = 0;
-    uint64_t stack_top = 0;
-    uint64_t stack_size = 0;
-    int rc = elf_load_user(path, argc, kargv ? kargv : argv, NULL, &entry, &pml4, &rsp, &stack_top, &stack_size);
+    struct user_addr_space layout;
+    paging_user_layout_default(&layout);
+    int rc = elf_load_user(path, argc, kargv ? kargv : argv, NULL, &layout, &entry, &pml4, &rsp);
     if (kargv) {
         for (int i = 0; i < argc; ++i) {
             if (kargv[i]) kfree(kargv[i]);
@@ -278,8 +278,9 @@ static uint64_t sys_exec_impl(uint64_t a1, uint64_t a2, uint64_t a3) {
     t->is_user = 1;
     t->pml4_phys = pml4;
     if (task) {
-        task_set_user_layout(task, 0x0000000040000000ull, 0x0000000080000000ull,
-                             stack_top, stack_size);
+        task_set_user_layout(task, layout.heap_base, layout.heap_limit,
+                             layout.stack_top, layout.stack_size,
+                             layout.mmap_base, layout.mmap_limit);
         task->pml4_phys = pml4;
     }
     paging_switch_to(pml4);

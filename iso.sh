@@ -26,13 +26,31 @@ cp -v bin/$KERNEL iso_root/boot/
 if [ -d "$INITRAMFS_DIR" ]; then
   rm -rf "$INITRAMFS_DIR/bin"
   mkdir -p "$INITRAMFS_DIR/bin"
-  for src in user/*.c; do
+  mkdir -p "$INITRAMFS_DIR/lib"
+  if [ -f "user/libu.c" ]; then
+    x86_64-linux-gnu-gcc -nostdlib -shared -fPIC -Iuser \
+      -Wl,-T,user/user_so.lds -Wl,-soname,libu.so \
+      -o "$INITRAMFS_DIR/lib/libu.so" user/libu.c
+  fi
+  for src in user/init.c user/busybox.c; do
     [ -f "$src" ] || continue
     base=$(basename "$src" .c)
     x86_64-linux-gnu-gcc -nostdlib -static -ffreestanding -fno-pie -no-pie -Iuser \
       -Wl,-e,_start -Wl,-T,user/user.lds \
       -o "$INITRAMFS_DIR/bin/$base" "$src"
   done
+  if [ -f "user/hello.c" ]; then
+    x86_64-linux-gnu-gcc -nostdlib -ffreestanding -fPIE -pie -Iuser \
+      -Wl,-e,_start -Wl,--no-as-needed -Wl,-rpath,/lib \
+      -L"$INITRAMFS_DIR/lib" -Wl,-l:libu.so \
+      -o "$INITRAMFS_DIR/bin/hello" user/hello.c
+  fi
+  if [ -f "$INITRAMFS_DIR/bin/busybox" ]; then
+    for app in ls ps top mount umount dd; do
+      ln -sf busybox "$INITRAMFS_DIR/bin/$app" 2>/dev/null || \
+        cp -f "$INITRAMFS_DIR/bin/busybox" "$INITRAMFS_DIR/bin/$app"
+    done
+  fi
   mkdir -p "$INITRAMFS_DIR/etc"
   if [ ! -f "$INITRAMFS_DIR/etc/services.conf" ]; then
     cat > "$INITRAMFS_DIR/etc/services.conf" <<'EOF'

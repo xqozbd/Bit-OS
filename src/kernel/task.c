@@ -304,6 +304,8 @@ struct task *task_create_for_thread(struct thread *t, const char *name) {
         task->brk_base = layout.heap_base;
         task->brk = layout.heap_base;
         task->brk_limit = layout.heap_limit;
+        task->mmap_base = layout.mmap_base;
+        task->mmap_limit = layout.mmap_limit;
     } else {
         task->brk_base = 0;
         task->brk = 0;
@@ -311,8 +313,10 @@ struct task *task_create_for_thread(struct thread *t, const char *name) {
     }
     task->user_stack_top = 0;
     task->user_stack_size = 0;
-    task->mmap_base = g_mmap_base_default;
-    task->mmap_limit = g_mmap_limit_default;
+    if (!task->is_user) {
+        task->mmap_base = g_mmap_base_default;
+        task->mmap_limit = g_mmap_limit_default;
+    }
     task->res_mem_bytes = 0;
     task->res_fd_count = 0;
     task->res_sock_count = 0;
@@ -334,7 +338,8 @@ struct task *task_create_for_thread(struct thread *t, const char *name) {
 }
 
 void task_set_user_layout(struct task *t, uint64_t brk_base, uint64_t brk_limit,
-                          uint64_t stack_top, uint64_t stack_size) {
+                          uint64_t stack_top, uint64_t stack_size,
+                          uint64_t mmap_base, uint64_t mmap_limit) {
     if (!t) return;
     t->is_user = 1;
     t->brk_base = brk_base;
@@ -342,15 +347,18 @@ void task_set_user_layout(struct task *t, uint64_t brk_base, uint64_t brk_limit,
     t->brk_limit = brk_limit;
     t->user_stack_top = stack_top;
     t->user_stack_size = stack_size;
-    t->mmap_base = g_mmap_base_default;
+    t->mmap_base = mmap_base ? mmap_base : g_mmap_base_default;
+    t->mmap_limit = mmap_limit ? mmap_limit : g_mmap_limit_default;
     if (stack_top && stack_size) {
         uint64_t guard = 0x00100000ull;
-        uint64_t top = stack_top;
-        if (top > guard) {
-            uint64_t limit = top - guard;
-            if (limit > g_mmap_base_default) t->mmap_limit = limit;
+        if (stack_top > guard) {
+            uint64_t limit = stack_top - guard;
+            if (limit > t->mmap_base && limit < t->mmap_limit) {
+                t->mmap_limit = limit;
+            }
         }
     }
+    if (t->mmap_limit < t->mmap_base) t->mmap_limit = t->mmap_base;
 }
 
 void task_clone_from(struct task *dst, const struct task *src) {
@@ -481,7 +489,7 @@ uint64_t task_mmap_anonymous(struct task *t, uint64_t addr, uint64_t len, uint32
             task_uncharge_mem(t, size);
             return 0;
         }
-        if (paging_map_user_4k(t->pml4_phys, va, phys, 0) != 0) {
+        if (paging_map_user_4k(t->pml4_phys, va, phys, PTE_NX) != 0) {
             task_uncharge_mem(t, size);
             return 0;
         }

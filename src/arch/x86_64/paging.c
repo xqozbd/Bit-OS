@@ -5,6 +5,9 @@
 #include "boot/limine.h"
 #include "lib/log.h"
 #include "arch/x86_64/paging.h"
+#include "arch/x86_64/cpu.h"
+#include "arch/x86_64/cpu_info.h"
+#include "sys/boot_params.h"
 #include "kernel/pmm.h"
 
 /* From memutils.c */
@@ -30,18 +33,59 @@ enum {
 static uint64_t g_hhdm_offset = 0;
 static uint64_t *g_pml4 = 0;
 static uint64_t g_pml4_phys = 0;
+static uint64_t g_aslr_state = 0;
 
 static uint64_t *walk_pt(uint64_t pml4_phys, uint64_t virt);
 
 enum {
     USER_HEAP_BASE  = 0x0000000040000000ull,
     USER_HEAP_LIMIT = 0x0000000080000000ull,
-    USER_STACK_TOP  = 0x00000000fffff000ull,
-    USER_STACK_SIZE = 0x0000000000100000ull
+    USER_STACK_TOP  = 0x0000000070000000ull,
+    USER_STACK_SIZE = 0x0000000000020000ull,
+    USER_MMAP_BASE  = 0x0000000080000000ull,
+    USER_MMAP_LIMIT = 0x00000000F0000000ull
 };
 
 static inline uint64_t align_up_u64(uint64_t v, uint64_t a) {
     return (v + a - 1) & ~(a - 1);
+}
+
+static inline uint64_t rdtsc_now(void) {
+#if defined(__GNUC__) || defined(__clang__)
+    uint32_t lo = 0, hi = 0;
+    __asm__ volatile ("rdtsc" : "=a"(lo), "=d"(hi));
+    return ((uint64_t)hi << 32) | lo;
+#else
+    return 0;
+#endif
+}
+
+static void seed_aslr_state(void) {
+    uint64_t seed = rdtsc_now();
+    seed ^= (uint64_t)(uintptr_t)&g_aslr_state;
+    seed ^= g_pml4_phys;
+    seed ^= g_hhdm_offset;
+    if (seed == 0) seed = 0x9e3779b97f4a7c15ull;
+    g_aslr_state = seed;
+}
+
+static uint64_t rand_u64(void) {
+    if (g_aslr_state == 0) seed_aslr_state();
+    uint64_t x = g_aslr_state;
+    x ^= x >> 12;
+    x ^= x << 25;
+    x ^= x >> 27;
+    g_aslr_state = x;
+    return x * 0x2545F4914F6CDD1Dull;
+}
+
+uint64_t paging_aslr_slide(uint64_t max, uint64_t align) {
+    if (align == 0) align = PAGE_SIZE;
+    if (max < align) return 0;
+    uint64_t slots = max / align;
+    if (slots == 0) return 0;
+    uint64_t pick = rand_u64() % slots;
+    return pick * align;
 }
 
 static uint64_t alloc_table(uint64_t *out_phys) {
@@ -259,10 +303,15 @@ uint64_t paging_clone_user_pml4(uint64_t src_pml4_phys) {
 
 void paging_user_layout_default(struct user_addr_space *out) {
     if (!out) return;
-    out->heap_base = USER_HEAP_BASE;
+    uint64_t heap_slide = paging_aslr_slide(0x02000000ull, PAGE_SIZE);
+    uint64_t stack_slide = paging_aslr_slide(0x01000000ull, PAGE_SIZE);
+    uint64_t mmap_slide = paging_aslr_slide(0x04000000ull, PAGE_SIZE);
+    out->heap_base = USER_HEAP_BASE + heap_slide;
     out->heap_limit = USER_HEAP_LIMIT;
-    out->stack_top = USER_STACK_TOP;
+    out->stack_top = USER_STACK_TOP - stack_slide;
     out->stack_size = USER_STACK_SIZE;
+    out->mmap_base = USER_MMAP_BASE + mmap_slide;
+    out->mmap_limit = USER_MMAP_LIMIT;
 }
 
 static uint64_t *walk_pt(uint64_t pml4_phys, uint64_t virt) {
@@ -303,7 +352,9 @@ int paging_handle_cow(uint64_t fault_addr) {
         void *dst = (void *)(uintptr_t)(g_hhdm_offset + new_phys);
         memcpy(dst, src, PMM_PAGE_SIZE);
         pmm_dec_ref(phys);
-        ent = (new_phys & 0x000ffffffffff000ull) | (ent & 0xFFF);
+        uint64_t flags = ent & 0xFFF;
+        if (ent & PTE_NX) flags |= PTE_NX;
+        ent = (new_phys & 0x000ffffffffff000ull) | flags;
         ent |= PTE_RW;
         ent &= ~PTE_COW;
         *pte = ent;
@@ -359,6 +410,26 @@ int paging_init(void) {
     uint64_t kern_phys_start = phys_base + (kern_start - virt_base);
     for (uint64_t off = 0; off < kern_size; off += PAGE_SIZE) {
         map_4k(pml4, kern_start + off, kern_phys_start + off, 0);
+    }
+
+    const char *nx_param = boot_param_get("nx");
+    int nx_enable = 0;
+    if (nx_param && nx_param[0] == 'o' && nx_param[1] == 'n' && nx_param[2] == '\0') {
+        nx_enable = 1;
+    }
+    if (nx_enable) {
+        uint32_t ext_edx = cpu_get_ext_feature_edx();
+        if (ext_edx & (1u << 20)) {
+            uint64_t efer = cpu_read_msr(0xC0000080u);
+            if ((efer & (1ull << 11)) == 0) {
+                cpu_write_msr(0xC0000080u, efer | (1ull << 11));
+            }
+            log_printf("Paging: NX enabled\n");
+        } else {
+            log_printf("Paging: NX not supported\n");
+        }
+    } else {
+        log_printf("Paging: NX disabled (nx=on to enable)\n");
     }
 
     load_cr3(g_pml4_phys);

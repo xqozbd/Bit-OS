@@ -170,3 +170,19 @@ void log_ring_dump(void) {
     ms_cursor_show();
     g_ring_frozen = prev_freeze;
 }
+
+size_t log_ring_snapshot(char *out, size_t max) {
+    if (!out || max == 0) return 0;
+    if (g_ring_len == 0) return 0;
+    int prev_freeze = g_ring_frozen;
+    g_ring_frozen = 1;
+    uint32_t start = (g_ring_head + LOG_RING_SIZE - g_ring_len) % LOG_RING_SIZE;
+    size_t n = g_ring_len;
+    if (n > max) n = max;
+    for (size_t i = 0; i < n; ++i) {
+        uint32_t idx = (start + (uint32_t)i) % LOG_RING_SIZE;
+        out[i] = g_ring[idx];
+    }
+    g_ring_frozen = prev_freeze;
+    return n;
+}

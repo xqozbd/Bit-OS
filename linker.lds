@@ -50,6 +50,10 @@ SECTIONS
         *(.data .data.*)
     } :data
 
+    .noinit (NOLOAD) : {
+        *(.noinit .noinit.*)
+    } :data
+
 
     .bss : {
         *(.bss .bss.*)

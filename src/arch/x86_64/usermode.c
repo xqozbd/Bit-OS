@@ -12,7 +12,7 @@ int user_stack_build(uint64_t pml4_phys, uint64_t top, uint64_t size, uint64_t *
     for (uint64_t va = base; va < top; va += 0x1000ull) {
         uint64_t phys = pmm_alloc_frame();
         if (phys == 0) return -2;
-        if (paging_map_user_4k(pml4_phys, va, phys, 0) != 0) return -3;
+        if (paging_map_user_4k(pml4_phys, va, phys, PTE_NX) != 0) return -3;
     }
     if (out_rsp) {
         uint64_t sp = top & ~0xFULL;

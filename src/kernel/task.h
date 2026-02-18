@@ -81,7 +81,8 @@ int task_fd_alloc(struct task *t, int node, uint32_t flags);
 int task_fd_alloc_socket(struct task *t, int sock_id);
 int task_fd_close(struct task *t, int fd);
 void task_set_user_layout(struct task *t, uint64_t brk_base, uint64_t brk_limit,
-                          uint64_t stack_top, uint64_t stack_size);
+                          uint64_t stack_top, uint64_t stack_size,
+                          uint64_t mmap_base, uint64_t mmap_limit);
 void task_clone_from(struct task *dst, const struct task *src);
 int task_signal_set_handler(struct task *t, int sig, uint64_t handler);
 void task_signal_raise(struct task *t, int sig);

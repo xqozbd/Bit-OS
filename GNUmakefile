@@ -24,7 +24,9 @@ override CFLAGS += \
     -std=gnu11 \
     -ffreestanding \
     -fcf-protection=none \
-    -fno-stack-protector \
+    -fstack-protector-strong \
+    -mstack-protector-guard=global \
+    -mstack-protector-guard-symbol=__stack_chk_guard \
     -fno-stack-check \
     -fno-lto \
     -fno-pie \

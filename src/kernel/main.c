@@ -48,6 +48,9 @@
 #include "kernel/dhcp.h"
 #include "kernel/firewall.h"
 #include "sys/boot_params.h"
+#include "lib/stack_chk.h"
+#include "kernel/crash_dump.h"
+#include "sys/tmpfs.h"
 
 /* Bootstrap stack: keep it inside the kernel image so it's mapped in our page tables. */
 #define KSTACK_SIZE (64 * 1024)
@@ -77,6 +80,7 @@ static void stack_switch_and_jump(void (*entry)(void), void *stack_top) {
 }
 
 void kmain(void) {
+    stack_canary_init_auto();
     uintptr_t stack_top = (uintptr_t)g_bootstrap_stack + sizeof(g_bootstrap_stack);
     stack_switch_and_jump(kmain_stage2, (void *)stack_top);
 }
@@ -303,6 +307,8 @@ static void kmain_stage2(void) {
     vfs_mount("/dev", VFS_BACKEND_DEV, pseudofs_root(PSEUDOFS_DEV));
     vfs_mount("/proc", VFS_BACKEND_PROC, pseudofs_root(PSEUDOFS_PROC));
     vfs_mount("/sys", VFS_BACKEND_SYS, pseudofs_root(PSEUDOFS_SYS));
+    tmpfs_init();
+    vfs_mount("/tmp", VFS_BACKEND_TMPFS, tmpfs_root());
     log_printf("Boot: mounted /dev, /proc, /sys\n");
     if (block_device_count() > 0 && partition_count() > 0) {
         vfs_mount("/block", VFS_BACKEND_BLOCK, blockfs_root());
@@ -343,6 +349,7 @@ static void kmain_stage2(void) {
             log_printf("Boot: VFS root set to mock FS\n");
         }
     }
+    crash_dump_flush_to_disk();
     if (initramfs_available()) {
         vfs_mount("/initramfs", VFS_BACKEND_INITRAMFS, initramfs_root());
         log_printf("Boot: mounted initramfs at /initramfs\n");

@@ -45,9 +45,9 @@ Clear screen printing BitOS's version when the banner already does so.
 
 
 ## Features Added:
-Kernel & Architecture: Interrupt masking / IRQ priority routing, GDT/TSS + Ring-3 entry path, and kernel panic backtrace (stack walk).
+Kernel & Architecture: Interrupt masking / IRQ priority routing, GDT/TSS + Ring-3 entry path, kernel panic backtrace (stack walk), stack canaries, and NX enforcement for user pages.
 
-Scheduling & Memory: Per-CPU run queue load balancing, user address space layout defaults + page-table clone helpers, and userland mmap/munmap support.
+Scheduling & Memory: Per-CPU run queue load balancing, user address space layout defaults + basic ASLR (heap/stack/mmap), page-table clone helpers, and userland mmap/munmap support.
 
 Process & Syscalls: Userspace fork/exec/exit support, per-process file descriptor table + basic open/read/close syscalls, signals (kill/ignore) with default handlers, PID namespaces (isolated ps/proc view), mount namespaces (isolated VFS root/mounts), network namespaces (isolated sockets and firewall state), and resource limits / cgroup-like groups (tasks, fds, sockets, memory).
 
@@ -57,7 +57,7 @@ Pseudo-FS: /dev, /proc, /sys skeletons plus /proc tasks and /sys drivers entries
 
 Networking: UDP sockets + socket syscalls, TCP sockets (connect/listen/accept + basic retransmit), TCP three-way handshake + retransmission improvements, DHCP client, DNS stub (dotted-quad parsing), basic firewall rules, and IPv6 parsing + ICMPv6 ping6 with ND + static routes + UDP over IPv6.
 
-Init & Userland: Simple init process that spawns a user shell (init/busybox/sh).
+Init & Userland: Simple init process that spawns a user shell (init/busybox/sh), plus a Busybox-style multicall userland suite (`/bin/busybox` with applet links).
 
 Kernel Memory: SLAB/SLUB allocator and SLAB caches for VFS nodes and inodes.
 
@@ -67,7 +67,7 @@ Console: VT100/ANSI color escape support.
 
 Boot: Configurable boot params (Limine cmdline) and proper shutdown/restart (ACPI S5 + reset fallback).
 
-Reliability: Crash isolation so user task faults no longer halt the kernel, kernel timer wheel for efficient sleep timers, and block writeback flush on shutdown/restart.
+Reliability: Crash isolation so user task faults no longer halt the kernel, kernel timer wheel for efficient sleep timers, crash dump persistence to reserved RAM with disk flush (`/crashdump.log`), and block writeback flush on shutdown/restart.
 
 VFS write path: added open flags (O_CREAT/O_TRUNC/O_APPEND), file creation, truncate, and size helpers across ext2/fat32.
 
@@ -80,6 +80,10 @@ Console: page-by-page scrollback with prompt restore, command additions (mount/u
 Userland: new utilities `ls`, `ps`, `top`, `mount`, `umount`, `dd`; shared syscall stub header; per-binary linker script stripping notes.
 
 Initramfs content: service config (`/etc/services.conf`), motd, sample files under `/home/guest`, and demo log under `/var/log`.
+
+Userland ELF: dynamic linking in the user loader (DT_NEEDED + RELA relocations), shared library loading from `/lib`, and a PIE demo binary (`/bin/hello`) backed by `libu.so`.
+
+VFS: tmpfs-backed `/tmp` mount.
 
 
 ## Features Changed:

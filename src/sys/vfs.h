@@ -12,6 +12,7 @@
 #define VFS_BACKEND_PROC 6
 #define VFS_BACKEND_SYS 7
 #define VFS_BACKEND_EXT2 8
+#define VFS_BACKEND_TMPFS 9
 
 #define VFS_MAX_MOUNTS 12
 

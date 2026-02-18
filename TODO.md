@@ -113,15 +113,15 @@
 - [x] Namespaces: mount isolation.
 - [x] Namespaces: network isolation.
 - [x] Resource limits / cgroup-like system.
+- [x] Stack canaries / basic ASLR support.
+- [x] NX bit enforcement for kernel/user separation.
+- [x] Busybox-style userland command suite.
+- [x] Crash dump persistence to reserved RAM or disk.
+- [x] Userland ELF loader enhancements (dynamic linking).
+- [x] Userspace library loading and symbol resolution.
+- [x] `/tmp` temporary filesystem support.
 
 ## Next
-- [ ] Stack canaries / basic ASLR support.
-- [ ] NX bit enforcement for kernel/user separation.
-- [ ] Busybox-style userland command suite.
-- [ ] Crash dump persistence to reserved RAM or disk.
-- [ ] Userland ELF loader enhancements (dynamic linking).
-- [ ] Userspace library loading and symbol resolution.
-- [ ] `/tmp` temporary filesystem support.
 - [ ] Swap file / virtual memory paging.
 - [ ] Memory-mapped file support.
 - [ ] Kernel heap fragmentation reduction / compaction.

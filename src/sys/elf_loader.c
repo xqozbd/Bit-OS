@@ -72,9 +72,62 @@ struct elf64_sym {
     uint64_t st_size;
 };
 
-enum { PT_LOAD = 1 };
+struct elf64_dyn {
+    int64_t d_tag;
+    union {
+        uint64_t d_val;
+        uint64_t d_ptr;
+    } d_un;
+};
+
+enum { PT_LOAD = 1, PT_DYNAMIC = 2 };
+enum { ET_EXEC = 2, ET_DYN = 3 };
+enum { PF_X = 1, PF_W = 2, PF_R = 4 };
 enum { SHT_RELA = 4, SHT_SYMTAB = 2, SHT_STRTAB = 3 };
-enum { R_X86_64_64 = 1, R_X86_64_RELATIVE = 8 };
+enum { R_X86_64_NONE = 0, R_X86_64_64 = 1, R_X86_64_GLOB_DAT = 6, R_X86_64_JUMP_SLOT = 7, R_X86_64_RELATIVE = 8 };
+enum {
+    DT_NULL = 0,
+    DT_NEEDED = 1,
+    DT_HASH = 4,
+    DT_STRTAB = 5,
+    DT_SYMTAB = 6,
+    DT_RELA = 7,
+    DT_RELASZ = 8,
+    DT_RELAENT = 9,
+    DT_STRSZ = 10,
+    DT_SYMENT = 11,
+    DT_PLTREL = 20,
+    DT_JMPREL = 23,
+    DT_PLTRELSZ = 2
+};
+
+#define ELF64_R_SYM(info) ((uint32_t)((info) >> 32))
+#define ELF64_R_TYPE(info) ((uint32_t)(info))
+#define ELF64_ST_BIND(info) ((uint8_t)((info) >> 4))
+
+enum { ELF_MAX_OBJS = 8, ELF_MAX_NEEDED = 16 };
+
+struct elf_obj {
+    const uint8_t *file;
+    uint64_t file_size;
+    uint64_t base;
+    uint64_t entry;
+    const struct elf64_ehdr *eh;
+    const struct elf64_phdr *ph;
+    const struct elf64_dyn *dyn;
+    uint64_t dyn_size;
+    const struct elf64_sym *symtab;
+    const char *strtab;
+    uint64_t strsz;
+    uint64_t syment;
+    uint32_t sym_count;
+    const struct elf64_rela *rela;
+    uint64_t rela_sz;
+    const struct elf64_rela *jmprel;
+    uint64_t jmprel_sz;
+    uint64_t needed_off[ELF_MAX_NEEDED];
+    uint32_t needed_count;
+};
 
 static int map_segment(uint64_t vaddr, uint64_t memsz) {
     uint64_t start = vaddr & ~0xFFFull;
@@ -85,6 +138,20 @@ static int map_segment(uint64_t vaddr, uint64_t memsz) {
         if (paging_map_4k(va, phys, 0) != 0) return -1;
     }
     return 0;
+}
+
+static uint64_t align_up_u64(uint64_t v, uint64_t a) {
+    return (v + a - 1) & ~(a - 1);
+}
+
+static int str_eq(const char *a, const char *b) {
+    uint64_t i = 0;
+    if (!a || !b) return 0;
+    while (a[i] && b[i]) {
+        if (a[i] != b[i]) return 0;
+        i++;
+    }
+    return a[i] == '\0' && b[i] == '\0';
 }
 
 static int apply_relocations(const uint8_t *data, uint64_t size, const struct elf64_ehdr *eh) {
@@ -144,6 +211,177 @@ static int apply_relocations(const uint8_t *data, uint64_t size, const struct el
             }
         }
     }
+    return 0;
+}
+
+static int calc_load_span(const uint8_t *data, uint64_t size, const struct elf64_ehdr *eh,
+                          uint64_t *out_min, uint64_t *out_max) {
+    if (!out_min || !out_max) return -1;
+    if (eh->e_phoff + (uint64_t)eh->e_phnum * sizeof(struct elf64_phdr) > size) return -2;
+    const struct elf64_phdr *ph = (const struct elf64_phdr *)(data + eh->e_phoff);
+    uint64_t min_vaddr = ~0ull;
+    uint64_t max_vaddr = 0;
+    for (uint16_t i = 0; i < eh->e_phnum; ++i) {
+        if (ph[i].p_type != PT_LOAD) continue;
+        if (ph[i].p_offset + ph[i].p_filesz > size) return -3;
+        if (ph[i].p_vaddr >= 0x0000800000000000ull) return -4;
+        if (ph[i].p_memsz == 0) continue;
+        if (ph[i].p_vaddr < min_vaddr) min_vaddr = ph[i].p_vaddr;
+        uint64_t end = ph[i].p_vaddr + ph[i].p_memsz;
+        if (end > max_vaddr) max_vaddr = end;
+    }
+    if (min_vaddr == ~0ull) return -5;
+    *out_min = min_vaddr;
+    *out_max = max_vaddr;
+    return 0;
+}
+
+static void parse_dynamic(struct elf_obj *obj) {
+    if (!obj || !obj->dyn || obj->dyn_size == 0) return;
+    uint64_t count = obj->dyn_size / sizeof(struct elf64_dyn);
+    for (uint64_t i = 0; i < count; ++i) {
+        int64_t tag = obj->dyn[i].d_tag;
+        uint64_t val = obj->dyn[i].d_un.d_val;
+        if (tag == DT_NULL) break;
+        if (tag == DT_STRTAB) obj->strtab = (const char *)(uintptr_t)(obj->base + val);
+        if (tag == DT_SYMTAB) obj->symtab = (const struct elf64_sym *)(uintptr_t)(obj->base + val);
+        if (tag == DT_STRSZ) obj->strsz = val;
+        if (tag == DT_SYMENT) obj->syment = val;
+        if (tag == DT_RELA) obj->rela = (const struct elf64_rela *)(uintptr_t)(obj->base + val);
+        if (tag == DT_RELASZ) obj->rela_sz = val;
+        if (tag == DT_JMPREL) obj->jmprel = (const struct elf64_rela *)(uintptr_t)(obj->base + val);
+        if (tag == DT_PLTRELSZ) obj->jmprel_sz = val;
+        if (tag == DT_HASH) {
+            const uint32_t *hash = (const uint32_t *)(uintptr_t)(obj->base + val);
+            if (hash) obj->sym_count = hash[1];
+        }
+        if (tag == DT_NEEDED && obj->needed_count < ELF_MAX_NEEDED) {
+            obj->needed_off[obj->needed_count++] = val;
+        }
+    }
+}
+
+static uint64_t resolve_symbol(const char *name, struct elf_obj *objs, uint32_t obj_count) {
+    if (!name || !objs) return 0;
+    for (uint32_t o = 0; o < obj_count; ++o) {
+        struct elf_obj *obj = &objs[o];
+        if (!obj->symtab || !obj->strtab || obj->sym_count == 0) continue;
+        for (uint32_t i = 0; i < obj->sym_count; ++i) {
+            const struct elf64_sym *sym = &obj->symtab[i];
+            if (sym->st_shndx == 0) continue;
+            uint8_t bind = ELF64_ST_BIND(sym->st_info);
+            if (bind == 0) continue;
+            const char *sname = obj->strtab + sym->st_name;
+            if (str_eq(sname, name)) {
+                return obj->base + sym->st_value;
+            }
+        }
+    }
+    return 0;
+}
+
+static int apply_rela_list(struct elf_obj *obj, const struct elf64_rela *rela, uint64_t rela_sz,
+                           struct elf_obj *objs, uint32_t obj_count) {
+    if (!obj || !rela || rela_sz == 0) return 0;
+    uint64_t count = rela_sz / sizeof(struct elf64_rela);
+    for (uint64_t i = 0; i < count; ++i) {
+        uint32_t type = ELF64_R_TYPE(rela[i].r_info);
+        uint32_t symi = ELF64_R_SYM(rela[i].r_info);
+        uint64_t *where = (uint64_t *)(uintptr_t)(obj->base + rela[i].r_offset);
+        switch (type) {
+            case R_X86_64_NONE:
+                break;
+            case R_X86_64_RELATIVE:
+                *where = obj->base + (uint64_t)rela[i].r_addend;
+                break;
+            case R_X86_64_64:
+            case R_X86_64_GLOB_DAT:
+            case R_X86_64_JUMP_SLOT: {
+                if (!obj->symtab || !obj->strtab || symi >= obj->sym_count) return -1;
+                const struct elf64_sym *sym = &obj->symtab[symi];
+                const char *sname = obj->strtab + sym->st_name;
+                uint64_t sval = 0;
+                if (sym->st_shndx != 0) {
+                    sval = obj->base + sym->st_value;
+                } else {
+                    sval = resolve_symbol(sname, objs, obj_count);
+                }
+                if (sval == 0) return -2;
+                *where = sval + (uint64_t)rela[i].r_addend;
+                break;
+            }
+            default:
+                return -3;
+        }
+    }
+    return 0;
+}
+
+static int load_object_at(struct elf_obj *obj, const uint8_t *data, uint64_t size,
+                          uint64_t pml4, uint64_t base, uint64_t *out_max_vaddr) {
+    if (!obj || !data || size < sizeof(struct elf64_ehdr)) return -1;
+    const struct elf64_ehdr *eh = (const struct elf64_ehdr *)data;
+    uint32_t magic = *(const uint32_t *)&eh->e_ident[0];
+    if (magic != ELF_MAGIC || eh->e_ident[4] != 2 || eh->e_ident[5] != 1) return -2;
+    if (eh->e_phoff == 0 || eh->e_phnum == 0 || eh->e_phentsize != sizeof(struct elf64_phdr)) return -3;
+    if (eh->e_phoff + (uint64_t)eh->e_phnum * sizeof(struct elf64_phdr) > size) return -4;
+    if (eh->e_type != ET_EXEC && eh->e_type != ET_DYN) return -5;
+
+    const struct elf64_phdr *ph = (const struct elf64_phdr *)(data + eh->e_phoff);
+    uint64_t max_vaddr = 0;
+    const struct elf64_dyn *dyn = NULL;
+    uint64_t dyn_sz = 0;
+    for (uint16_t i = 0; i < eh->e_phnum; ++i) {
+        if (ph[i].p_type == PT_DYNAMIC) {
+            dyn = (const struct elf64_dyn *)(uintptr_t)(base + ph[i].p_vaddr);
+            dyn_sz = ph[i].p_memsz;
+        }
+        if (ph[i].p_type != PT_LOAD) continue;
+        if (ph[i].p_offset + ph[i].p_filesz > size) return -6;
+        if (ph[i].p_vaddr >= 0x0000800000000000ull) return -7;
+        uint64_t seg_base = base + ph[i].p_vaddr;
+        uint64_t start = seg_base & ~0xFFFull;
+        uint64_t end = (seg_base + ph[i].p_memsz + 0xFFF) & ~0xFFFull;
+        uint64_t map_flags = (ph[i].p_flags & PF_X) ? 0 : PTE_NX;
+        for (uint64_t va = start; va < end; va += 0x1000ull) {
+            uint64_t phys = pmm_alloc_frame();
+            if (phys == 0) return -8;
+            if (paging_map_user_4k(pml4, va, phys, map_flags) != 0) return -9;
+        }
+        if (ph[i].p_filesz > 0) {
+            memcpy((void *)(uintptr_t)seg_base, data + ph[i].p_offset, (size_t)ph[i].p_filesz);
+        }
+        if (ph[i].p_memsz > ph[i].p_filesz) {
+            uint64_t bss = seg_base + ph[i].p_filesz;
+            uint64_t bss_len = ph[i].p_memsz - ph[i].p_filesz;
+            memset((void *)(uintptr_t)bss, 0, (size_t)bss_len);
+        }
+        if (ph[i].p_vaddr + ph[i].p_memsz > max_vaddr) {
+            max_vaddr = ph[i].p_vaddr + ph[i].p_memsz;
+        }
+    }
+
+    obj->file = data;
+    obj->file_size = size;
+    obj->base = base;
+    obj->entry = base + eh->e_entry;
+    obj->eh = eh;
+    obj->ph = ph;
+    obj->dyn = dyn;
+    obj->dyn_size = dyn_sz;
+    obj->symtab = NULL;
+    obj->strtab = NULL;
+    obj->strsz = 0;
+    obj->syment = 0;
+    obj->sym_count = 0;
+    obj->rela = NULL;
+    obj->rela_sz = 0;
+    obj->jmprel = NULL;
+    obj->jmprel_sz = 0;
+    obj->needed_count = 0;
+
+    if (out_max_vaddr) *out_max_vaddr = max_vaddr;
+    parse_dynamic(obj);
     return 0;
 }
 
@@ -352,8 +590,8 @@ int elf_load_and_run(const char *path, int argc, char **argv, char **envp) {
 }
 
 int elf_load_user(const char *path, int argc, char **argv, char **envp,
-                  uint64_t *out_entry, uint64_t *out_pml4, uint64_t *out_rsp,
-                  uint64_t *out_stack_top, uint64_t *out_stack_size) {
+                  struct user_addr_space *out_layout,
+                  uint64_t *out_entry, uint64_t *out_pml4, uint64_t *out_rsp) {
     const uint8_t *data = NULL;
     uint64_t size = 0;
     int node = vfs_resolve(vfs_resolve(0, "/"), path);
@@ -365,9 +603,8 @@ int elf_load_user(const char *path, int argc, char **argv, char **envp,
     const struct elf64_ehdr *eh = (const struct elf64_ehdr *)data;
     uint32_t magic = *(const uint32_t *)&eh->e_ident[0];
     if (magic != ELF_MAGIC || eh->e_ident[4] != 2 || eh->e_ident[5] != 1) return -3;
-    if (eh->e_phoff == 0 || eh->e_phnum == 0 || eh->e_phentsize != sizeof(struct elf64_phdr)) return -4;
-    if (eh->e_phoff + (uint64_t)eh->e_phnum * sizeof(struct elf64_phdr) > size) return -5;
-    if (eh->e_entry >= 0x0000800000000000ull) return -6;
+    if (eh->e_type != ET_EXEC && eh->e_type != ET_DYN) return -4;
+    if (eh->e_entry >= 0x0000800000000000ull && eh->e_type != ET_DYN) return -5;
 
     uint64_t new_pml4 = paging_new_user_pml4();
     if (new_pml4 == 0) return -7;
@@ -375,59 +612,150 @@ int elf_load_user(const char *path, int argc, char **argv, char **envp,
     uint64_t old_cr3 = cpu_read_cr3();
     paging_switch_to(new_pml4);
 
-    const struct elf64_phdr *ph = (const struct elf64_phdr *)(data + eh->e_phoff);
-    for (uint16_t i = 0; i < eh->e_phnum; ++i) {
-        if (ph[i].p_type != PT_LOAD) continue;
-        if (ph[i].p_offset + ph[i].p_filesz > size) {
+    struct user_addr_space layout;
+    paging_user_layout_default(&layout);
+
+    struct elf_obj objs[ELF_MAX_OBJS];
+    uint32_t obj_count = 0;
+    uint64_t next_base = layout.mmap_base;
+
+    uint64_t base_main = 0;
+    if (eh->e_type == ET_DYN) {
+        uint64_t min_vaddr = 0, max_vaddr = 0;
+        if (calc_load_span(data, size, eh, &min_vaddr, &max_vaddr) != 0) {
             paging_switch_to(old_cr3);
             return -8;
         }
-        if (ph[i].p_vaddr >= 0x0000800000000000ull) {
-            paging_switch_to(old_cr3);
-            return -9;
-        }
-        uint64_t start = ph[i].p_vaddr & ~0xFFFull;
-        uint64_t end = (ph[i].p_vaddr + ph[i].p_memsz + 0xFFF) & ~0xFFFull;
-        for (uint64_t va = start; va < end; va += 0x1000ull) {
-            uint64_t phys = pmm_alloc_frame();
-            if (phys == 0) {
-                paging_switch_to(old_cr3);
-                return -10;
-            }
-            if (paging_map_user_4k(new_pml4, va, phys, 0) != 0) {
-                paging_switch_to(old_cr3);
-                return -11;
-            }
-        }
-        if (ph[i].p_filesz > 0) {
-            memcpy((void *)(uintptr_t)ph[i].p_vaddr, data + ph[i].p_offset, (size_t)ph[i].p_filesz);
-        }
-        if (ph[i].p_memsz > ph[i].p_filesz) {
-            uint64_t bss = ph[i].p_vaddr + ph[i].p_filesz;
-            uint64_t bss_len = ph[i].p_memsz - ph[i].p_filesz;
-            memset((void *)(uintptr_t)bss, 0, (size_t)bss_len);
-        }
+        base_main = align_up_u64(next_base, 0x1000ull);
+        base_main -= (min_vaddr & 0xFFFull);
+        if (base_main < next_base) base_main += 0x1000ull;
     }
 
-    if (apply_relocations(data, size, eh) != 0) {
+    uint64_t max_vaddr_main = 0;
+    if (load_object_at(&objs[obj_count], data, size, new_pml4, base_main, &max_vaddr_main) != 0) {
         paging_switch_to(old_cr3);
-        return -12;
+        return -9;
+    }
+    obj_count++;
+
+    if (eh->e_type == ET_DYN) {
+        next_base = align_up_u64(base_main + max_vaddr_main, 0x1000ull) + 0x10000ull;
+        if (next_base > layout.mmap_limit) {
+            paging_switch_to(old_cr3);
+            return -10;
+        }
     }
 
-    uint64_t stack_top = 0x0000000070000000ull;
-    uint64_t stack_size = 0x0000000000020000ull;
+    const char *loaded_names[ELF_MAX_OBJS];
+    uint32_t loaded_count = 0;
+    const char *need_queue[ELF_MAX_NEEDED * 2];
+    uint32_t need_count = 0;
+    uint32_t need_head = 0;
+
+    if (objs[0].needed_count && objs[0].strtab) {
+        for (uint32_t i = 0; i < objs[0].needed_count && need_count < (ELF_MAX_NEEDED * 2); ++i) {
+            need_queue[need_count++] = objs[0].strtab + objs[0].needed_off[i];
+        }
+    }
+
+    while (need_head < need_count && obj_count < ELF_MAX_OBJS) {
+        const char *name = need_queue[need_head++];
+        int already = 0;
+        for (uint32_t i = 0; i < loaded_count; ++i) {
+            if (str_eq(loaded_names[i], name)) {
+                already = 1;
+                break;
+            }
+        }
+        if (already) continue;
+
+        char path_buf[128];
+        uint64_t pi = 0;
+        if (name[0] != '/') {
+            const char *prefix = "/lib/";
+            for (uint64_t i = 0; prefix[i] && pi + 1 < sizeof(path_buf); ++i) {
+                path_buf[pi++] = prefix[i];
+            }
+        }
+        for (uint64_t i = 0; name[i] && pi + 1 < sizeof(path_buf); ++i) {
+            path_buf[pi++] = name[i];
+        }
+        path_buf[pi] = '\0';
+
+        const uint8_t *lib_data = NULL;
+        uint64_t lib_size = 0;
+        int lib_node = vfs_resolve(vfs_resolve(0, "/"), path_buf);
+        if (lib_node < 0 || !vfs_read_file(lib_node, &lib_data, &lib_size) || !lib_data) {
+            paging_switch_to(old_cr3);
+            return -11;
+        }
+
+        const struct elf64_ehdr *leh = (const struct elf64_ehdr *)lib_data;
+        uint64_t min_vaddr = 0, lib_span_max = 0;
+        if (calc_load_span(lib_data, lib_size, leh, &min_vaddr, &lib_span_max) != 0) {
+            paging_switch_to(old_cr3);
+            return -12;
+        }
+        uint64_t lib_base = align_up_u64(next_base, 0x1000ull);
+        lib_base -= (min_vaddr & 0xFFFull);
+        if (lib_base < next_base) lib_base += 0x1000ull;
+
+        uint64_t lib_max_vaddr = 0;
+        if (load_object_at(&objs[obj_count], lib_data, lib_size, new_pml4, lib_base, &lib_max_vaddr) != 0) {
+            paging_switch_to(old_cr3);
+            return -13;
+        }
+        loaded_names[loaded_count++] = name;
+        obj_count++;
+
+        next_base = align_up_u64(lib_base + lib_max_vaddr, 0x1000ull) + 0x10000ull;
+        if (next_base > layout.mmap_limit) {
+            paging_switch_to(old_cr3);
+            return -14;
+        }
+
+        if (objs[obj_count - 1].needed_count && objs[obj_count - 1].strtab) {
+            for (uint32_t i = 0; i < objs[obj_count - 1].needed_count && need_count < (ELF_MAX_NEEDED * 2); ++i) {
+                need_queue[need_count++] = objs[obj_count - 1].strtab + objs[obj_count - 1].needed_off[i];
+            }
+        }
+    }
+
+    if (objs[0].dyn) {
+        for (uint32_t i = 0; i < obj_count; ++i) {
+            if (apply_rela_list(&objs[i], objs[i].rela, objs[i].rela_sz, objs, obj_count) != 0) {
+                paging_switch_to(old_cr3);
+                return -15;
+            }
+            if (apply_rela_list(&objs[i], objs[i].jmprel, objs[i].jmprel_sz, objs, obj_count) != 0) {
+                paging_switch_to(old_cr3);
+                return -16;
+            }
+        }
+    } else {
+        if (apply_relocations(data, size, eh) != 0) {
+            paging_switch_to(old_cr3);
+            return -17;
+        }
+    }
+
+    uint64_t stack_top = layout.stack_top;
+    uint64_t stack_size = layout.stack_size;
     uint64_t user_rsp = 0;
     if (build_user_stack(new_pml4, stack_top, stack_size, argc, argv, envp, &user_rsp) != 0) {
         paging_switch_to(old_cr3);
-        return -13;
+        return -18;
     }
 
     paging_switch_to(old_cr3);
 
-    if (out_entry) *out_entry = eh->e_entry;
+    if (next_base > layout.mmap_base) {
+        layout.mmap_base = align_up_u64(next_base, 0x1000ull);
+    }
+
+    if (out_entry) *out_entry = objs[0].entry;
     if (out_pml4) *out_pml4 = new_pml4;
     if (out_rsp) *out_rsp = user_rsp;
-    if (out_stack_top) *out_stack_top = stack_top;
-    if (out_stack_size) *out_stack_size = stack_size;
+    if (out_layout) *out_layout = layout;
     return 0;
 }

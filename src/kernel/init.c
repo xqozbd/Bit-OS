@@ -35,11 +35,11 @@ static void init_thread(void *arg) {
     uint64_t entry = 0;
     uint64_t pml4 = 0;
     uint64_t rsp = 0;
-    uint64_t stack_top = 0;
-    uint64_t stack_size = 0;
+    struct user_addr_space layout;
+    paging_user_layout_default(&layout);
 
     int rc = elf_load_user(p->path, p->argc, p->argv, NULL,
-                           &entry, &pml4, &rsp, &stack_top, &stack_size);
+                           &layout, &entry, &pml4, &rsp);
     if (rc != 0) {
         log_printf("init: exec failed rc=%d path=%s\n", rc, p->path);
         kfree(p);
@@ -53,8 +53,9 @@ static void init_thread(void *arg) {
         t->pml4_phys = pml4;
     }
     if (task) {
-        task_set_user_layout(task, 0x0000000040000000ull, 0x0000000080000000ull,
-                             stack_top, stack_size);
+        task_set_user_layout(task, layout.heap_base, layout.heap_limit,
+                             layout.stack_top, layout.stack_size,
+                             layout.mmap_base, layout.mmap_limit);
         task->pml4_phys = pml4;
     }
 
