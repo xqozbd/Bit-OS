@@ -196,6 +196,21 @@ uint64_t paging_unmap_user_4k(uint64_t pml4_phys, uint64_t virt) {
     return ent & 0x000ffffffffff000ull;
 }
 
+uint64_t paging_unmap_4k(uint64_t virt) {
+    if (!g_pml4 || g_hhdm_offset == 0) return 0;
+    uint64_t *pte = walk_pt(g_pml4_phys, virt);
+    if (!pte) return 0;
+    uint64_t ent = *pte;
+    if ((ent & PTE_P) == 0) return 0;
+    *pte = 0;
+#if defined(__GNUC__) || defined(__clang__)
+    __asm__ volatile ("invlpg (%0)" : : "r"(virt) : "memory");
+#else
+    (void)virt;
+#endif
+    return ent & 0x000ffffffffff000ull;
+}
+
 static inline void load_cr3(uint64_t phys) {
 #if defined(__GNUC__) || defined(__clang__)
     __asm__ volatile ("mov %0, %%cr3" : : "r"(phys) : "memory");

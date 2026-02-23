@@ -120,23 +120,28 @@
 - [x] Userland ELF loader enhancements (dynamic linking).
 - [x] Userspace library loading and symbol resolution.
 - [x] `/tmp` temporary filesystem support.
+- [x] Swap file / virtual memory paging.
+- [x] Memory-mapped file support.
+- [x] Kernel heap fragmentation reduction / compaction.
+- [x] Kernel logging levels (info/warn/error/debug).
+- [x] Sysctl-like tunable kernel parameters.
+- [x] ACPI power states: suspend/resume (S3/S4).
+- [x] ACPI thermal zone monitoring.
+- [x] Bootloader command line parsing and config file support.
+- [x] Userspace cron/task scheduling.
+- [x] RTC alarms + timers for wakeups.
 
 ## Next
-- [ ] Swap file / virtual memory paging.
-- [ ] Memory-mapped file support.
-- [ ] Kernel heap fragmentation reduction / compaction.
-- [ ] Kernel logging levels (info/warn/error/debug).
-- [ ] Sysctl-like tunable kernel parameters.
-- [ ] ACPI power states: suspend/resume (S3/S4).
-- [ ] ACPI thermal zone monitoring.
-- [ ] Bootloader command line parsing and config file support.
-- [ ] Userspace cron/task scheduling.
-- [ ] RTC alarms + timers for wakeups.
 - [ ] Multi-language keyboard layouts.
 - [ ] Keyboard key repeat rate configuration.
 - [ ] Userland shell scripting support.
 - [ ] Environment variable support in shell.
+- [ ] Pipes and redirection in shell (`|`, `>`, `<`) with pipe syscalls.
+- [ ] Job control (foreground/background, `Ctrl+Z`, `fg/bg`).
+- [ ] TTY/PTY support + virtual consoles (multiple VTs).
 - [ ] File permission enforcement (`chmod/chown`).
+- [ ] User accounts (UID/GID) + login.
+- [ ] `umask` support.
 - [ ] Sticky bit, SUID, SGID support.
 - [ ] File system caching / read-ahead.
 - [ ] Directory caching.
@@ -159,10 +164,12 @@
 - [ ] Userspace monotonic clocks.
 - [ ] `/etc` configuration filesystem support.
 - [ ] Syscall error codes standardized (POSIX-like).
+- [ ] select/poll for I/O multiplexing.
 - [ ] Kernel module / driver load/unload support.
 - [ ] Hot-plug detection for PCI/USB devices.
 - [ ] Basic security: deny access to kernel memory from userspace.
 - [ ] Simple random number generator (RNG) for kernel/userspace.
+- [ ] `/dev/random` and `/dev/urandom` devices.
 - [ ] Floating point context save/restore on task switch.
 - [ ] SSE/AVX context support.
 - [ ] Memory leak sanitizer for userspace processes.
@@ -171,6 +178,8 @@
 - [ ] ELF core dump generation for crashed processes.
 - [ ] Simple disk quota support.
 - [ ] File locking support.
+- [ ] Pipes/IPC (kernel-level pipe buffers).
+- [ ] UNIX domain sockets.
 - [ ] Thread-local storage (TLS) support.
 - [ ] Atomic operations / spinlocks for SMP.
 - [ ] Condition variables / futexes for synchronization.
@@ -200,3 +209,10 @@
 - [ ] Multi-CPU preemption testing.
 - [ ] Kernel crash recovery routines.
 - [ ] Basic sandboxing of user programs.
+- [ ] Desktop stack: `/dev/fb0` mmap + IOCTLs (size/pitch/format).
+- [ ] Desktop stack: `/dev/input` event stream (keyboard/mouse).
+- [ ] Desktop stack: userspace window server/compositor (basic).
+- [ ] Desktop stack: window protocol + shared memory buffers.
+- [ ] Desktop stack: font rendering + text drawing in userspace.
+- [ ] Desktop stack: basic UI toolkit (buttons/menus/panels).
+- [ ] Desktop stack: desktop shell (taskbar + launcher).

@@ -48,9 +48,11 @@
 #include "kernel/dhcp.h"
 #include "kernel/firewall.h"
 #include "sys/boot_params.h"
+#include "sys/sysctl.h"
 #include "lib/stack_chk.h"
 #include "kernel/crash_dump.h"
 #include "sys/tmpfs.h"
+#include "kernel/swap.h"
 
 /* Bootstrap stack: keep it inside the kernel image so it's mapped in our page tables. */
 #define KSTACK_SIZE (64 * 1024)
@@ -140,14 +142,31 @@ static void kmain_stage2(void) {
         boot_params_init(NULL);
     }
     const char *log_mode = boot_param_get("log");
-    if (log_mode && log_mode[0] == 'v' && log_mode[1] == 'e' && log_mode[2] == 'r'
-        && log_mode[3] == 'b' && log_mode[4] == 'o' && log_mode[5] == 's' && log_mode[6] == 'e'
-        && log_mode[7] == '\0') {
-        log_set_verbose(1);
-        log_printf("Boot: verbose logging enabled\n");
+    if (log_mode) {
+        if (log_mode[0] == 'd' && log_mode[1] == 'e' && log_mode[2] == 'b' &&
+            log_mode[3] == 'u' && log_mode[4] == 'g' && log_mode[5] == '\0') {
+            log_set_level(LOG_DEBUG);
+        } else if (log_mode[0] == 'i' && log_mode[1] == 'n' && log_mode[2] == 'f' &&
+                   log_mode[3] == 'o' && log_mode[4] == '\0') {
+            log_set_level(LOG_INFO);
+        } else if (log_mode[0] == 'w' && log_mode[1] == 'a' && log_mode[2] == 'r' &&
+                   log_mode[3] == 'n' && log_mode[4] == '\0') {
+            log_set_level(LOG_WARN);
+        } else if (log_mode[0] == 'e' && log_mode[1] == 'r' && log_mode[2] == 'r' &&
+                   log_mode[3] == 'o' && log_mode[4] == 'r' && log_mode[5] == '\0') {
+            log_set_level(LOG_ERROR);
+        } else if (log_mode[0] == 'v' && log_mode[1] == 'e' && log_mode[2] == 'r' &&
+                   log_mode[3] == 'b' && log_mode[4] == 'o' && log_mode[5] == 's' &&
+                   log_mode[6] == 'e' && log_mode[7] == '\0') {
+            log_set_level(LOG_DEBUG);
+        }
+        if (log_get_level() == LOG_DEBUG) {
+            log_printf("Boot: verbose logging enabled\n");
+        }
     }
     watchdog_set_mode(boot_param_get("watchdog"));
     log_printf_verbose("Boot: watchdog mode=%s\n", boot_param_get("watchdog"));
+    sysctl_init();
 
     log_printf("Boot: checking framebuffer availability...\n");
     if (!framebuffer_request.response || framebuffer_request.response->framebuffer_count < 1) {
@@ -348,6 +367,14 @@ static void kmain_stage2(void) {
             vfs_set_root(VFS_BACKEND_MOCK, fs_root());
             log_printf("Boot: VFS root set to mock FS\n");
         }
+    }
+    if (boot_params_load_config("/etc/boot.conf")) {
+        log_printf("Boot: loaded config /etc/boot.conf\n");
+    } else if (boot_params_load_config("/boot/boot.conf")) {
+        log_printf("Boot: loaded config /boot/boot.conf\n");
+    }
+    if (swap_init("/swapfile", 16ull * 1024ull * 1024ull) != 0) {
+        log_printf("Boot: swap disabled\n");
     }
     crash_dump_flush_to_disk();
     if (initramfs_available()) {

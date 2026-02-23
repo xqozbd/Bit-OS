@@ -42,6 +42,21 @@ static struct heap_block *heap_last(void) {
     return b;
 }
 
+static struct heap_block *heap_last_prev(struct heap_block **out_prev) {
+    struct heap_block *prev = NULL;
+    struct heap_block *b = heap_head;
+    if (!b) {
+        if (out_prev) *out_prev = NULL;
+        return NULL;
+    }
+    while (b->next) {
+        prev = b;
+        b = b->next;
+    }
+    if (out_prev) *out_prev = prev;
+    return b;
+}
+
 static void heap_append_block(struct heap_block *b) {
     if (!heap_head) {
         heap_head = b;
@@ -87,6 +102,34 @@ static void heap_coalesce(void) {
     }
 }
 
+static void heap_trim(void) {
+    struct heap_block *prev = NULL;
+    struct heap_block *last = heap_last_prev(&prev);
+    if (!last || !last->free) return;
+
+    uintptr_t block_start = (uintptr_t)last;
+    uintptr_t data_start = block_start + sizeof(struct heap_block);
+    uintptr_t block_end = data_start + last->size;
+    if (block_end != (uintptr_t)heap_end) return;
+
+    uintptr_t min_keep_end = data_start + 16;
+    if (min_keep_end > block_end) return;
+
+    uintptr_t release_start = align_up_u64(min_keep_end, HEAP_PAGE_SIZE);
+    uintptr_t release_end = block_end & ~(HEAP_PAGE_SIZE - 1);
+    if (release_start >= release_end) return;
+
+    for (uintptr_t addr = release_start; addr < release_end; addr += HEAP_PAGE_SIZE) {
+        uint64_t phys = paging_unmap_4k((uint64_t)addr);
+        if (phys) pmm_free_frame(phys);
+    }
+    heap_end = (uint64_t)release_start;
+    last->size = (size_t)(heap_end - data_start);
+    if (last->size == 0 && prev) {
+        prev->next = NULL;
+    }
+}
+
 void heap_init(void) {
     heap_end = heap_base;
     heap_head = NULL;
@@ -102,6 +145,7 @@ void *kmalloc(size_t size) {
         if (s) return s;
     }
 
+    struct heap_block *best = NULL;
     struct heap_block *b = heap_head;
     while (b) {
         if (b->magic != HEAP_MAGIC) {
@@ -109,22 +153,25 @@ void *kmalloc(size_t size) {
             return NULL;
         }
         if (b->free && b->size >= size) {
-            size_t remaining = b->size - size;
-            if (remaining > sizeof(struct heap_block) + 16) {
-                struct heap_block *nb = (struct heap_block *)((uintptr_t)b + sizeof(struct heap_block) + size);
-                nb->magic = HEAP_MAGIC;
-                nb->size = remaining - sizeof(struct heap_block);
-                nb->free = 1;
-                nb->next = b->next;
-                b->next = nb;
-                b->size = size;
-            }
-            b->free = 0;
-            b->owner = thread_current();
-            thread_account_alloc(b->owner, b->size);
-            return (void *)((uintptr_t)b + sizeof(struct heap_block));
+            if (!best || b->size < best->size) best = b;
         }
         b = b->next;
+    }
+    if (best) {
+        size_t remaining = best->size - size;
+        if (remaining > sizeof(struct heap_block) + 16) {
+            struct heap_block *nb = (struct heap_block *)((uintptr_t)best + sizeof(struct heap_block) + size);
+            nb->magic = HEAP_MAGIC;
+            nb->size = remaining - sizeof(struct heap_block);
+            nb->free = 1;
+            nb->next = best->next;
+            best->next = nb;
+            best->size = size;
+        }
+        best->free = 0;
+        best->owner = thread_current();
+        thread_account_alloc(best->owner, best->size);
+        return (void *)((uintptr_t)best + sizeof(struct heap_block));
     }
 
     size_t need = size + sizeof(struct heap_block);
@@ -150,6 +197,7 @@ void kfree(void *ptr) {
     thread_account_free(b->owner, b->size);
     b->free = 1;
     heap_coalesce();
+    heap_trim();
 }
 
 void *krealloc(void *ptr, size_t size) {

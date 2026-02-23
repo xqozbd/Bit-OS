@@ -28,6 +28,10 @@ void watchdog_set_mode(const char *mode) {
     g_mode = mode_from_str(mode);
 }
 
+int watchdog_get_mode(void) {
+    return g_mode;
+}
+
 void watchdog_early_stage(const char *stage) {
     if (g_mode == 3) return;
     if (!stage) stage = "(null)";

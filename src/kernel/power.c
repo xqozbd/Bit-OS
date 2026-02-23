@@ -5,6 +5,9 @@
 #include "sys/acpi.h"
 #include "arch/x86_64/io.h"
 #include "arch/x86_64/cpu.h"
+#include "arch/x86_64/timer.h"
+#include "drivers/ps2/keyboard.h"
+#include "drivers/ps2/mouse.h"
 
 static void log_state(uint8_t state, const char *name) {
     struct acpi_sleep_state ss;
@@ -27,6 +30,15 @@ static void force_triple_fault(void) {
 #endif
 }
 
+static void try_poweroff_ports(void) {
+    /* Common emulator/hypervisor poweroff ports. */
+    outw(0x604, 0x2000); /* QEMU/VirtualBox */
+    outw(0xB004, 0x2000); /* Bochs/QEMU */
+    outw(0x4004, 0x3400); /* QEMU */
+    outw(0x4004, 0x2000);
+    outb(0xF4, 0x00);    /* QEMU isa-debug-exit (if present) */
+}
+
 void power_init(void) {
     log_state(3, "S3");
     log_state(4, "S4");
@@ -36,12 +48,24 @@ void power_init(void) {
 
 int power_suspend_s3(void) {
     log_printf("power: entering S3\n");
-    return acpi_sleep(3);
+    if (!acpi_sleep(3)) return 0;
+    log_printf("power: resume from S3\n");
+    timer_init();
+    timer_switch_to_apic(0);
+    kb_init();
+    ms_init();
+    return 1;
 }
 
 int power_suspend_s4(void) {
     log_printf("power: entering S4\n");
-    return acpi_sleep(4);
+    if (!acpi_sleep(4)) return 0;
+    log_printf("power: resume from S4\n");
+    timer_init();
+    timer_switch_to_apic(0);
+    kb_init();
+    ms_init();
+    return 1;
 }
 
 int power_shutdown_acpi(void) {
@@ -51,13 +75,13 @@ int power_shutdown_acpi(void) {
 
 void power_shutdown(void) {
     block_flush_all();
-    if (power_shutdown_acpi()) {
-        halt_forever();
+    /* Try ACPI S5, then fall back to common hypervisor ports. */
+    power_shutdown_acpi();
+    for (int i = 0; i < 4; ++i) {
+        try_poweroff_ports();
     }
-    outw(0x604, 0x2000);
-    outw(0xB004, 0x2000);
-    outw(0x4004, 0x3400);
-    outw(0x4004, 0x2000);
+    /* Last resort: force reset if poweroff is unsupported. */
+    force_triple_fault();
     halt_forever();
 }
 

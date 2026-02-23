@@ -1,0 +1,215 @@
+#include "sys/sysctl.h"
+
+#include <stdint.h>
+
+#include "lib/strutil.h"
+#include "lib/log.h"
+#include "kernel/watchdog.h"
+#include "drivers/net/pcnet.h"
+#include "kernel/swap.h"
+#include "sys/acpi.h"
+
+enum { SYSCTL_MAX = 32 };
+
+struct sysctl_entry {
+    const char *key;
+    sysctl_get_fn get;
+    sysctl_set_fn set;
+    void *ctx;
+};
+
+static struct sysctl_entry g_sysctls[SYSCTL_MAX];
+static size_t g_sysctl_count = 0;
+
+static void u32_to_str(uint32_t v, char *out, size_t max) {
+    if (!out || max == 0) return;
+    char tmp[16];
+    size_t n = 0;
+    if (v == 0) {
+        if (max > 1) { out[0] = '0'; out[1] = '\0'; }
+        return;
+    }
+    while (v && n < sizeof(tmp)) {
+        tmp[n++] = (char)('0' + (v % 10u));
+        v /= 10u;
+    }
+    size_t i = 0;
+    while (n && i + 1 < max) {
+        out[i++] = tmp[--n];
+    }
+    out[i] = '\0';
+}
+
+static const char *level_to_str(enum log_level lvl) {
+    switch (lvl) {
+        case LOG_DEBUG: return "debug";
+        case LOG_INFO: return "info";
+        case LOG_WARN: return "warn";
+        case LOG_ERROR: return "error";
+        case LOG_NONE: return "none";
+        default: return "info";
+    }
+}
+
+static int str_to_level(const char *s, enum log_level *out) {
+    if (!s || !out) return 0;
+    if (str_eq(s, "debug") || str_eq(s, "verbose")) { *out = LOG_DEBUG; return 1; }
+    if (str_eq(s, "info")) { *out = LOG_INFO; return 1; }
+    if (str_eq(s, "warn")) { *out = LOG_WARN; return 1; }
+    if (str_eq(s, "error")) { *out = LOG_ERROR; return 1; }
+    if (str_eq(s, "none")) { *out = LOG_NONE; return 1; }
+    return 0;
+}
+
+static int sysctl_get_log_level(char *out, size_t max, void *ctx) {
+    (void)ctx;
+    const char *s = level_to_str(log_get_level());
+    size_t i = 0;
+    while (s[i] && i + 1 < max) {
+        out[i] = s[i];
+        i++;
+    }
+    if (max) out[i] = '\0';
+    return 1;
+}
+
+static int sysctl_set_log_level(const char *val, void *ctx) {
+    (void)ctx;
+    enum log_level lvl;
+    if (!str_to_level(val, &lvl)) return 0;
+    log_set_level(lvl);
+    return 1;
+}
+
+static const char *watchdog_mode_str(void) {
+    int mode = watchdog_get_mode();
+    switch (mode) {
+        case 3: return "off";
+        case 2: return "log";
+        case 1: return "reboot";
+        default: return "halt";
+    }
+}
+
+static int sysctl_get_watchdog(char *out, size_t max, void *ctx) {
+    (void)ctx;
+    const char *s = watchdog_mode_str();
+    size_t i = 0;
+    while (s[i] && i + 1 < max) {
+        out[i] = s[i];
+        i++;
+    }
+    if (max) out[i] = '\0';
+    return 1;
+}
+
+static int sysctl_set_watchdog(const char *val, void *ctx) {
+    (void)ctx;
+    watchdog_set_mode(val);
+    return 1;
+}
+
+static int sysctl_get_ipv6_forward(char *out, size_t max, void *ctx) {
+    (void)ctx;
+    uint32_t v = (uint32_t)(pcnet_ipv6_get_forwarding() ? 1 : 0);
+    u32_to_str(v, out, max);
+    return 1;
+}
+
+static int sysctl_set_ipv6_forward(const char *val, void *ctx) {
+    (void)ctx;
+    if (str_eq(val, "1") || str_eq(val, "on") || str_eq(val, "true")) {
+        pcnet_ipv6_set_forwarding(1);
+        return 1;
+    }
+    if (str_eq(val, "0") || str_eq(val, "off") || str_eq(val, "false")) {
+        pcnet_ipv6_set_forwarding(0);
+        return 1;
+    }
+    return 0;
+}
+
+static int sysctl_get_swap_enabled(char *out, size_t max, void *ctx) {
+    (void)ctx;
+    uint32_t v = (uint32_t)(swap_enabled() ? 1 : 0);
+    u32_to_str(v, out, max);
+    return 1;
+}
+
+static int sysctl_get_swap_slots(char *out, size_t max, void *ctx) {
+    (void)ctx;
+    uint32_t v = (uint32_t)swap_total_slots();
+    u32_to_str(v, out, max);
+    return 1;
+}
+
+static int sysctl_get_acpi_temp(char *out, size_t max, void *ctx) {
+    (void)ctx;
+    int temp_c = 0;
+    if (!acpi_thermal_read_temp_c(&temp_c)) return 0;
+    if (temp_c < 0) temp_c = 0;
+    u32_to_str((uint32_t)temp_c, out, max);
+    return 1;
+}
+
+static int sysctl_get_acpi_tz_present(char *out, size_t max, void *ctx) {
+    (void)ctx;
+    const struct acpi_thermal_info *info = acpi_thermal_info();
+    uint32_t v = (info && info->has_tz) ? 1u : 0u;
+    u32_to_str(v, out, max);
+    return 1;
+}
+
+void sysctl_init(void) {
+    g_sysctl_count = 0;
+    sysctl_register("log.level", sysctl_get_log_level, sysctl_set_log_level, NULL);
+    sysctl_register("watchdog.mode", sysctl_get_watchdog, sysctl_set_watchdog, NULL);
+    sysctl_register("net.ipv6.forwarding", sysctl_get_ipv6_forward, sysctl_set_ipv6_forward, NULL);
+    sysctl_register("vm.swap.enabled", sysctl_get_swap_enabled, NULL, NULL);
+    sysctl_register("vm.swap.slots", sysctl_get_swap_slots, NULL, NULL);
+    sysctl_register("acpi.thermal.present", sysctl_get_acpi_tz_present, NULL, NULL);
+    sysctl_register("acpi.thermal.temp_c", sysctl_get_acpi_temp, NULL, NULL);
+}
+
+int sysctl_register(const char *key, sysctl_get_fn get, sysctl_set_fn set, void *ctx) {
+    if (!key || !get || g_sysctl_count >= SYSCTL_MAX) return 0;
+    g_sysctls[g_sysctl_count].key = key;
+    g_sysctls[g_sysctl_count].get = get;
+    g_sysctls[g_sysctl_count].set = set;
+    g_sysctls[g_sysctl_count].ctx = ctx;
+    g_sysctl_count++;
+    return 1;
+}
+
+static struct sysctl_entry *sysctl_find(const char *key) {
+    for (size_t i = 0; i < g_sysctl_count; ++i) {
+        if (str_eq(g_sysctls[i].key, key)) return &g_sysctls[i];
+    }
+    return NULL;
+}
+
+int sysctl_get(const char *key, char *out, size_t max) {
+    if (!key || !out || max == 0) return 0;
+    struct sysctl_entry *e = sysctl_find(key);
+    if (!e || !e->get) return 0;
+    return e->get(out, max, e->ctx);
+}
+
+int sysctl_set(const char *key, const char *val) {
+    if (!key || !val) return 0;
+    struct sysctl_entry *e = sysctl_find(key);
+    if (!e || !e->set) return 0;
+    return e->set(val, e->ctx);
+}
+
+void sysctl_dump(void) {
+    char buf[64];
+    for (size_t i = 0; i < g_sysctl_count; ++i) {
+        const char *k = g_sysctls[i].key;
+        buf[0] = '\0';
+        if (g_sysctls[i].get) {
+            g_sysctls[i].get(buf, sizeof(buf), g_sysctls[i].ctx);
+        }
+        log_printf("%s = %s\n", k, buf[0] ? buf : "(n/a)");
+    }
+}

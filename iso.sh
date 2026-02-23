@@ -32,7 +32,7 @@ if [ -d "$INITRAMFS_DIR" ]; then
       -Wl,-T,user/user_so.lds -Wl,-soname,libu.so \
       -o "$INITRAMFS_DIR/lib/libu.so" user/libu.c
   fi
-  for src in user/init.c user/busybox.c; do
+  for src in user/init.c user/busybox.c user/cron.c; do
     [ -f "$src" ] || continue
     base=$(basename "$src" .c)
     x86_64-linux-gnu-gcc -nostdlib -static -ffreestanding -fno-pie -no-pie -Iuser \

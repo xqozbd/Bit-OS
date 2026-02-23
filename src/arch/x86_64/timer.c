@@ -13,6 +13,8 @@
 #include "drivers/ps2/keyboard.h"
 #include "drivers/net/pcnet.h"
 #include "lib/log.h"
+#include "sys/acpi.h"
+#include "kernel/time.h"
 
 static volatile uint64_t g_ticks = 0;
 static volatile uint64_t g_pit_ticks = 0;
@@ -40,7 +42,9 @@ void timer_pit_tick(void) {
         sched_tick();
         if ((g_ticks % g_pit_hz) == 0) {
             block_writeback_poll(2);
+            time_alarm_tick();
         }
+        acpi_thermal_tick(g_ticks, g_pit_hz);
     }
 }
 
@@ -55,7 +59,9 @@ void timer_apic_tick(void) {
     sched_tick();
     if ((g_ticks % g_pit_hz) == 0) {
         block_writeback_poll(2);
+        time_alarm_tick();
     }
+    acpi_thermal_tick(g_ticks, g_pit_hz);
 }
 
 uint64_t timer_uptime_ticks(void) {

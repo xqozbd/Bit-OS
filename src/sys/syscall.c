@@ -13,6 +13,7 @@
 #include "sys/elf_loader.h"
 #include "sys/vfs.h"
 #include "sys/fcntl.h"
+#include "sys/mman.h"
 #include "arch/x86_64/usermode.h"
 #include "kernel/socket.h"
 #include "kernel/dhcp.h"
@@ -463,13 +464,22 @@ static uint64_t sys_recv_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4
 }
 
 static uint64_t sys_mmap_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
-    (void)a5; (void)a6;
     uint64_t addr = a1;
     uint64_t len = a2;
     uint32_t prot = (uint32_t)a3;
     uint32_t flags = (uint32_t)a4;
+    int fd = (int)a5;
+    uint64_t offset = a6;
     struct task *t = task_current();
     if (!t) return (uint64_t)-1;
+    if (flags & MAP_FILE) {
+        if ((offset & 0xFFFull) != 0) return (uint64_t)-1;
+        struct task_fd *ent = task_fd_get(t, fd);
+        if (!ent || ent->type != FD_TYPE_FILE) return (uint64_t)-1;
+        uint64_t out = task_mmap_file(t, addr, len, prot, flags, ent->node, offset);
+        if (out == 0) return (uint64_t)-1;
+        return out;
+    }
     uint64_t out = task_mmap_anonymous(t, addr, len, prot, flags);
     if (out == 0) return (uint64_t)-1;
     return out;

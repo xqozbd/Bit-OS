@@ -14,6 +14,7 @@
 #include "kernel/crash.h"
 #include "kernel/sched.h"
 #include "kernel/thread.h"
+#include "kernel/task.h"
 #include "arch/x86_64/paging.h"
 
 /* IDT + exceptions */
@@ -139,7 +140,10 @@ void isr_err_14(struct interrupt_frame *frame, uint64_t error_code) {
             return;
         }
     }
-    if (is_user && t) {
+    if (is_user && t && t->task) {
+        if (task_handle_page_fault(t->task, cr2, error_code)) {
+            return;
+        }
         log_printf("PF: killing userspace task tid=%u name=%s\n",
                    (unsigned)t->id, t->name ? t->name : "(null)");
         thread_exit();

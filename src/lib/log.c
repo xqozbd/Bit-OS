@@ -27,6 +27,7 @@ static inline uint8_t inb(uint16_t port) { (void)port; return 0; }
 
 static int fb_ready = 0;
 static int g_verbose = 0;
+static enum log_level g_level = LOG_INFO;
 static char g_ring[LOG_RING_SIZE];
 static uint32_t g_ring_head = 0;
 static uint32_t g_ring_len = 0;
@@ -48,10 +49,26 @@ void log_set_fb_ready(int ready) {
 
 void log_set_verbose(int verbose) {
     g_verbose = verbose ? 1 : 0;
+    if (g_verbose) g_level = LOG_DEBUG;
 }
 
 int log_is_verbose(void) {
     return g_verbose;
+}
+
+void log_set_level(enum log_level level) {
+    if (level < LOG_DEBUG) level = LOG_DEBUG;
+    if (level > LOG_NONE) level = LOG_NONE;
+    g_level = level;
+    g_verbose = (g_level == LOG_DEBUG);
+}
+
+enum log_level log_get_level(void) {
+    return g_level;
+}
+
+int log_is_enabled(enum log_level level) {
+    return level >= g_level;
 }
 
 static int serial_can_tx(void) {
@@ -121,6 +138,23 @@ static void serial_vprintf(const char *fmt, va_list ap) {
 }
 
 void log_printf(const char *fmt, ...) {
+    if (!log_is_enabled(LOG_INFO)) return;
+    va_list ap;
+    va_start(ap, fmt);
+    if (fb_ready) {
+        ms_cursor_hide();
+        va_list ap2;
+        va_copy(ap2, ap);
+        fb_vprintf(fmt, ap2);
+        va_end(ap2);
+        ms_cursor_show();
+    }
+    serial_vprintf(fmt, ap);
+    va_end(ap);
+}
+
+void log_printf_level(enum log_level level, const char *fmt, ...) {
+    if (!log_is_enabled(level)) return;
     va_list ap;
     va_start(ap, fmt);
     if (fb_ready) {
@@ -136,7 +170,7 @@ void log_printf(const char *fmt, ...) {
 }
 
 void log_printf_verbose(const char *fmt, ...) {
-    if (!g_verbose) return;
+    if (!log_is_enabled(LOG_DEBUG)) return;
     va_list ap;
     va_start(ap, fmt);
     if (fb_ready) {

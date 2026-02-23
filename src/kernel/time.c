@@ -8,6 +8,15 @@ static uint64_t g_epoch_base = 0;
 static uint64_t g_tick_base = 0;
 static uint32_t g_tick_hz = 0;
 static int g_time_ok = 0;
+static uint64_t g_last_alarm_check = 0;
+
+#define TIME_MAX_ALARMS 8
+struct time_alarm {
+    uint64_t epoch;
+    int active;
+};
+
+static struct time_alarm g_alarms[TIME_MAX_ALARMS];
 
 static int is_leap_year(int year) {
     return ((year % 4) == 0 && (year % 100) != 0) || ((year % 400) == 0);
@@ -124,4 +133,60 @@ int time_get_string(char out[20]) {
     out[18] = (char)('0' + (t.second % 10));
     out[19] = '\0';
     return 0;
+}
+
+int time_alarm_set_epoch(uint64_t epoch) {
+    if (!g_time_ok || epoch == 0) return -1;
+    for (int i = 0; i < TIME_MAX_ALARMS; ++i) {
+        if (!g_alarms[i].active) {
+            g_alarms[i].epoch = epoch;
+            g_alarms[i].active = 1;
+            return i;
+        }
+    }
+    return -1;
+}
+
+int time_alarm_set_rel(uint64_t seconds) {
+    if (!g_time_ok || seconds == 0) return -1;
+    uint64_t now = time_now_epoch();
+    if (now == 0) return -1;
+    return time_alarm_set_epoch(now + seconds);
+}
+
+int time_alarm_clear(int id) {
+    if (id < 0 || id >= TIME_MAX_ALARMS) return -1;
+    g_alarms[id].active = 0;
+    g_alarms[id].epoch = 0;
+    return 0;
+}
+
+void time_alarm_tick(void) {
+    if (!g_time_ok) return;
+    uint64_t now = time_now_epoch();
+    if (now == 0 || now == g_last_alarm_check) return;
+    g_last_alarm_check = now;
+    for (int i = 0; i < TIME_MAX_ALARMS; ++i) {
+        if (!g_alarms[i].active) continue;
+        if (now >= g_alarms[i].epoch) {
+            g_alarms[i].active = 0;
+            log_printf("alarm: fired id=%d epoch=%u\n", i, (unsigned)g_alarms[i].epoch);
+        }
+    }
+}
+
+void time_alarm_list(void) {
+    if (!g_time_ok) {
+        log_printf("alarm: time not synced\n");
+        return;
+    }
+    uint64_t now = time_now_epoch();
+    for (int i = 0; i < TIME_MAX_ALARMS; ++i) {
+        if (!g_alarms[i].active) continue;
+        uint64_t epoch = g_alarms[i].epoch;
+        log_printf("alarm[%d]: epoch=%u in=%u s\n",
+                   i,
+                   (unsigned)epoch,
+                   (unsigned)((epoch > now) ? (epoch - now) : 0));
+    }
 }

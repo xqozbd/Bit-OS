@@ -51,6 +51,17 @@ enum {
     O_APPEND = 0x0400u
 };
 
+enum {
+    PROT_READ  = 1,
+    PROT_WRITE = 2,
+    PROT_EXEC  = 4
+};
+
+enum {
+    MAP_ANON = 1,
+    MAP_FILE = 2
+};
+
 static inline long sys_write(int fd, const void *buf, size_t len) {
     return (long)sys_call6(SYS_WRITE, (uint64_t)fd, (uint64_t)buf, (uint64_t)len, 0, 0, 0);
 }
@@ -93,6 +104,15 @@ static inline long sys_mount(uint32_t part_index, uint32_t type) {
 
 static inline long sys_umount(void) {
     return (long)sys_call6(SYS_UMOUNT, 0, 0, 0, 0, 0, 0);
+}
+
+static inline void *sys_mmap(void *addr, size_t len, uint32_t prot, uint32_t flags, int fd, uint64_t offset) {
+    return (void *)sys_call6(SYS_MMAP, (uint64_t)addr, (uint64_t)len, (uint64_t)prot,
+                             (uint64_t)flags, (uint64_t)fd, (uint64_t)offset);
+}
+
+static inline long sys_munmap(void *addr, size_t len) {
+    return (long)sys_call6(SYS_MUNMAP, (uint64_t)addr, (uint64_t)len, 0, 0, 0, 0);
 }
 
 static inline size_t ustrlen(const char *s) {

@@ -13,6 +13,12 @@
 #include "kernel/netns.h"
 #include "kernel/resgroup.h"
 #include "sys/vfs.h"
+#include "kernel/swap.h"
+#include "sys/mman.h"
+
+/* From memutils.c */
+void *memset(void *s, int c, size_t n);
+void *memcpy(void *restrict dest, const void *restrict src, size_t n);
 
 static uint32_t g_next_pid = 2;
 static uint32_t g_next_pidns_id = 1;
@@ -424,6 +430,31 @@ void task_clone_from(struct task *dst, const struct task *src) {
             if (!m) break;
             *m = *cur;
             m->next = NULL;
+            m->pages = NULL;
+            struct task_page *pcur = cur->pages;
+            struct task_page *ptail = NULL;
+            while (pcur) {
+                struct task_page *np = (struct task_page *)kmalloc(sizeof(*np));
+                if (!np) break;
+                *np = *pcur;
+                np->next = NULL;
+                if (np->swapped) {
+                    uint32_t new_slot = 0;
+                    uint8_t *buf = (uint8_t *)kmalloc(0x1000u);
+                    if (buf && swap_alloc(&new_slot) == 0 && swap_read(np->swap_slot, buf) == 0 &&
+                        swap_write(new_slot, buf) == 0) {
+                        np->swap_slot = new_slot;
+                    } else {
+                        np->swapped = 0;
+                        np->swap_slot = 0;
+                    }
+                    if (buf) kfree(buf);
+                }
+                if (!m->pages) m->pages = np;
+                else ptail->next = np;
+                ptail = np;
+                pcur = pcur->next;
+            }
             if (!dst->maps) dst->maps = m;
             else tail->next = m;
             tail = m;
@@ -465,6 +496,89 @@ static void insert_map_sorted(struct task *t, struct task_map *m) {
     cur->next = m;
 }
 
+static struct task_map *find_map(struct task *t, uint64_t addr) {
+    if (!t) return NULL;
+    struct task_map *cur = t->maps;
+    while (cur) {
+        if (addr >= cur->base && addr < cur->base + cur->size) return cur;
+        cur = cur->next;
+    }
+    return NULL;
+}
+
+static struct task_page *find_page(struct task_map *m, uint64_t vaddr) {
+    if (!m) return NULL;
+    struct task_page *p = m->pages;
+    while (p) {
+        if (p->vaddr == vaddr) return p;
+        p = p->next;
+    }
+    return NULL;
+}
+
+static struct task_page *ensure_page(struct task_map *m, uint64_t vaddr) {
+    struct task_page *p = find_page(m, vaddr);
+    if (p) return p;
+    p = (struct task_page *)kmalloc(sizeof(*p));
+    if (!p) return NULL;
+    p->vaddr = vaddr;
+    p->phys = 0;
+    p->swap_slot = 0;
+    p->present = 0;
+    p->swapped = 0;
+    p->next = m->pages;
+    m->pages = p;
+    return p;
+}
+
+static int evict_one_page(void) {
+    struct task *t = g_task_head;
+    while (t) {
+        if (!t->is_user) {
+            t = t->next;
+            continue;
+        }
+        struct task_map *m = t->maps;
+        while (m) {
+            struct task_page *p = m->pages;
+            while (p) {
+                if (p->present) {
+                    uint64_t phys = p->phys;
+                    if (m->map_type == MAP_FILE && !p->swapped) {
+                        paging_unmap_user_4k(t->pml4_phys, p->vaddr);
+                        pmm_dec_ref(phys);
+                        task_uncharge_mem(t, 0x1000ull);
+                        p->present = 0;
+                        p->phys = 0;
+                        return 1;
+                    }
+                    if (!swap_enabled()) return 0;
+                    uint32_t slot = 0;
+                    if (swap_alloc(&slot) != 0) return 0;
+                    uint64_t hhdm = paging_hhdm_offset();
+                    void *src = (void *)(uintptr_t)(hhdm + phys);
+                    if (swap_write(slot, src) != 0) {
+                        swap_free(slot);
+                        return 0;
+                    }
+                    paging_unmap_user_4k(t->pml4_phys, p->vaddr);
+                    pmm_dec_ref(phys);
+                    task_uncharge_mem(t, 0x1000ull);
+                    p->present = 0;
+                    p->swapped = 1;
+                    p->swap_slot = slot;
+                    p->phys = 0;
+                    return 1;
+                }
+                p = p->next;
+            }
+            m = m->next;
+        }
+        t = t->next;
+    }
+    return 0;
+}
+
 uint64_t task_mmap_anonymous(struct task *t, uint64_t addr, uint64_t len, uint32_t prot, uint32_t flags) {
     if (!t || !t->is_user) return 0;
     if (len == 0) return 0;
@@ -482,17 +596,37 @@ uint64_t task_mmap_anonymous(struct task *t, uint64_t addr, uint64_t len, uint32
         if (base + size > t->mmap_limit) return 0;
     }
 
-    if (!task_charge_mem(t, size)) return 0;
-    for (uint64_t va = base; va < base + size; va += 0x1000ull) {
-        uint64_t phys = pmm_alloc_frame();
-        if (phys == 0) {
-            task_uncharge_mem(t, size);
-            return 0;
+    struct task_map *m = (struct task_map *)kmalloc(sizeof(*m));
+    if (!m) return 0;
+    m->base = base;
+    m->size = size;
+    m->prot = prot;
+    m->flags = flags;
+    m->map_type = MAP_ANON;
+    m->file_node = -1;
+    m->file_off = 0;
+    m->file_size = 0;
+    m->pages = NULL;
+    m->next = NULL;
+    insert_map_sorted(t, m);
+    return base;
+}
+
+uint64_t task_mmap_file(struct task *t, uint64_t addr, uint64_t len, uint32_t prot, uint32_t flags, int node, uint64_t off) {
+    if (!t || !t->is_user) return 0;
+    if (len == 0 || node < 0) return 0;
+    uint64_t size = (len + 0xFFFull) & ~0xFFFull;
+    uint64_t base = addr & ~0xFFFull;
+
+    if (base != 0) {
+        if (!range_free(t, base, size)) return 0;
+    } else {
+        base = t->mmap_base;
+        while (base + size <= t->mmap_limit) {
+            if (range_free(t, base, size)) break;
+            base += 0x1000ull;
         }
-        if (paging_map_user_4k(t->pml4_phys, va, phys, PTE_NX) != 0) {
-            task_uncharge_mem(t, size);
-            return 0;
-        }
+        if (base + size > t->mmap_limit) return 0;
     }
 
     struct task_map *m = (struct task_map *)kmalloc(sizeof(*m));
@@ -501,6 +635,11 @@ uint64_t task_mmap_anonymous(struct task *t, uint64_t addr, uint64_t len, uint32
     m->size = size;
     m->prot = prot;
     m->flags = flags;
+    m->map_type = MAP_FILE;
+    m->file_node = node;
+    m->file_off = off;
+    m->file_size = vfs_get_size(node);
+    m->pages = NULL;
     m->next = NULL;
     insert_map_sorted(t, m);
     return base;
@@ -521,16 +660,88 @@ int task_munmap(struct task *t, uint64_t addr, uint64_t len) {
     }
     if (!cur) return -1;
 
-    for (uint64_t va = base; va < base + size; va += 0x1000ull) {
-        uint64_t phys = paging_unmap_user_4k(t->pml4_phys, va);
-        if (phys) pmm_dec_ref(phys);
+    struct task_page *p = cur->pages;
+    while (p) {
+        struct task_page *next = p->next;
+        if (p->present) {
+            if (cur->map_type == MAP_FILE && cur->file_node >= 0) {
+                uint64_t off = cur->file_off + (p->vaddr - cur->base);
+                uint64_t hhdm = paging_hhdm_offset();
+                const uint8_t *src = (const uint8_t *)(uintptr_t)(hhdm + p->phys);
+                vfs_write_file(cur->file_node, src, 0x1000u, off);
+            }
+            paging_unmap_user_4k(t->pml4_phys, p->vaddr);
+            pmm_dec_ref(p->phys);
+            task_uncharge_mem(t, 0x1000ull);
+        }
+        if (p->swapped) {
+            swap_free(p->swap_slot);
+        }
+        kfree(p);
+        p = next;
     }
 
     if (prev) prev->next = cur->next;
     else t->maps = cur->next;
     kfree(cur);
-    task_uncharge_mem(t, size);
     return 0;
+}
+
+int task_handle_page_fault(struct task *t, uint64_t addr, uint64_t error_code) {
+    if (!t || !t->is_user) return 0;
+    if (error_code & 1u) return 0; /* present fault */
+    uint64_t vaddr = addr & ~0xFFFull;
+    struct task_map *m = find_map(t, vaddr);
+    if (!m) return 0;
+
+    struct task_page *p = ensure_page(m, vaddr);
+    if (!p) return 0;
+    if (p->present) return 1;
+
+    uint64_t phys = pmm_alloc_frame();
+    if (phys == 0) {
+        if (evict_one_page()) {
+            phys = pmm_alloc_frame();
+        }
+    }
+    if (phys == 0) return 0;
+
+    uint64_t map_flags = (m->prot & PROT_EXEC) ? 0 : PTE_NX;
+    if (paging_map_user_4k(t->pml4_phys, vaddr, phys, map_flags) != 0) {
+        pmm_dec_ref(phys);
+        return 0;
+    }
+
+    uint64_t hhdm = paging_hhdm_offset();
+    void *dst = (void *)(uintptr_t)(hhdm + phys);
+    if (p->swapped) {
+        if (swap_read(p->swap_slot, dst) != 0) {
+            pmm_dec_ref(phys);
+            return 0;
+        }
+        swap_free(p->swap_slot);
+        p->swapped = 0;
+        p->swap_slot = 0;
+    } else if (m->map_type == MAP_FILE && m->file_node >= 0) {
+        const uint8_t *data = NULL;
+        uint64_t size = 0;
+        if (vfs_read_file(m->file_node, &data, &size) && data) {
+            uint64_t off = m->file_off + (vaddr - m->base);
+            uint64_t avail = (off < size) ? (size - off) : 0;
+            uint64_t copy = avail < 0x1000ull ? avail : 0x1000ull;
+            if (copy > 0) memcpy(dst, data + off, (size_t)copy);
+            if (copy < 0x1000ull) memset((uint8_t *)dst + copy, 0, (size_t)(0x1000ull - copy));
+        } else {
+            memset(dst, 0, 0x1000u);
+        }
+    } else {
+        memset(dst, 0, 0x1000u);
+    }
+
+    p->present = 1;
+    p->phys = phys;
+    task_charge_mem(t, 0x1000ull);
+    return 1;
 }
 
 void task_on_thread_exit(struct thread *t) {

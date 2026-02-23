@@ -52,5 +52,7 @@ int acpi_reset(void);
 void acpi_thermal_init(void);
 void acpi_thermal_log(void);
 const struct acpi_thermal_info *acpi_thermal_info(void);
+int acpi_thermal_read_temp_c(int *out_c);
+void acpi_thermal_tick(uint64_t ticks, uint32_t hz);
 
 #endif /* ACPI_H */

@@ -47,7 +47,7 @@ Clear screen printing BitOS's version when the banner already does so.
 ## Features Added:
 Kernel & Architecture: Interrupt masking / IRQ priority routing, GDT/TSS + Ring-3 entry path, kernel panic backtrace (stack walk), stack canaries, and NX enforcement for user pages.
 
-Scheduling & Memory: Per-CPU run queue load balancing, user address space layout defaults + basic ASLR (heap/stack/mmap), page-table clone helpers, and userland mmap/munmap support.
+Scheduling & Memory: Per-CPU run queue load balancing, user address space layout defaults + basic ASLR (heap/stack/mmap), page-table clone helpers, userland mmap/munmap support, swap-backed virtual memory paging via swap file, file-backed memory-mapped files, and kernel heap fragmentation reduction (best-fit + tail trim).
 
 Process & Syscalls: Userspace fork/exec/exit support, per-process file descriptor table + basic open/read/close syscalls, signals (kill/ignore) with default handlers, PID namespaces (isolated ps/proc view), mount namespaces (isolated VFS root/mounts), network namespaces (isolated sockets and firewall state), and resource limits / cgroup-like groups (tasks, fds, sockets, memory).
 
@@ -57,7 +57,7 @@ Pseudo-FS: /dev, /proc, /sys skeletons plus /proc tasks and /sys drivers entries
 
 Networking: UDP sockets + socket syscalls, TCP sockets (connect/listen/accept + basic retransmit), TCP three-way handshake + retransmission improvements, DHCP client, DNS stub (dotted-quad parsing), basic firewall rules, and IPv6 parsing + ICMPv6 ping6 with ND + static routes + UDP over IPv6.
 
-Init & Userland: Simple init process that spawns a user shell (init/busybox/sh), plus a Busybox-style multicall userland suite (`/bin/busybox` with applet links).
+Init & Userland: Simple init process that spawns a user shell (init/busybox/sh), plus a Busybox-style multicall userland suite (`/bin/busybox` with applet links), and a userspace cron service (`/bin/cron`) driven by `/etc/cron.conf`.
 
 Kernel Memory: SLAB/SLUB allocator and SLAB caches for VFS nodes and inodes.
 
@@ -65,9 +65,11 @@ USB: xHCI controller init (MMIO map/reset + rings + port status logging) plus de
 
 Console: VT100/ANSI color escape support.
 
-Boot: Configurable boot params (Limine cmdline) and proper shutdown/restart (ACPI S5 + reset fallback).
+Boot: Configurable boot params (Limine cmdline) and proper shutdown/restart (ACPI S5 + reset fallback), plus boot config file parsing from `/etc/boot.conf` or `/boot/boot.conf`.
 
-Reliability: Crash isolation so user task faults no longer halt the kernel, kernel timer wheel for efficient sleep timers, crash dump persistence to reserved RAM with disk flush (`/crashdump.log`), and block writeback flush on shutdown/restart.
+Power Management: ACPI S3/S4 suspend/resume path with timer and input reinit on resume, plus ACPI thermal zone monitoring with periodic polling.
+
+Reliability: Crash isolation so user task faults no longer halt the kernel, kernel timer wheel for efficient sleep timers, RTC-based alarm timers for wakeups, crash dump persistence to reserved RAM with disk flush (`/crashdump.log`), and block writeback flush on shutdown/restart.
 
 VFS write path: added open flags (O_CREAT/O_TRUNC/O_APPEND), file creation, truncate, and size helpers across ext2/fat32.
 
@@ -75,7 +77,7 @@ Journaling: redo log for ext2 root (`/.journal`) with replay on mount.
 
 Syscalls: listdir, mount, umount, append-aware write.
 
-Console: page-by-page scrollback with prompt restore, command additions (mount/umount/dd).
+Console: page-by-page scrollback with prompt restore, command additions (mount/umount/dd), kernel logging levels (info/warn/error/debug), and sysctl-style kernel tunables.
 
 Userland: new utilities `ls`, `ps`, `top`, `mount`, `umount`, `dd`; shared syscall stub header; per-binary linker script stripping notes.
 

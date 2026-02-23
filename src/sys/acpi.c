@@ -117,6 +117,21 @@ static int g_have_fadt = 0;
 #define ACPI_SLP_EN_BIT   0x2000u
 
 static struct acpi_thermal_info g_thermal = {0};
+static struct {
+    uint64_t last_poll_tick;
+    uint64_t poll_ticks;
+    int last_temp_c;
+    int last_state;
+    int valid;
+    uint64_t crt_raw;
+    uint64_t psv_raw;
+    uint64_t hot_raw;
+    uint64_t tsp_raw;
+    int has_crt;
+    int has_psv;
+    int has_hot;
+    int has_tsp;
+} g_thermal_state = {0};
 
 enum {
     ACPI_AML_SCAN_LIMIT = 256 * 1024
@@ -318,6 +333,21 @@ static int aml_has_method_suffix(const char *suffix) {
     return aml_eval_method_return_suffix(suffix, &len) != NULL;
 }
 
+static int acpi_eval_int_suffix(const char *suffix, uint64_t *out) {
+    if (!suffix || !out) return 0;
+    uint32_t len = 0;
+    const uint8_t *obj = aml_eval_method_return_suffix(suffix, &len);
+    if (!obj) return 0;
+    uint32_t cons = 0;
+    if (!aml_parse_integer(obj, len, out, &cons)) return 0;
+    return 1;
+}
+
+static int thermal_raw_to_c(uint64_t raw) {
+    if (raw < 2732ull) return -273;
+    return (int)(raw / 10ull) - 273;
+}
+
 void acpi_thermal_init(void) {
     g_thermal.has_tz = 0;
     g_thermal.has_tmp = 0;
@@ -327,6 +357,19 @@ void acpi_thermal_init(void) {
     g_thermal.has_tc1 = 0;
     g_thermal.has_tc2 = 0;
     g_thermal.has_tsp = 0;
+    g_thermal_state.last_poll_tick = 0;
+    g_thermal_state.poll_ticks = 0;
+    g_thermal_state.last_temp_c = 0;
+    g_thermal_state.last_state = 0;
+    g_thermal_state.valid = 0;
+    g_thermal_state.crt_raw = 0;
+    g_thermal_state.psv_raw = 0;
+    g_thermal_state.hot_raw = 0;
+    g_thermal_state.tsp_raw = 0;
+    g_thermal_state.has_crt = 0;
+    g_thermal_state.has_psv = 0;
+    g_thermal_state.has_hot = 0;
+    g_thermal_state.has_tsp = 0;
 
     if (!g_acpi_ready || !g_dsdt_aml || !g_dsdt_aml_len) return;
 
@@ -338,6 +381,19 @@ void acpi_thermal_init(void) {
     g_thermal.has_tc1 = aml_has_method_suffix("._TC1") || aml_has_name_or_method("_TC1");
     g_thermal.has_tc2 = aml_has_method_suffix("._TC2") || aml_has_name_or_method("_TC2");
     g_thermal.has_tsp = aml_has_method_suffix("._TSP") || aml_has_name_or_method("_TSP");
+
+    if (g_thermal.has_crt && acpi_eval_int_suffix("._CRT", &g_thermal_state.crt_raw)) {
+        g_thermal_state.has_crt = 1;
+    }
+    if (g_thermal.has_psv && acpi_eval_int_suffix("._PSV", &g_thermal_state.psv_raw)) {
+        g_thermal_state.has_psv = 1;
+    }
+    if (g_thermal.has_hot && acpi_eval_int_suffix("._HOT", &g_thermal_state.hot_raw)) {
+        g_thermal_state.has_hot = 1;
+    }
+    if (g_thermal.has_tsp && acpi_eval_int_suffix("._TSP", &g_thermal_state.tsp_raw)) {
+        g_thermal_state.has_tsp = 1;
+    }
 }
 
 void acpi_thermal_log(void) {
@@ -368,6 +424,57 @@ void acpi_thermal_log(void) {
 
 const struct acpi_thermal_info *acpi_thermal_info(void) {
     return &g_thermal;
+}
+
+int acpi_thermal_read_temp_c(int *out_c) {
+    if (!out_c || !g_thermal.has_tz || !g_thermal.has_tmp) return 0;
+    uint64_t raw = 0;
+    if (!acpi_eval_int_suffix("._TMP", &raw)) return 0;
+    *out_c = thermal_raw_to_c(raw);
+    return 1;
+}
+
+void acpi_thermal_tick(uint64_t ticks, uint32_t hz) {
+    if (!g_acpi_ready || !g_thermal.has_tz || !g_thermal.has_tmp) return;
+    if (hz == 0) hz = 100;
+    if (g_thermal_state.poll_ticks == 0) {
+        if (g_thermal_state.has_tsp && g_thermal_state.tsp_raw) {
+            uint64_t tsp_ticks = (g_thermal_state.tsp_raw * (uint64_t)hz) / 10ull;
+            g_thermal_state.poll_ticks = tsp_ticks ? tsp_ticks : hz;
+        } else {
+            g_thermal_state.poll_ticks = hz;
+        }
+    }
+    if (ticks - g_thermal_state.last_poll_tick < g_thermal_state.poll_ticks) return;
+    g_thermal_state.last_poll_tick = ticks;
+
+    uint64_t raw = 0;
+    if (!acpi_eval_int_suffix("._TMP", &raw)) return;
+    int temp_c = thermal_raw_to_c(raw);
+
+    int crt_c = g_thermal_state.has_crt ? thermal_raw_to_c(g_thermal_state.crt_raw) : 0;
+    int hot_c = g_thermal_state.has_hot ? thermal_raw_to_c(g_thermal_state.hot_raw) : 0;
+    int psv_c = g_thermal_state.has_psv ? thermal_raw_to_c(g_thermal_state.psv_raw) : 0;
+
+    int state = 0;
+    if (g_thermal_state.has_crt && temp_c >= crt_c) state = 3;
+    else if (g_thermal_state.has_hot && temp_c >= hot_c) state = 2;
+    else if (g_thermal_state.has_psv && temp_c >= psv_c) state = 1;
+
+    if (!g_thermal_state.valid || state != g_thermal_state.last_state) {
+        if (state == 3) {
+            log_error("ACPI: thermal critical %dC (CRT=%dC)\n", temp_c, crt_c);
+        } else if (state == 2) {
+            log_warn("ACPI: thermal hot %dC (HOT=%dC)\n", temp_c, hot_c);
+        } else if (state == 1) {
+            log_warn("ACPI: thermal passive %dC (PSV=%dC)\n", temp_c, psv_c);
+        } else {
+            log_info("ACPI: thermal normal %dC\n", temp_c);
+        }
+        g_thermal_state.last_state = state;
+        g_thermal_state.valid = 1;
+    }
+    g_thermal_state.last_temp_c = temp_c;
 }
 // Man fuck this shid - Void
 static int acpi_parse_sleep_pkg(const uint8_t *pkg, uint32_t pkg_len,

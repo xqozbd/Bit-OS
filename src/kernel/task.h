@@ -67,11 +67,25 @@ struct task_fd {
     uint32_t flags;
 };
 
+struct task_page {
+    uint64_t vaddr;
+    uint64_t phys;
+    uint32_t swap_slot;
+    uint8_t present;
+    uint8_t swapped;
+    struct task_page *next;
+};
+
 struct task_map {
     uint64_t base;
     uint64_t size;
     uint32_t prot;
     uint32_t flags;
+    uint8_t map_type;
+    int file_node;
+    uint64_t file_off;
+    uint64_t file_size;
+    struct task_page *pages;
     struct task_map *next;
 };
 
@@ -89,7 +103,9 @@ void task_signal_raise(struct task *t, int sig);
 int task_signal_handle_pending(struct task *t);
 struct task *task_find_pid(uint32_t pid);
 uint64_t task_mmap_anonymous(struct task *t, uint64_t addr, uint64_t len, uint32_t prot, uint32_t flags);
+uint64_t task_mmap_file(struct task *t, uint64_t addr, uint64_t len, uint32_t prot, uint32_t flags, int node, uint64_t off);
 int task_munmap(struct task *t, uint64_t addr, uint64_t len);
+int task_handle_page_fault(struct task *t, uint64_t addr, uint64_t error_code);
 int task_charge_mem(struct task *t, uint64_t bytes);
 void task_uncharge_mem(struct task *t, uint64_t bytes);
 int task_charge_fd(struct task *t, uint32_t count);

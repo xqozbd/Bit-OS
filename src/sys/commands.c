@@ -18,6 +18,7 @@
 #include "arch/x86_64/io.h"
 #include "arch/x86_64/paging.h"
 #include "kernel/pmm.h"
+#include "kernel/time.h"
 #include "drivers/rtc/rtc_util.h"
 #include "kernel/time.h"
 #include "kernel/heap.h"
@@ -29,6 +30,7 @@
 #include "kernel/power.h"
 #include "kernel/task.h"
 #include "sys/acpi.h"
+#include "sys/sysctl.h"
 #include "kernel/driver_registry.h"
 #include "kernel/firewall.h"
 #include "kernel/resgroup.h"
@@ -38,7 +40,7 @@ static const char *const g_commands[] = {
     "ls", "cd", "pwd", "cat", "run", "echo", "ver", "debug", "ping",
     "ping6", "ip6",
     "mount", "umount", "dd",
-    "shutdown", "restart", "s3", "s4", "thermal", "acpi", "dmesg", "drivers",
+    "shutdown", "restart", "s3", "s4", "thermal", "acpi", "sysctl", "alarm", "dmesg", "drivers",
     "fw", "pidns", "mntns", "netns", "rlimit"
 };
 
@@ -73,6 +75,8 @@ static void cmd_help(void) {
     log_printf("  s4 (hibernate)\n");
     log_printf("  thermal (ACPI thermal status)\n");
     log_printf("  acpi (ACPI table list)\n");
+    log_printf("  sysctl [list|key|key=value|key value]\n");
+    log_printf("  alarm list|set <seconds>|set_epoch <epoch>|clear <id>\n");
     log_printf("  dmesg (dump ring buffer log)\n");
     log_printf("  drivers (driver registry status)\n");
     log_printf("  fw list|clear|add <proto> <src_ip|any> <dst_ip|any> <src_port|any> <dst_port|any> <accept|drop>\n");
@@ -193,6 +197,85 @@ static void cmd_thermal(void) {
 
 static void cmd_acpi(void) {
     acpi_device_discovery_log();
+}
+
+static void cmd_sysctl(int argc, char **argv) {
+    if (argc < 2 || str_eq(argv[1], "list")) {
+        sysctl_dump();
+        return;
+    }
+    char *eq = NULL;
+    for (char *p = argv[1]; p && *p; ++p) {
+        if (*p == '=') { eq = p; break; }
+    }
+    if (eq) {
+        *eq = '\0';
+        const char *key = argv[1];
+        const char *val = eq + 1;
+        if (!sysctl_set(key, val)) log_printf("sysctl: set failed\n");
+        return;
+    }
+    if (argc >= 3) {
+        if (!sysctl_set(argv[1], argv[2])) log_printf("sysctl: set failed\n");
+        return;
+    }
+    char buf[64];
+    if (!sysctl_get(argv[1], buf, sizeof(buf))) {
+        log_printf("sysctl: not found\n");
+        return;
+    }
+    log_printf("%s = %s\n", argv[1], buf);
+}
+
+static void cmd_alarm(int argc, char **argv) {
+    if (argc < 2 || str_eq(argv[1], "list")) {
+        time_alarm_list();
+        return;
+    }
+    if (str_eq(argv[1], "set")) {
+        if (argc < 3) {
+            log_printf("alarm: set <seconds>\n");
+            return;
+        }
+        uint64_t sec = 0;
+        if (!str_to_u64(argv[2], &sec) || sec == 0) {
+            log_printf("alarm: invalid seconds\n");
+            return;
+        }
+        int id = time_alarm_set_rel(sec);
+        if (id < 0) log_printf("alarm: set failed\n");
+        else log_printf("alarm: set id=%d in=%u s\n", id, (unsigned)sec);
+        return;
+    }
+    if (str_eq(argv[1], "set_epoch")) {
+        if (argc < 3) {
+            log_printf("alarm: set_epoch <epoch>\n");
+            return;
+        }
+        uint64_t epoch = 0;
+        if (!str_to_u64(argv[2], &epoch) || epoch == 0) {
+            log_printf("alarm: invalid epoch\n");
+            return;
+        }
+        int id = time_alarm_set_epoch(epoch);
+        if (id < 0) log_printf("alarm: set failed\n");
+        else log_printf("alarm: set id=%d epoch=%u\n", id, (unsigned)epoch);
+        return;
+    }
+    if (str_eq(argv[1], "clear")) {
+        if (argc < 3) {
+            log_printf("alarm: clear <id>\n");
+            return;
+        }
+        uint64_t id = 0;
+        if (!str_to_u64(argv[2], &id)) {
+            log_printf("alarm: invalid id\n");
+            return;
+        }
+        if (time_alarm_clear((int)id) != 0) log_printf("alarm: clear failed\n");
+        return;
+    }
+    log_printf("alarm: list|set <seconds>|set_epoch <epoch>|clear <id>\n");
 }
 
 static void cmd_dmesg(void) {
@@ -868,6 +951,10 @@ int commands_exec(int argc, char **argv, struct command_ctx *ctx) {
         cmd_thermal();
     } else if (str_eq(argv[0], "acpi")) {
         cmd_acpi();
+    } else if (str_eq(argv[0], "sysctl")) {
+        cmd_sysctl(argc, argv);
+    } else if (str_eq(argv[0], "alarm")) {
+        cmd_alarm(argc, argv);
     } else if (str_eq(argv[0], "dmesg")) {
         cmd_dmesg();
     } else if (str_eq(argv[0], "drivers")) {
