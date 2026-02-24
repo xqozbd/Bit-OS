@@ -32,7 +32,7 @@ if [ -d "$INITRAMFS_DIR" ]; then
       -Wl,-T,user/user_so.lds -Wl,-soname,libu.so \
       -o "$INITRAMFS_DIR/lib/libu.so" user/libu.c
   fi
-  for src in user/init.c user/busybox.c user/cron.c; do
+  for src in user/init.c user/busybox.c user/cron.c user/login.c; do
     [ -f "$src" ] || continue
     base=$(basename "$src" .c)
     x86_64-linux-gnu-gcc -nostdlib -static -ffreestanding -fno-pie -no-pie -Iuser \
@@ -46,7 +46,7 @@ if [ -d "$INITRAMFS_DIR" ]; then
       -o "$INITRAMFS_DIR/bin/hello" user/hello.c
   fi
   if [ -f "$INITRAMFS_DIR/bin/busybox" ]; then
-    for app in ls ps top mount umount dd; do
+    for app in ls ps top mount umount dd sh; do
       ln -sf busybox "$INITRAMFS_DIR/bin/$app" 2>/dev/null || \
         cp -f "$INITRAMFS_DIR/bin/busybox" "$INITRAMFS_DIR/bin/$app"
     done
@@ -58,6 +58,14 @@ if [ -d "$INITRAMFS_DIR" ]; then
 ls /bin/ls
 ps /bin/ps
 top /bin/top after=ps
+login /bin/login
+EOF
+  fi
+  if [ ! -f "$INITRAMFS_DIR/etc/passwd" ]; then
+    cat > "$INITRAMFS_DIR/etc/passwd" <<'EOF'
+# user:uid:gid
+root:0:0
+guest:1000:1000
 EOF
   fi
   (cd "$INITRAMFS_DIR" && find . -print0 | cpio --null -ov --format=newc) > "$INITRAMFS_IMG"

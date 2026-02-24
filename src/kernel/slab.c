@@ -34,6 +34,12 @@ static struct slab_cache g_caches[] = {
     { 2048, NULL },
 };
 
+static uint64_t g_slab_allocs = 0;
+static uint64_t g_slab_frees = 0;
+static uint64_t g_slab_active_allocs = 0;
+static uint64_t g_slab_active_bytes = 0;
+static uint64_t g_slab_peak_bytes = 0;
+
 static inline uint64_t align_up_u64(uint64_t v, uint64_t a) {
     return (v + a - 1) & ~(a - 1);
 }
@@ -88,6 +94,25 @@ void slab_init(void) {
     for (unsigned i = 0; i < sizeof(g_caches) / sizeof(g_caches[0]); ++i) {
         g_caches[i].pages = NULL;
     }
+    g_slab_allocs = 0;
+    g_slab_frees = 0;
+    g_slab_active_allocs = 0;
+    g_slab_active_bytes = 0;
+    g_slab_peak_bytes = 0;
+}
+
+static void slab_track_alloc(uint16_t size) {
+    g_slab_allocs++;
+    g_slab_active_allocs++;
+    g_slab_active_bytes += size;
+    if (g_slab_active_bytes > g_slab_peak_bytes) g_slab_peak_bytes = g_slab_active_bytes;
+}
+
+static void slab_track_free(uint16_t size) {
+    g_slab_frees++;
+    if (g_slab_active_allocs > 0) g_slab_active_allocs--;
+    if (g_slab_active_bytes >= size) g_slab_active_bytes -= size;
+    else g_slab_active_bytes = 0;
 }
 
 void *slab_alloc(size_t size) {
@@ -108,6 +133,7 @@ void *slab_alloc(size_t size) {
     if (!obj) return NULL;
     page->free_list = *(void **)obj;
     page->free_count--;
+    slab_track_alloc(page->obj_size);
     return obj;
 }
 
@@ -119,6 +145,7 @@ void slab_free(void *ptr) {
     *(void **)ptr = page->free_list;
     page->free_list = ptr;
     page->free_count++;
+    slab_track_free(page->obj_size);
 
     if (page->free_count == page->total) {
         struct slab_cache *cache = cache_for_size(page->obj_size);
@@ -141,4 +168,13 @@ size_t slab_obj_size(void *ptr) {
     struct slab_page *page = (struct slab_page *)((uintptr_t)ptr & ~(SLAB_PAGE_SIZE - 1));
     if (page->magic != SLAB_MAGIC) return 0;
     return page->obj_size;
+}
+
+void slab_get_stats(struct slab_stats *out) {
+    if (!out) return;
+    out->allocs = g_slab_allocs;
+    out->frees = g_slab_frees;
+    out->active_allocs = g_slab_active_allocs;
+    out->active_bytes = g_slab_active_bytes;
+    out->peak_bytes = g_slab_peak_bytes;
 }

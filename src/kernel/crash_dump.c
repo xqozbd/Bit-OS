@@ -3,6 +3,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "lib/compat.h"
 #include "lib/log.h"
 #include "kernel/watchdog.h"
 #include "sys/vfs.h"
@@ -10,6 +11,7 @@
 #define CRASH_DUMP_MAGIC 0x43525348u /* 'CRSH' */
 #define CRASH_DUMP_VERSION 1u
 #define CRASH_DUMP_MAX (64 * 1024u)
+#define KPANIC_LOG_MAX (64 * 1024u)
 
 struct crash_dump_header {
     uint32_t magic;
@@ -26,6 +28,7 @@ struct crash_dump_store {
 
 __attribute__((section(".noinit")))
 static struct crash_dump_store g_crash_dump;
+static char g_kpanic_log[KPANIC_LOG_MAX];
 
 static void utoa_hex(uint64_t val, char *out, size_t out_len) {
     static const char hex[] = "0123456789abcdef";
@@ -139,6 +142,25 @@ static int crash_dump_write_path(const char *path) {
     return vfs_write_file(node, (const uint8_t *)&g_crash_dump, sizeof(g_crash_dump.hdr) + g_crash_dump.hdr.length, 0);
 }
 
+static int ensure_dir(const char *path) {
+    if (!path || !path[0]) return -1;
+    int node = vfs_resolve(0, path);
+    if (node >= 0) return node;
+    return vfs_create(0, path, 1);
+}
+
+static int log_ring_write_path(const char *path, const char *buf, size_t len) {
+    if (!path || !path[0] || !buf || len == 0) return -1;
+    int node = vfs_resolve(0, path);
+    if (node < 0) {
+        node = vfs_create(0, path, 0);
+        if (node < 0) return -1;
+    }
+    int rc = vfs_truncate(node, 0);
+    if (rc != 0) return -1;
+    return vfs_write_file(node, (const uint8_t *)buf, len, 0);
+}
+
 void crash_dump_flush_to_disk(void) {
     if (g_crash_dump.hdr.magic != CRASH_DUMP_MAGIC) return;
     if (g_crash_dump.hdr.length == 0) return;
@@ -146,4 +168,14 @@ void crash_dump_flush_to_disk(void) {
         (void)crash_dump_write_path("/var/log/crashdump.log");
     }
     g_crash_dump.hdr.magic = 0;
+}
+
+void crash_dump_flush_ring(void) {
+    size_t len = log_ring_snapshot(g_kpanic_log, sizeof(g_kpanic_log));
+    if (len == 0) return;
+    (void)ensure_dir("/var");
+    (void)ensure_dir("/var/log");
+    if (log_ring_write_path("/var/log/kpanic.log", g_kpanic_log, len) < 0) {
+        (void)log_ring_write_path("/kpanic.log", g_kpanic_log, len);
+    }
 }

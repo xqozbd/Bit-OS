@@ -6,10 +6,15 @@
 
 static inline uint64_t sys_call6(uint64_t n, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
     uint64_t ret;
+#if defined(__GNUC__) || defined(__clang__)
     __asm__ volatile("int $0x80"
                      : "=a"(ret)
                      : "a"(n), "D"(a1), "S"(a2), "d"(a3), "r"(a4), "r"(a5), "r"(a6)
                      : "rcx", "r11", "memory");
+#else
+    (void)n; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    ret = 0;
+#endif
     return ret;
 }
 
@@ -39,7 +44,32 @@ enum {
     SYS_GETDNS = 23,
     SYS_LISTDIR = 24,
     SYS_MOUNT = 25,
-    SYS_UMOUNT = 26
+    SYS_UMOUNT = 26,
+    SYS_CONNECT6 = 27,
+    SYS_SENDTO6 = 28,
+    SYS_RECVFROM6 = 29,
+    SYS_UNSHARE_PID = 30,
+    SYS_UNSHARE_MNT = 31,
+    SYS_UNSHARE_NET = 32,
+    SYS_PIPE = 33,
+    SYS_DUP2 = 34,
+    SYS_WAITPID = 35,
+    SYS_EXECVE = 36,
+    SYS_GETPID = 37,
+    SYS_SETPGID = 38,
+    SYS_TCSETPGRP = 39,
+    SYS_TCGETPGRP = 40,
+    SYS_GETUID = 41,
+    SYS_GETGID = 42,
+    SYS_SETUID = 43,
+    SYS_SETGID = 44,
+    SYS_CHMOD = 45,
+    SYS_CHOWN = 46,
+    SYS_PTY_OPEN = 47,
+    SYS_UMASK = 48,
+    SYS_LINK = 49,
+    SYS_SYMLINK = 50,
+    SYS_READLINK = 51
 };
 
 enum {
@@ -60,6 +90,19 @@ enum {
 enum {
     MAP_ANON = 1,
     MAP_FILE = 2
+};
+
+enum {
+    SIG_DFL = 0,
+    SIG_IGN = 1,
+    SIGINT  = 2,
+    SIGKILL = 9,
+    SIGSEGV = 11,
+    SIGTERM = 15,
+    SIGCHLD = 17,
+    SIGCONT = 18,
+    SIGSTOP = 19,
+    SIGTSTP = 20
 };
 
 static inline long sys_write(int fd, const void *buf, size_t len) {
@@ -90,8 +133,20 @@ static inline long sys_exec(const char *path, int argc, char **argv) {
     return (long)sys_call6(SYS_EXEC, (uint64_t)path, (uint64_t)argc, (uint64_t)argv, 0, 0, 0);
 }
 
+static inline long sys_execve(const char *path, int argc, char **argv, char **envp) {
+    return (long)sys_call6(SYS_EXECVE, (uint64_t)path, (uint64_t)argc, (uint64_t)argv, (uint64_t)envp, 0, 0);
+}
+
 static inline long sys_fork(void) {
     return (long)sys_call6(SYS_FORK, 0, 0, 0, 0, 0, 0);
+}
+
+static inline long sys_signal(int sig, void *handler) {
+    return (long)sys_call6(SYS_SIGNAL, (uint64_t)sig, (uint64_t)handler, 0, 0, 0, 0);
+}
+
+static inline long sys_kill(int pid, int sig) {
+    return (long)sys_call6(SYS_KILL, (uint64_t)pid, (uint64_t)sig, 0, 0, 0, 0);
 }
 
 static inline long sys_listdir(const char *path, char *buf, size_t len) {
@@ -104,6 +159,78 @@ static inline long sys_mount(uint32_t part_index, uint32_t type) {
 
 static inline long sys_umount(void) {
     return (long)sys_call6(SYS_UMOUNT, 0, 0, 0, 0, 0, 0);
+}
+
+static inline long sys_pipe(int *fds) {
+    return (long)sys_call6(SYS_PIPE, (uint64_t)fds, 0, 0, 0, 0, 0);
+}
+
+static inline long sys_dup2(int oldfd, int newfd) {
+    return (long)sys_call6(SYS_DUP2, (uint64_t)oldfd, (uint64_t)newfd, 0, 0, 0, 0);
+}
+
+static inline long sys_waitpid(int pid, int *status) {
+    return (long)sys_call6(SYS_WAITPID, (uint64_t)pid, (uint64_t)status, 0, 0, 0, 0);
+}
+
+static inline long sys_getpid(void) {
+    return (long)sys_call6(SYS_GETPID, 0, 0, 0, 0, 0, 0);
+}
+
+static inline long sys_setpgid(int pid, int pgid) {
+    return (long)sys_call6(SYS_SETPGID, (uint64_t)pid, (uint64_t)pgid, 0, 0, 0, 0);
+}
+
+static inline long sys_tcsetpgrp(int pgid) {
+    return (long)sys_call6(SYS_TCSETPGRP, (uint64_t)pgid, 0, 0, 0, 0, 0);
+}
+
+static inline long sys_tcgetpgrp(void) {
+    return (long)sys_call6(SYS_TCGETPGRP, 0, 0, 0, 0, 0, 0);
+}
+
+static inline long sys_getuid(void) {
+    return (long)sys_call6(SYS_GETUID, 0, 0, 0, 0, 0, 0);
+}
+
+static inline long sys_getgid(void) {
+    return (long)sys_call6(SYS_GETGID, 0, 0, 0, 0, 0, 0);
+}
+
+static inline long sys_setuid(uint32_t uid) {
+    return (long)sys_call6(SYS_SETUID, uid, 0, 0, 0, 0, 0);
+}
+
+static inline long sys_setgid(uint32_t gid) {
+    return (long)sys_call6(SYS_SETGID, gid, 0, 0, 0, 0, 0);
+}
+
+static inline long sys_chmod(const char *path, uint32_t mode) {
+    return (long)sys_call6(SYS_CHMOD, (uint64_t)path, (uint64_t)mode, 0, 0, 0, 0);
+}
+
+static inline long sys_chown(const char *path, uint32_t uid, uint32_t gid) {
+    return (long)sys_call6(SYS_CHOWN, (uint64_t)path, (uint64_t)uid, (uint64_t)gid, 0, 0, 0);
+}
+
+static inline long sys_pty_open(int *master_fd, int *slave_fd) {
+    return (long)sys_call6(SYS_PTY_OPEN, (uint64_t)master_fd, (uint64_t)slave_fd, 0, 0, 0, 0);
+}
+
+static inline long sys_umask(uint32_t mask) {
+    return (long)sys_call6(SYS_UMASK, (uint64_t)mask, 0, 0, 0, 0, 0);
+}
+
+static inline long sys_link(const char *oldpath, const char *newpath) {
+    return (long)sys_call6(SYS_LINK, (uint64_t)oldpath, (uint64_t)newpath, 0, 0, 0, 0);
+}
+
+static inline long sys_symlink(const char *target, const char *linkpath) {
+    return (long)sys_call6(SYS_SYMLINK, (uint64_t)target, (uint64_t)linkpath, 0, 0, 0, 0);
+}
+
+static inline long sys_readlink(const char *path, char *out, size_t out_len) {
+    return (long)sys_call6(SYS_READLINK, (uint64_t)path, (uint64_t)out, (uint64_t)out_len, 0, 0, 0);
 }
 
 static inline void *sys_mmap(void *addr, size_t len, uint32_t prot, uint32_t flags, int fd, uint64_t offset) {

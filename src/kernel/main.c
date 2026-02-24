@@ -6,6 +6,7 @@
 #include "boot/boot_requests.h"
 #include "boot/boot_screen.h"
 #include "kernel/console.h"
+#include "kernel/tty.h"
 #include "arch/x86_64/cpu.h"
 #include "arch/x86_64/cpu_info.h"
 #include "drivers/video/fb_printf.h"
@@ -336,15 +337,18 @@ static void kmain_stage2(void) {
     int fat_ready = 0;
     int ext2_ready = 0;
     if (partition_count() > 0) {
-        if (fat32_init_from_partition(0) == 0 && fat32_is_ready()) {
-            vfs_mount("/fat", VFS_BACKEND_FAT32, fat32_root());
-            log_printf("Boot: mounted FAT32 at /fat\n");
-            fat_ready = 1;
-        }
-        if (ext2_init_from_partition(0) == 0 && ext2_is_ready()) {
-            vfs_mount("/ext2", VFS_BACKEND_EXT2, ext2_root());
-            log_printf("Boot: mounted ext2 at /ext2\n");
-            ext2_ready = 1;
+        for (size_t i = 0; i < partition_count(); ++i) {
+            if (!fat_ready && fat32_init_from_partition((uint32_t)i) == 0 && fat32_is_ready()) {
+                vfs_mount("/fat", VFS_BACKEND_FAT32, fat32_root());
+                log_printf("Boot: mounted FAT32 at /fat (part %u)\n", (unsigned)i);
+                fat_ready = 1;
+            }
+            if (!ext2_ready && ext2_init_from_partition((uint32_t)i) == 0 && ext2_is_ready()) {
+                vfs_mount("/ext2", VFS_BACKEND_EXT2, ext2_root());
+                log_printf("Boot: mounted ext2 at /ext2 (part %u)\n", (unsigned)i);
+                ext2_ready = 1;
+            }
+            if (fat_ready && ext2_ready) break;
         }
     }
     if (initramfs_available()) {
@@ -436,6 +440,7 @@ static void kmain_stage2(void) {
     log_set_fb_ready(1);
     boot_screen_print_main();
     log_printf("Boot: initializing console...\n");
+    tty_init();
     console_init();
     driver_set_status_idx(drv_console, DRIVER_STATUS_OK, NULL);
     log_printf("Boot: spawning init...\n");

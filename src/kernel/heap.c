@@ -26,6 +26,12 @@ struct heap_block {
 static uint64_t heap_base = 0xffffc00000000000ull;
 static uint64_t heap_end = 0;
 static struct heap_block *heap_head = NULL;
+static uint64_t g_heap_allocs = 0;
+static uint64_t g_heap_frees = 0;
+static uint64_t g_heap_active_allocs = 0;
+static uint64_t g_heap_active_bytes = 0;
+static uint64_t g_heap_peak_bytes = 0;
+static uint64_t g_heap_failures = 0;
 
 static inline uint64_t align_up_u64(uint64_t v, uint64_t a) {
     return (v + a - 1) & ~(a - 1);
@@ -130,10 +136,46 @@ static void heap_trim(void) {
     }
 }
 
+static void heap_track_alloc(size_t size) {
+    g_heap_allocs++;
+    g_heap_active_allocs++;
+    g_heap_active_bytes += (uint64_t)size;
+    if (g_heap_active_bytes > g_heap_peak_bytes) g_heap_peak_bytes = g_heap_active_bytes;
+}
+
+static void heap_track_free(size_t size) {
+    g_heap_frees++;
+    if (g_heap_active_allocs > 0) g_heap_active_allocs--;
+    if (g_heap_active_bytes >= (uint64_t)size) {
+        g_heap_active_bytes -= (uint64_t)size;
+    } else {
+        g_heap_active_bytes = 0;
+    }
+}
+
+static void heap_track_resize(size_t old_size, size_t new_size) {
+    if (new_size == old_size) return;
+    if (new_size > old_size) {
+        uint64_t delta = (uint64_t)(new_size - old_size);
+        g_heap_active_bytes += delta;
+        if (g_heap_active_bytes > g_heap_peak_bytes) g_heap_peak_bytes = g_heap_active_bytes;
+    } else {
+        uint64_t delta = (uint64_t)(old_size - new_size);
+        if (g_heap_active_bytes >= delta) g_heap_active_bytes -= delta;
+        else g_heap_active_bytes = 0;
+    }
+}
+
 void heap_init(void) {
     heap_end = heap_base;
     heap_head = NULL;
     slab_init();
+    g_heap_allocs = 0;
+    g_heap_frees = 0;
+    g_heap_active_allocs = 0;
+    g_heap_active_bytes = 0;
+    g_heap_peak_bytes = 0;
+    g_heap_failures = 0;
     log_printf("Heap: base=0x%x\n", (unsigned)heap_base);
 }
 
@@ -171,12 +213,14 @@ void *kmalloc(size_t size) {
         best->free = 0;
         best->owner = thread_current();
         thread_account_alloc(best->owner, best->size);
+        heap_track_alloc(best->size);
         return (void *)((uintptr_t)best + sizeof(struct heap_block));
     }
 
     size_t need = size + sizeof(struct heap_block);
     if (heap_expand(need) != 0) {
         log_printf("Heap: expand failed\n");
+        g_heap_failures++;
         return NULL;
     }
 
@@ -195,6 +239,7 @@ void kfree(void *ptr) {
         return;
     }
     thread_account_free(b->owner, b->size);
+    heap_track_free(b->size);
     b->free = 1;
     heap_coalesce();
     heap_trim();
@@ -240,6 +285,7 @@ void *krealloc(void *ptr, size_t size) {
         if (b->owner && old_size > size) {
             thread_account_free(b->owner, old_size - size);
         }
+        heap_track_resize(old_size, size);
         return ptr;
     }
 
@@ -249,6 +295,7 @@ void *krealloc(void *ptr, size_t size) {
     if (next && next->free && b_end == (uintptr_t)next) {
         size_t total = b->size + sizeof(struct heap_block) + next->size;
         if (total >= size) {
+            size_t old_size = b->size;
             b->size = total;
             b->next = next->next;
             size_t remaining = b->size - size;
@@ -269,6 +316,7 @@ void *krealloc(void *ptr, size_t size) {
                     thread_account_free(b->owner, old_size - size);
                 }
             }
+            heap_track_resize(old_size, size);
             return ptr;
         }
     }
@@ -297,4 +345,14 @@ int heap_check(void) {
         b = b->next;
     }
     return 0;
+}
+
+void heap_get_stats(struct heap_stats *out) {
+    if (!out) return;
+    out->allocs = g_heap_allocs;
+    out->frees = g_heap_frees;
+    out->active_allocs = g_heap_active_allocs;
+    out->active_bytes = g_heap_active_bytes;
+    out->peak_bytes = g_heap_peak_bytes;
+    out->failures = g_heap_failures;
 }

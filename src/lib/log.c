@@ -75,6 +75,13 @@ static int serial_can_tx(void) {
     return inb(COM1_PORT + 5) & 0x20;
 }
 
+int log_serial_try_getc(void) {
+    if (inb(COM1_PORT + 5) & 0x01) {
+        return (int)inb(COM1_PORT);
+    }
+    return -1;
+}
+
 static void ring_putc(char c) {
     if (g_ring_frozen) return;
     g_ring[g_ring_head] = c;

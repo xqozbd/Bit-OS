@@ -61,6 +61,7 @@ enum crash_action crash_handle_exception(uint8_t vec,
         log_ring_freeze(1);
         log_ring_dump();
         crash_dump_capture_exception(vec, err, has_err);
+        crash_dump_flush_ring();
         log_printf("CRASH: fatal exception, restarting...\n");
         crash_try_restart();
         return CRASH_RESTART;
@@ -69,6 +70,7 @@ enum crash_action crash_handle_exception(uint8_t vec,
     log_ring_freeze(1);
     log_ring_dump();
     crash_dump_capture_exception(vec, err, has_err);
+    crash_dump_flush_ring();
     log_printf("CRASH: fatal exception, shutdown\n");
     crash_try_restart();
     return CRASH_HALT;
@@ -82,12 +84,14 @@ void crash_panic(uint32_t code, const char *msg) {
         log_ring_freeze(1);
         log_ring_dump();
         crash_dump_capture(code, msg);
+        crash_dump_flush_ring();
         log_printf("PANIC: restarting...\n");
         crash_try_restart();
     }
     log_ring_freeze(1);
     log_ring_dump();
     crash_dump_capture(code, msg);
+    crash_dump_flush_ring();
     log_printf("PANIC: shutdown\n");
     crash_try_restart();
 }

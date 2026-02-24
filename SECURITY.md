@@ -23,6 +23,7 @@ BitOS is a low-level OS project. Please report security issues privately so we c
   - CPU model and RAM
   - Build log if relevant
 - Whether the issue is reliable or timing sensitive.
+- If logs are involved, include relevant excerpts from `/var/log/kpanic.log` or `/crashdump.log` with sensitive data redacted.
 
 **Severity Guidance**
 - Critical: kernel memory corruption, privilege escalation, or arbitrary code execution.

@@ -3,18 +3,20 @@
 BitOS is a small x86_64 hobby operating system focused on clarity, simplicity, and rapid iteration. It boots via Limine, runs a framebuffer console, and provides a growing set of kernel services and drivers.
 
 ## What It Does
-- Boots on x86_64 (tested in VirtualBox with Limine).
-- Initializes IDT, paging, heap, and SMP (Limine MP).
-- Provides a framebuffer console with line editing and a caret.
-- Has a basic in-memory VFS with `ls`, `cd`, `pwd`, and `cat`.
-- Includes a watchdog, RTC sync, and timekeeping.
-- Supports PCI enumeration and a PCNet (AMD) PCI probe + MAC read.
-- Implements a minimal syscall ABI stub and kernel-mode ELF loader.
-- Includes a preemptive scheduler with per-CPU run queues and basic accounting.
+- Boots on x86_64 (tested in VirtualBox and VMware) via Limine.
+- Initializes IDT, paging, heap/SLAB, SMP (Limine MP), and a preemptive scheduler.
+- Framebuffer console with line editing, history, tab completion, and VT100 colors.
+- Serial logging and serial console input (COM1).
+- VFS with mount points, ext2 + FAT32 read/write, tmpfs `/tmp`, `/dev`/`/proc`/`/sys`.
+- Userspace: fork/exec/exit, pipes/redirection, basic busybox-style shell.
+- Networking: PCI enumeration, PCNet driver, IPv4/IPv6 + ICMP ping.
+- Power management: ACPI S3/S4 suspend/resume, thermal zone monitoring.
+- Crash dumps and persistent panic logs to disk.
 
 ## Commands
 Run `help` in the console to list available commands. Typical commands include:
-`help`, `clear`, `time`, `mem`, `memtest`, `cputest`, `ls`, `cd`, `pwd`, `cat`, `echo`, `ver`, `restart`.
+`help`, `clear`, `time`, `mem`, `leaks`, `memtest`, `cputest`, `ps`, `ls`, `cd`, `pwd`, `cat`,
+`mount`, `umount`, `dd`, `ping`, `ping6`, `ip6`, `sysctl`, `dmesg`, `shutdown`, `restart`, `s3`, `s4`.
 
 ## Build
 This project is built inside **WSL Ubuntu** on Windows. You need the x86_64 cross toolchain (`x86_64-linux-gnu-*`), `make`, and `xorriso`, plus Limine binaries.
@@ -48,6 +50,11 @@ The build generates `BitOS.iso` for booting in a VM. If you see Limine missing e
 - `src/kernel` - core kernel logic (console, heap, scheduler, watchdog).
 - `src/lib` - shared utilities and logging.
 - `src/sys` - syscalls, initramfs, VFS, commands.
+
+## Notes
+- Persistent crash logs are written to `/var/log/kpanic.log` (fallback `/kpanic.log`).
+- Crash dumps are saved as `/crashdump.log` or `/var/log/crashdump.log`.
+- Login is controlled by `/etc/services.conf` (`login /bin/login`).
 
 ## Quick Links
 - [LICENSE](LICENSE)

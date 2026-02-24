@@ -22,6 +22,9 @@ struct vfs_node {
     int parent;
     const char *name;
     int is_dir;
+    uint32_t uid;
+    uint32_t gid;
+    uint16_t mode;
 };
 
 struct vfs_mount {
@@ -34,6 +37,58 @@ static struct vfs_node *g_nodes[VFS_MAX_NODES];
 static int g_node_count = 0;
 static struct mount_namespace g_root_ns;
 
+static int backend_get_attr(int backend, int node, uint32_t *uid, uint32_t *gid, uint16_t *mode, int *is_dir) {
+    if (backend == VFS_BACKEND_DEV) {
+        if (uid) *uid = 0;
+        if (gid) *gid = 0;
+        if (is_dir) *is_dir = (node == 0);
+        if (mode) *mode = (uint16_t)((node == 0) ? 0755u : 0666u);
+        return 1;
+    }
+    if (backend == VFS_BACKEND_EXT2) {
+        return ext2_get_attr(node, uid, gid, mode, is_dir);
+    }
+    if (backend == VFS_BACKEND_TMPFS) {
+        return tmpfs_get_attr(node, uid, gid, mode, is_dir);
+    }
+    if (uid) *uid = 0;
+    if (gid) *gid = 0;
+    if (mode) *mode = (uint16_t)((is_dir && *is_dir) ? 0755u : 0644u);
+    return 1;
+}
+
+static int backend_set_attr(int backend, int node, uint32_t uid, uint32_t gid, uint16_t mode,
+                            int set_uid, int set_gid, int set_mode) {
+    if (backend == VFS_BACKEND_EXT2) {
+        return ext2_set_attr(node, uid, gid, mode, set_uid, set_gid, set_mode);
+    }
+    if (backend == VFS_BACKEND_TMPFS) {
+        return tmpfs_set_attr(node, uid, gid, mode, set_uid, set_gid, set_mode);
+    }
+    return 0;
+}
+
+static int backend_readlink(int backend, int node, char *out, size_t out_len) {
+    if (backend == VFS_BACKEND_EXT2) return ext2_readlink(node, out, out_len);
+    if (backend == VFS_BACKEND_TMPFS) return tmpfs_readlink(node, out, out_len);
+    return -1;
+}
+
+static int backend_link_node(int backend, int parent, int target, const char *name) {
+    if (backend == VFS_BACKEND_EXT2) return ext2_link_node(parent, target, name);
+    if (backend == VFS_BACKEND_TMPFS) return tmpfs_link_node(parent, target, name);
+    return -1;
+}
+
+static int backend_symlink_node(int backend, int parent, const char *name, const char *target) {
+    if (backend == VFS_BACKEND_EXT2) return ext2_symlink_node(parent, name, target);
+    if (backend == VFS_BACKEND_TMPFS) return tmpfs_symlink_node(parent, name, target);
+    return -1;
+}
+
+static int mount_match(const char *path);
+static int vfs_wrap_node(int backend, int node);
+
 static void nodes_reset(void) {
     for (int i = 0; i < g_node_count; ++i) {
         if (g_nodes[i]) {
@@ -43,6 +98,8 @@ static void nodes_reset(void) {
     }
     g_node_count = 0;
 }
+
+static int backend_get_attr(int backend, int node, uint32_t *uid, uint32_t *gid, uint16_t *mode, int *is_dir);
 
 static int node_new(int backend, int node, int parent, const char *name, int is_dir) {
     if (g_node_count >= VFS_MAX_NODES) return -1;
@@ -54,8 +111,30 @@ static int node_new(int backend, int node, int parent, const char *name, int is_
     n->parent = parent;
     n->name = name;
     n->is_dir = is_dir;
+    n->uid = 0;
+    n->gid = 0;
+    n->mode = (uint16_t)(is_dir ? 0755u : 0644u);
+    (void)backend_get_attr(backend, node, &n->uid, &n->gid, &n->mode, &n->is_dir);
     g_nodes[idx] = n;
     return idx;
+}
+
+static int vfs_check_perm_node(struct vfs_node *n, int want) {
+    if (!n) return 0;
+    struct task *t = task_current();
+    if (!t) return 1;
+    if (t->uid == 0) return 1;
+    uint32_t uid = n->uid;
+    uint32_t gid = n->gid;
+    uint16_t mode = n->mode;
+    uint16_t bits = 0;
+    if (t->uid == uid) bits = (uint16_t)((mode >> 6) & 0x7);
+    else if (t->gid == gid) bits = (uint16_t)((mode >> 3) & 0x7);
+    else bits = (uint16_t)(mode & 0x7);
+    if ((want & 4) && !(bits & 4)) return 0;
+    if ((want & 2) && !(bits & 2)) return 0;
+    if ((want & 1) && !(bits & 1)) return 0;
+    return 1;
 }
 
 static int ensure_root(void) {
@@ -244,9 +323,124 @@ static void normalize_path(const char *path, char *out, size_t out_size) {
     out[w] = '\0';
 }
 
+static int vfs_readlink_node(int node, char *out, size_t out_len) {
+    if (node < 0 || node >= g_node_count || !g_nodes[node] || !out || out_len == 0) return -1;
+    struct vfs_node *n = g_nodes[node];
+    return backend_readlink(n->backend, n->node, out, out_len);
+}
+
+static int vfs_resolve_internal(int cwd, const char *path, int follow_symlinks, int depth) {
+    if (!path || path[0] == '\0') return cwd;
+    char norm[256];
+    normalize_path(path, norm, sizeof(norm));
+
+    int m = mount_match(norm);
+    struct mount_namespace *ns = vfs_ns_current();
+    int backend = g_nodes[ns->root_index]->backend;
+    int root_node = g_nodes[ns->root_index]->node;
+    const char *sub = norm;
+    if (m >= 0) {
+        backend = ns->mounts[m].backend;
+        root_node = ns->mounts[m].root;
+        size_t len = str_len(ns->mounts[m].path);
+        sub = norm + len;
+        if (sub[0] == '/') sub++;
+        if (sub[0] == '\0') sub = "/";
+    }
+    int raw;
+    if (sub[0] == '/') {
+        raw = backend_resolve(backend, root_node, sub);
+    } else {
+        int backend_cwd = root_node;
+        if (cwd >= 0 && cwd < g_node_count && g_nodes[cwd] && g_nodes[cwd]->backend == backend) {
+            backend_cwd = g_nodes[cwd]->node;
+        }
+        raw = backend_resolve(backend, backend_cwd, sub);
+    }
+    int node = vfs_wrap_node(backend, raw);
+    if (!follow_symlinks || node < 0 || depth <= 0) return node;
+
+    uint16_t mode = 0;
+    if (vfs_get_attr(node, NULL, NULL, &mode, NULL)) {
+        if ((mode & 0xF000u) == 0xA000u) {
+            char target[256];
+            int n = vfs_readlink_node(node, target, sizeof(target));
+            if (n > 0) {
+                target[(n < (int)sizeof(target)) ? n : (int)sizeof(target) - 1] = '\0';
+                char newpath[512];
+                if (target[0] == '/') {
+                    size_t tlen = str_len(target);
+                    if (tlen >= sizeof(newpath)) return node;
+                    for (size_t i = 0; i <= tlen; ++i) newpath[i] = target[i];
+                } else {
+                    char base[256];
+                    int parent = g_nodes[node] ? g_nodes[node]->parent : -1;
+                    if (parent >= 0) {
+                        if (vfs_build_path(parent, base, sizeof(base)) != 0) {
+                            base[0] = '/'; base[1] = '\0';
+                        }
+                    } else {
+                        base[0] = '/'; base[1] = '\0';
+                    }
+                    size_t blen = str_len(base);
+                    size_t tlen = str_len(target);
+                    if (blen + 1 + tlen + 1 >= sizeof(newpath)) return node;
+                    size_t w = 0;
+                    for (size_t i = 0; i < blen; ++i) newpath[w++] = base[i];
+                    if (w == 0 || newpath[w - 1] != '/') newpath[w++] = '/';
+                    for (size_t i = 0; i < tlen; ++i) newpath[w++] = target[i];
+                    newpath[w] = '\0';
+                }
+                return vfs_resolve_internal(cwd, newpath, 1, depth - 1);
+            }
+        }
+    }
+    return node;
+}
+
 int vfs_root_backend(void) {
     struct mount_namespace *ns = vfs_ns_current();
     return ns ? ns->root_backend : VFS_BACKEND_MOCK;
+}
+
+int vfs_get_attr(int node, uint32_t *uid, uint32_t *gid, uint16_t *mode, int *is_dir) {
+    if (node < 0 || node >= g_node_count) return 0;
+    struct vfs_node *n = g_nodes[node];
+    if (!n) return 0;
+    uint32_t buid = n->uid;
+    uint32_t bgid = n->gid;
+    uint16_t bmode = n->mode;
+    int bdir = n->is_dir;
+    if (backend_get_attr(n->backend, n->node, &buid, &bgid, &bmode, &bdir)) {
+        n->uid = buid;
+        n->gid = bgid;
+        n->mode = bmode;
+        n->is_dir = bdir;
+    }
+    if (uid) *uid = n->uid;
+    if (gid) *gid = n->gid;
+    if (mode) *mode = n->mode;
+    if (is_dir) *is_dir = n->is_dir;
+    return 1;
+}
+
+int vfs_chmod(int node, uint16_t mode) {
+    if (node < 0 || node >= g_node_count) return 0;
+    struct vfs_node *n = g_nodes[node];
+    if (!n) return 0;
+    if (!backend_set_attr(n->backend, n->node, 0, 0, mode, 0, 0, 1)) return 0;
+    n->mode = (uint16_t)(mode & 0x0FFFu);
+    return 1;
+}
+
+int vfs_chown(int node, uint32_t uid, uint32_t gid) {
+    if (node < 0 || node >= g_node_count) return 0;
+    struct vfs_node *n = g_nodes[node];
+    if (!n) return 0;
+    if (!backend_set_attr(n->backend, n->node, uid, gid, 0, 1, 1, 0)) return 0;
+    n->uid = uid;
+    n->gid = gid;
+    return 1;
 }
 
 int vfs_build_path(int node, char *out, size_t out_len) {
@@ -353,34 +547,7 @@ static int vfs_wrap_node(int backend, int node) {
 }
 
 int vfs_resolve(int cwd, const char *path) {
-    if (!path || path[0] == '\0') return cwd;
-    char norm[256];
-    normalize_path(path, norm, sizeof(norm));
-
-    int m = mount_match(norm);
-    struct mount_namespace *ns = vfs_ns_current();
-    int backend = g_nodes[ns->root_index]->backend;
-    int root_node = g_nodes[ns->root_index]->node;
-    const char *sub = norm;
-    if (m >= 0) {
-        backend = ns->mounts[m].backend;
-        root_node = ns->mounts[m].root;
-        size_t len = str_len(ns->mounts[m].path);
-        sub = norm + len;
-        if (sub[0] == '/') sub++;
-        if (sub[0] == '\0') sub = "/";
-    }
-    int raw;
-    if (sub[0] == '/') {
-        raw = backend_resolve(backend, root_node, sub);
-    } else {
-        int backend_cwd = root_node;
-        if (cwd >= 0 && cwd < g_node_count && g_nodes[cwd] && g_nodes[cwd]->backend == backend) {
-            backend_cwd = g_nodes[cwd]->node;
-        }
-        raw = backend_resolve(backend, backend_cwd, sub);
-    }
-    return vfs_wrap_node(backend, raw);
+    return vfs_resolve_internal(cwd, path, 1, 8);
 }
 
 int vfs_is_dir(int node) {
@@ -390,11 +557,15 @@ int vfs_is_dir(int node) {
 
 int vfs_read_file(int node, const uint8_t **data, uint64_t *size) {
     if (node < 0 || node >= g_node_count || !g_nodes[node]) return 0;
+    vfs_get_attr(node, NULL, NULL, NULL, NULL);
+    if (!vfs_check_perm_node(g_nodes[node], 4)) return 0;
     return backend_read_file(g_nodes[node]->backend, g_nodes[node]->node, data, size);
 }
 
 int vfs_write_file(int node, const uint8_t *data, uint64_t size, uint64_t offset) {
     if (node < 0 || node >= g_node_count || !g_nodes[node]) return -1;
+    vfs_get_attr(node, NULL, NULL, NULL, NULL);
+    if (!vfs_check_perm_node(g_nodes[node], 2)) return -1;
     if (journal_can_log(node)) {
         (void)journal_log_write(node, offset, data, (uint32_t)size);
     }
@@ -407,6 +578,8 @@ int vfs_write_file(int node, const uint8_t *data, uint64_t size, uint64_t offset
 
 int vfs_truncate(int node, uint64_t new_size) {
     if (node < 0 || node >= g_node_count || !g_nodes[node]) return -1;
+    vfs_get_attr(node, NULL, NULL, NULL, NULL);
+    if (!vfs_check_perm_node(g_nodes[node], 2)) return -1;
     if (journal_can_log(node)) {
         (void)journal_log_truncate(node, new_size);
     }
@@ -433,6 +606,8 @@ int vfs_create(int cwd, const char *path, int is_dir) {
     if (!vfs_is_dir(parent_node)) return -1;
     struct vfs_node *p = g_nodes[parent_node];
     if (!p) return -1;
+    vfs_get_attr(parent_node, NULL, NULL, NULL, NULL);
+    if (!vfs_check_perm_node(p, 3)) return -1;
 
     int raw = -1;
     if (p->backend == VFS_BACKEND_EXT2) {
@@ -444,15 +619,73 @@ int vfs_create(int cwd, const char *path, int is_dir) {
         for (size_t i = 0; i < nlen; ++i) tmp[2 + i] = name[i];
         tmp[2 + nlen] = '\0';
         uint16_t mode = is_dir ? 0755u : 0644u;
+        struct task *t = task_current();
+        if (t) mode = (uint16_t)(mode & (uint16_t)~t->umask);
         raw = ext2_create(p->node, tmp, mode, is_dir);
+        if (raw >= 0) {
+            struct task *t = task_current();
+            if (t) ext2_set_attr(raw, t->uid, t->gid, mode, 1, 1, 0);
+        }
     } else if (p->backend == VFS_BACKEND_FAT32) {
         raw = fat32_create(p->node, name, is_dir);
     } else if (p->backend == VFS_BACKEND_TMPFS) {
+        uint16_t mode = is_dir ? 0755u : 0644u;
+        struct task *t = task_current();
+        if (t) mode = (uint16_t)(mode & (uint16_t)~t->umask);
         raw = tmpfs_create(p->node, name, is_dir);
+        if (raw >= 0) {
+            struct task *t = task_current();
+            if (t) tmpfs_set_attr(raw, t->uid, t->gid, mode, 1, 1, 1);
+        }
     } else {
         return -1;
     }
     return vfs_wrap_node(p->backend, raw);
+}
+
+int vfs_link(int cwd, const char *oldpath, const char *newpath) {
+    if (!oldpath || !newpath) return -1;
+    int old_node = vfs_resolve_internal(cwd, oldpath, 1, 8);
+    if (old_node < 0 || old_node >= g_node_count) return -1;
+    if (vfs_is_dir(old_node)) return -1;
+
+    char parent[256];
+    char name[128];
+    if (split_path(newpath, parent, sizeof(parent), name, sizeof(name)) != 0) return -1;
+    int parent_node = vfs_resolve_internal(cwd, parent, 1, 8);
+    if (parent_node < 0 || !vfs_is_dir(parent_node)) return -1;
+    struct vfs_node *p = g_nodes[parent_node];
+    struct vfs_node *o = g_nodes[old_node];
+    if (!p || !o) return -1;
+    if (p->backend != o->backend) return -1;
+    vfs_get_attr(parent_node, NULL, NULL, NULL, NULL);
+    if (!vfs_check_perm_node(p, 3)) return -1;
+
+    int raw = backend_link_node(p->backend, p->node, o->node, name);
+    return vfs_wrap_node(p->backend, raw);
+}
+
+int vfs_symlink(int cwd, const char *target, const char *linkpath) {
+    if (!target || !linkpath) return -1;
+    char parent[256];
+    char name[128];
+    if (split_path(linkpath, parent, sizeof(parent), name, sizeof(name)) != 0) return -1;
+    int parent_node = vfs_resolve_internal(cwd, parent, 1, 8);
+    if (parent_node < 0 || !vfs_is_dir(parent_node)) return -1;
+    struct vfs_node *p = g_nodes[parent_node];
+    if (!p) return -1;
+    vfs_get_attr(parent_node, NULL, NULL, NULL, NULL);
+    if (!vfs_check_perm_node(p, 3)) return -1;
+
+    int raw = backend_symlink_node(p->backend, p->node, name, target);
+    return vfs_wrap_node(p->backend, raw);
+}
+
+int vfs_readlink(const char *path, char *out, size_t out_len) {
+    if (!path || !out || out_len == 0) return -1;
+    int node = vfs_resolve_internal(0, path, 0, 0);
+    if (node < 0) return -1;
+    return vfs_readlink_node(node, out, out_len);
 }
 
 void vfs_pwd(int cwd) {
@@ -564,6 +797,8 @@ int vfs_list_dir(const char *path, char *out, uint64_t out_len) {
     if (node < 0 || !vfs_is_dir(node)) return -1;
     const struct vfs_node *n = g_nodes[node];
     if (!n) return -1;
+    vfs_get_attr(node, NULL, NULL, NULL, NULL);
+    if (!vfs_check_perm_node(g_nodes[node], 5)) return -1;
     if (n->backend == VFS_BACKEND_TMPFS) {
         return tmpfs_list_dir(n->node, out, out_len);
     }

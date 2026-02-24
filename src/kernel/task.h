@@ -20,9 +20,14 @@ enum task_state {
 #define FD_TYPE_FILE 1
 #define FD_TYPE_SOCKET 2
 #define FD_TYPE_CONSOLE 3
+#define FD_TYPE_PIPE 4
+#define FD_TYPE_PTY_MASTER 5
+#define FD_TYPE_PTY_SLAVE 6
 
 struct task {
     uint32_t pid;
+    uint32_t ppid;
+    uint32_t pgid;
     struct pid_namespace *pid_ns;
     uint32_t pid_ns_pid;
     struct mount_namespace *mnt_ns;
@@ -41,11 +46,17 @@ struct task {
     uint64_t user_stack_size;
     uint64_t mmap_base;
     uint64_t mmap_limit;
+    uint32_t uid;
+    uint32_t gid;
+    uint32_t tty_id;
+    uint16_t umask;
     uint64_t res_mem_bytes;
     uint32_t res_fd_count;
     uint32_t res_sock_count;
     uint32_t pending_signals;
     uint64_t sig_handlers[32];
+    uint32_t exit_code;
+    uint8_t stopped;
     const char *name;
     struct task_fd *fds;
     struct task_map *maps;
@@ -63,6 +74,8 @@ struct task_fd {
     int type;
     int node;
     int sock_id;
+    void *pipe;
+    uint8_t pipe_end;
     uint64_t offset;
     uint32_t flags;
 };
@@ -102,6 +115,8 @@ int task_signal_set_handler(struct task *t, int sig, uint64_t handler);
 void task_signal_raise(struct task *t, int sig);
 int task_signal_handle_pending(struct task *t);
 struct task *task_find_pid(uint32_t pid);
+struct task *task_find_child_dead(struct task *parent, int pid);
+struct task *task_find_child_stopped(struct task *parent, int pid);
 uint64_t task_mmap_anonymous(struct task *t, uint64_t addr, uint64_t len, uint32_t prot, uint32_t flags);
 uint64_t task_mmap_file(struct task *t, uint64_t addr, uint64_t len, uint32_t prot, uint32_t flags, int node, uint64_t off);
 int task_munmap(struct task *t, uint64_t addr, uint64_t len);

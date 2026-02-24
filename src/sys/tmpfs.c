@@ -17,6 +17,11 @@ struct tmpfs_node {
     uint8_t *data;
     uint64_t size;
     uint64_t cap;
+    uint32_t uid;
+    uint32_t gid;
+    uint16_t mode;
+    int link_target;
+    int is_symlink;
 };
 
 static struct tmpfs_node g_nodes[TMPFS_MAX_NODES];
@@ -35,6 +40,11 @@ static int node_alloc(const char *name, int is_dir, int parent) {
     n->data = NULL;
     n->size = 0;
     n->cap = 0;
+    n->uid = 0;
+    n->gid = 0;
+    n->mode = (uint16_t)(is_dir ? 0755u : 0644u);
+    n->link_target = -1;
+    n->is_symlink = 0;
     if (name) {
         size_t len = str_len(name);
         n->name = (char *)kmalloc(len + 1);
@@ -44,6 +54,14 @@ static int node_alloc(const char *name, int is_dir, int parent) {
         }
     }
     return idx;
+}
+
+static int resolve_target(int node) {
+    int cur = node;
+    while (cur >= 0 && cur < g_node_count && g_nodes[cur].link_target >= 0 && !g_nodes[cur].is_symlink) {
+        cur = g_nodes[cur].link_target;
+    }
+    return cur;
 }
 
 static int find_child(int dir, const char *name) {
@@ -76,15 +94,50 @@ int tmpfs_root(void) {
 
 int tmpfs_is_dir(int node) {
     if (node < 0 || node >= g_node_count) return 0;
+    if (g_nodes[node].is_symlink) return 0;
+    if (g_nodes[node].link_target >= 0) {
+        int tgt = resolve_target(node);
+        if (tgt >= 0 && tgt < g_node_count) return g_nodes[tgt].is_dir != 0;
+    }
     return g_nodes[node].is_dir != 0;
+}
+
+int tmpfs_get_attr(int node, uint32_t *uid, uint32_t *gid, uint16_t *mode, int *is_dir) {
+    if (node < 0 || node >= g_node_count) return 0;
+    int tgt = resolve_target(node);
+    if (tgt < 0 || tgt >= g_node_count) tgt = node;
+    if (g_nodes[node].is_symlink) {
+        if (uid) *uid = g_nodes[node].uid;
+        if (gid) *gid = g_nodes[node].gid;
+        if (mode) *mode = (uint16_t)(g_nodes[node].mode | 0xA000u);
+        if (is_dir) *is_dir = 0;
+        return 1;
+    }
+    if (uid) *uid = g_nodes[tgt].uid;
+    if (gid) *gid = g_nodes[tgt].gid;
+    if (mode) *mode = g_nodes[tgt].mode;
+    if (is_dir) *is_dir = g_nodes[tgt].is_dir;
+    return 1;
+}
+
+int tmpfs_set_attr(int node, uint32_t uid, uint32_t gid, uint16_t mode, int set_uid, int set_gid, int set_mode) {
+    if (node < 0 || node >= g_node_count) return 0;
+    int tgt = resolve_target(node);
+    if (tgt < 0 || tgt >= g_node_count) tgt = node;
+    if (set_uid) g_nodes[tgt].uid = uid;
+    if (set_gid) g_nodes[tgt].gid = gid;
+    if (set_mode) g_nodes[tgt].mode = (uint16_t)(mode & 0x0FFFu);
+    return 1;
 }
 
 int tmpfs_read_file(int node, const uint8_t **data, uint64_t *size) {
     if (!data || !size) return 0;
     if (node < 0 || node >= g_node_count) return 0;
-    if (g_nodes[node].is_dir) return 0;
-    *data = g_nodes[node].data;
-    *size = g_nodes[node].size;
+    int tgt = resolve_target(node);
+    if (tgt < 0 || tgt >= g_node_count) return 0;
+    if (g_nodes[tgt].is_dir || g_nodes[tgt].is_symlink) return 0;
+    *data = g_nodes[tgt].data;
+    *size = g_nodes[tgt].size;
     return 1;
 }
 
@@ -104,8 +157,10 @@ static int ensure_cap(struct tmpfs_node *n, uint64_t cap) {
 
 int tmpfs_write_file(int node, const uint8_t *data, uint64_t size, uint64_t offset) {
     if (node < 0 || node >= g_node_count) return -1;
-    struct tmpfs_node *n = &g_nodes[node];
-    if (n->is_dir) return -1;
+    int tgt = resolve_target(node);
+    if (tgt < 0 || tgt >= g_node_count) return -1;
+    struct tmpfs_node *n = &g_nodes[tgt];
+    if (n->is_dir || n->is_symlink) return -1;
     if (offset + size < offset) return -1;
     if (ensure_cap(n, offset + size) != 0) return -1;
     for (uint64_t i = 0; i < size; ++i) {
@@ -117,8 +172,10 @@ int tmpfs_write_file(int node, const uint8_t *data, uint64_t size, uint64_t offs
 
 int tmpfs_truncate(int node, uint64_t new_size) {
     if (node < 0 || node >= g_node_count) return -1;
-    struct tmpfs_node *n = &g_nodes[node];
-    if (n->is_dir) return -1;
+    int tgt = resolve_target(node);
+    if (tgt < 0 || tgt >= g_node_count) return -1;
+    struct tmpfs_node *n = &g_nodes[tgt];
+    if (n->is_dir || n->is_symlink) return -1;
     if (ensure_cap(n, new_size) != 0) return -1;
     if (new_size > n->size) {
         for (uint64_t i = n->size; i < new_size; ++i) n->data[i] = 0;
@@ -129,8 +186,10 @@ int tmpfs_truncate(int node, uint64_t new_size) {
 
 uint64_t tmpfs_get_size(int node) {
     if (node < 0 || node >= g_node_count) return 0;
-    if (g_nodes[node].is_dir) return 0;
-    return g_nodes[node].size;
+    int tgt = resolve_target(node);
+    if (tgt < 0 || tgt >= g_node_count) return 0;
+    if (g_nodes[tgt].is_dir || g_nodes[tgt].is_symlink) return 0;
+    return g_nodes[tgt].size;
 }
 
 static int split_path(const char *path, char *parent_out, size_t parent_len,
@@ -273,4 +332,47 @@ void tmpfs_ls(int node) {
         cur = g_nodes[cur].next_sibling;
     }
     log_printf("\n");
+}
+
+int tmpfs_link_node(int parent, int target, const char *name) {
+    if (parent < 0 || parent >= g_node_count || !name) return -1;
+    if (!g_nodes[parent].is_dir) return -1;
+    if (find_child(parent, name) >= 0) return -1;
+    int tgt = resolve_target(target);
+    if (tgt < 0 || tgt >= g_node_count) return -1;
+    if (g_nodes[tgt].is_dir || g_nodes[tgt].is_symlink) return -1;
+    int idx = node_alloc(name, 0, parent);
+    if (idx < 0) return -1;
+    g_nodes[idx].link_target = tgt;
+    g_nodes[idx].mode = g_nodes[tgt].mode;
+    g_nodes[idx].uid = g_nodes[tgt].uid;
+    g_nodes[idx].gid = g_nodes[tgt].gid;
+    link_child(parent, idx);
+    return idx;
+}
+
+int tmpfs_symlink_node(int parent, const char *name, const char *target) {
+    if (parent < 0 || parent >= g_node_count || !name || !target) return -1;
+    if (!g_nodes[parent].is_dir) return -1;
+    if (find_child(parent, name) >= 0) return -1;
+    int idx = node_alloc(name, 0, parent);
+    if (idx < 0) return -1;
+    g_nodes[idx].is_symlink = 1;
+    g_nodes[idx].mode = (uint16_t)0777u;
+    size_t len = str_len(target);
+    if (ensure_cap(&g_nodes[idx], (uint64_t)len) != 0) return -1;
+    for (size_t i = 0; i < len; ++i) g_nodes[idx].data[i] = (uint8_t)target[i];
+    g_nodes[idx].size = (uint64_t)len;
+    link_child(parent, idx);
+    return idx;
+}
+
+int tmpfs_readlink(int node, char *out, uint64_t out_len) {
+    if (node < 0 || node >= g_node_count || !out || out_len == 0) return -1;
+    if (!g_nodes[node].is_symlink) return -1;
+    uint64_t len = g_nodes[node].size;
+    if (len >= out_len) len = out_len - 1;
+    for (uint64_t i = 0; i < len; ++i) out[i] = (char)g_nodes[node].data[i];
+    out[len] = '\0';
+    return (int)len;
 }

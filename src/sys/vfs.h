@@ -50,5 +50,11 @@ void vfs_ls(int node);
 int vfs_list_dir(const char *path, char *out, uint64_t out_len);
 int vfs_build_path(int node, char *out, size_t out_len);
 int vfs_root_backend(void);
+int vfs_chmod(int node, uint16_t mode);
+int vfs_chown(int node, uint32_t uid, uint32_t gid);
+int vfs_get_attr(int node, uint32_t *uid, uint32_t *gid, uint16_t *mode, int *is_dir);
+int vfs_link(int cwd, const char *oldpath, const char *newpath);
+int vfs_symlink(int cwd, const char *target, const char *linkpath);
+int vfs_readlink(const char *path, char *out, size_t out_len);
 
 #endif /* SYS_VFS_H */

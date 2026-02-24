@@ -30,7 +30,7 @@ BitOS is a low-level OS project. Changes should be small, testable, and intentio
 - Build: `./all`
 - The build produces `BitOS.iso` and prints its size.
 - If you add a new file, wire it into the build and any scripts.
-- If you add a command or syscall, add a short usage note in `README.md` or `CHANGELOG.md`.
+- If you add a command or syscall, add a short usage note in `README.md` and `CHANGELOG.md`.
 - If you change the boot flow, document it in `README.md`.
 
 **Testing Expectations**
@@ -39,6 +39,8 @@ BitOS is a low-level OS project. Changes should be small, testable, and intentio
 - For filesystem or network changes, add a minimal smoke test scenario in your PR description.
 - If you add a command, show a sample invocation in the PR.
 - If you change boot params, list them in the PR.
+- If you touch crash/panic paths, verify `/var/log/kpanic.log` and `/crashdump.log` on reboot.
+- If you touch console input, verify keyboard and COM1 serial input.
 
 **Code Style**
 - `-Wall -Wextra` clean for C.
@@ -53,6 +55,7 @@ BitOS is a low-level OS project. Changes should be small, testable, and intentio
 - Use consistent log prefixes for subsystems.
 - Avoid spamming logs in hot paths.
 - Debug-only logs should be guarded by a flag or build setting.
+- For persistent logs, prefer `/var/log/*` with a fallback in `/`.
 
 **Common Change Types**
 **Syscalls**
@@ -77,6 +80,7 @@ BitOS is a low-level OS project. Changes should be small, testable, and intentio
 - Include a basic mount/read/write validation step.
 - Document any on-disk format assumptions.
 - Include a failure mode description in the PR.
+- If you add services, update `/etc/services.conf` in initramfs and ext2 root.
 
 **Networking**
 - Validate packet lengths before accessing headers.
@@ -89,6 +93,7 @@ BitOS is a low-level OS project. Changes should be small, testable, and intentio
 - Known limitations or follow-ups
 - Any data format changes or migrations
 - VM configuration used for testing
+- README/TODO/CHANGELOG updated where relevant
 
 **Bug Reports**
 Include:

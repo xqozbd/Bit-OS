@@ -22,6 +22,7 @@
 #include "drivers/rtc/rtc_util.h"
 #include "kernel/time.h"
 #include "kernel/heap.h"
+#include "kernel/slab.h"
 #include "arch/x86_64/smp.h"
 #include "lib/strutil.h"
 #include "lib/version.h"
@@ -36,7 +37,7 @@
 #include "kernel/resgroup.h"
 
 static const char *const g_commands[] = {
-    "help", "clear", "time", "mem", "memtest", "cputest", "ps",
+    "help", "clear", "time", "mem", "leaks", "memtest", "cputest", "ps",
     "ls", "cd", "pwd", "cat", "run", "echo", "ver", "debug", "ping",
     "ping6", "ip6",
     "mount", "umount", "dd",
@@ -163,6 +164,21 @@ static void cmd_mem(void) {
     uint64_t freef = pmm_free_frames();
     log_printf("PMM frames: total=%u used=%u free=%u\n",
                (unsigned)total, (unsigned)used, (unsigned)freef);
+}
+
+static void cmd_leaks(void) {
+    struct heap_stats hs;
+    struct slab_stats ss;
+    heap_get_stats(&hs);
+    slab_get_stats(&ss);
+    log_printf("Heap: active_allocs=%u active_bytes=%u peak_bytes=%u total_allocs=%u total_frees=%u failures=%u\n",
+               (unsigned)hs.active_allocs, (unsigned)hs.active_bytes,
+               (unsigned)hs.peak_bytes, (unsigned)hs.allocs,
+               (unsigned)hs.frees, (unsigned)hs.failures);
+    log_printf("Slab: active_allocs=%u active_bytes=%u peak_bytes=%u total_allocs=%u total_frees=%u\n",
+               (unsigned)ss.active_allocs, (unsigned)ss.active_bytes,
+               (unsigned)ss.peak_bytes, (unsigned)ss.allocs,
+               (unsigned)ss.frees);
 }
 
 static void cmd_clear(void) {
@@ -822,6 +838,8 @@ int commands_exec(int argc, char **argv, struct command_ctx *ctx) {
         cmd_time();
     } else if (str_eq(argv[0], "mem")) {
         cmd_mem();
+    } else if (str_eq(argv[0], "leaks")) {
+        cmd_leaks();
     } else if (str_eq(argv[0], "memtest")) {
         int pages = 0;
         uint64_t bytes = 0;

@@ -22,5 +22,10 @@ int ext2_write(int node, const uint8_t *data, uint64_t len, uint64_t offset);
 int ext2_truncate(int node, uint64_t new_size);
 int ext2_unlink(int cwd, const char *path);
 int ext2_rename(int cwd, const char *old_path, const char *new_name);
+int ext2_get_attr(int node, uint32_t *uid, uint32_t *gid, uint16_t *mode, int *is_dir);
+int ext2_set_attr(int node, uint32_t uid, uint32_t gid, uint16_t mode, int set_uid, int set_gid, int set_mode);
+int ext2_link_node(int parent, int target, const char *name);
+int ext2_symlink_node(int parent, const char *name, const char *target);
+int ext2_readlink(int node, char *out, uint64_t out_len);
 
 #endif /* SYS_EXT2_H */

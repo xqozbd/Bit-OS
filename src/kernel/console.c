@@ -23,6 +23,12 @@ static void console_idle(void) {
     for (int i = 0; i < 50; ++i) cpu_relax();
 }
 
+static int console_poll_char(void) {
+    int ch = kb_poll_char();
+    if (ch >= 0) return ch;
+    return log_serial_try_getc();
+}
+
 static void console_redraw(const char *line, int len, int cursor, int *last_len, int show_caret);
 static int g_last_caret_at_end = 0;
 
@@ -228,7 +234,7 @@ void console_run(void) {
     while (1) {
         int did_work = 0;
         while (1) {
-            int ch = kb_poll_char();
+            int ch = console_poll_char();
             if (ch < 0) break;
             did_work = 1;
 

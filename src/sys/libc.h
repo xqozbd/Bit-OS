@@ -174,7 +174,10 @@ enum {
     SIGKILL = 9,
     SIGSEGV = 11,
     SIGTERM = 15,
-    SIGCHLD = 17
+    SIGCHLD = 17,
+    SIGCONT = 18,
+    SIGSTOP = 19,
+    SIGTSTP = 20
 };
 
 enum {

@@ -10,6 +10,8 @@
 #include "kernel/thread.h"
 #include "kernel/sched.h"
 #include "kernel/socket.h"
+#include "kernel/pipe.h"
+#include "kernel/pty.h"
 #include "kernel/netns.h"
 #include "kernel/resgroup.h"
 #include "sys/vfs.h"
@@ -38,6 +40,8 @@ static void fd_set_console(struct task_fd *fd) {
     fd->type = FD_TYPE_CONSOLE;
     fd->node = -1;
     fd->sock_id = -1;
+    fd->pipe = NULL;
+    fd->pipe_end = 0;
     fd->offset = 0;
     fd->flags = 0;
 }
@@ -137,6 +141,8 @@ void task_fd_init(struct task *t) {
         t->fds[i].type = 0;
         t->fds[i].node = -1;
         t->fds[i].sock_id = -1;
+        t->fds[i].pipe = NULL;
+        t->fds[i].pipe_end = 0;
         t->fds[i].offset = 0;
         t->fds[i].flags = 0;
     }
@@ -162,6 +168,8 @@ int task_fd_alloc(struct task *t, int node, uint32_t flags) {
             t->fds[i].type = FD_TYPE_FILE;
             t->fds[i].node = node;
             t->fds[i].sock_id = -1;
+            t->fds[i].pipe = NULL;
+            t->fds[i].pipe_end = 0;
             t->fds[i].offset = 0;
             t->fds[i].flags = flags;
             return i;
@@ -184,6 +192,8 @@ int task_fd_alloc_socket(struct task *t, int sock_id) {
             t->fds[i].type = FD_TYPE_SOCKET;
             t->fds[i].node = -1;
             t->fds[i].sock_id = sock_id;
+            t->fds[i].pipe = NULL;
+            t->fds[i].pipe_end = 0;
             t->fds[i].offset = 0;
             t->fds[i].flags = 0;
             return i;
@@ -202,10 +212,19 @@ int task_fd_close(struct task *t, int fd) {
         socket_close(t->fds[fd].sock_id);
         if (t->res_sock_count > 0) task_uncharge_socket(t, 1);
     }
+    if (t->fds[fd].type == FD_TYPE_PIPE && t->fds[fd].pipe) {
+        pipe_close_end((struct pipe *)t->fds[fd].pipe, t->fds[fd].pipe_end);
+    }
+    if ((t->fds[fd].type == FD_TYPE_PTY_MASTER || t->fds[fd].type == FD_TYPE_PTY_SLAVE) &&
+        t->fds[fd].pipe) {
+        pty_close_end((struct pty *)t->fds[fd].pipe, t->fds[fd].type == FD_TYPE_PTY_MASTER);
+    }
     t->fds[fd].used = 0;
     t->fds[fd].type = 0;
     t->fds[fd].node = -1;
     t->fds[fd].sock_id = -1;
+    t->fds[fd].pipe = NULL;
+    t->fds[fd].pipe_end = 0;
     t->fds[fd].offset = 0;
     t->fds[fd].flags = 0;
     if (t->res_fd_count > 0) task_uncharge_fd(t, 1);
@@ -244,7 +263,15 @@ void task_init_bootstrap(struct thread *t) {
     g_boot_task.res_fd_count = 0;
     g_boot_task.res_sock_count = 0;
     g_boot_task.pending_signals = 0;
+    g_boot_task.exit_code = 0;
+    g_boot_task.stopped = 0;
     for (int i = 0; i < 32; ++i) g_boot_task.sig_handlers[i] = 0;
+    g_boot_task.ppid = 0;
+    g_boot_task.pgid = g_boot_task.pid;
+    g_boot_task.uid = 0;
+    g_boot_task.gid = 0;
+    g_boot_task.tty_id = 0;
+    g_boot_task.umask = 0022u;
     g_boot_task.name = t->name ? t->name : "bootstrap";
     g_boot_task.fds = g_boot_fds;
     g_boot_task.maps = NULL;
@@ -326,7 +353,13 @@ struct task *task_create_for_thread(struct thread *t, const char *name) {
     task->res_mem_bytes = 0;
     task->res_fd_count = 0;
     task->res_sock_count = 0;
+    task->uid = 0;
+    task->gid = 0;
+    task->tty_id = 0;
+    task->umask = 0022u;
     task->pending_signals = 0;
+    task->exit_code = 0;
+    task->stopped = 0;
     for (int i = 0; i < 32; ++i) task->sig_handlers[i] = 0;
     task->name = name ? name : "task";
     task->fds = NULL;
@@ -334,6 +367,15 @@ struct task *task_create_for_thread(struct thread *t, const char *name) {
     task_fd_init(task);
     task->next = NULL;
     t->task = task;
+    {
+        struct task *parent = task_current();
+        task->ppid = parent ? parent->pid : 0;
+        task->pgid = parent ? parent->pgid : task->pid;
+        task->uid = parent ? parent->uid : 0;
+        task->gid = parent ? parent->gid : 0;
+        task->tty_id = parent ? parent->tty_id : 0;
+        task->umask = parent ? parent->umask : 0022u;
+    }
     if (!g_task_head) {
         g_task_head = g_task_tail = task;
     } else {
@@ -369,6 +411,12 @@ void task_set_user_layout(struct task *t, uint64_t brk_base, uint64_t brk_limit,
 
 void task_clone_from(struct task *dst, const struct task *src) {
     if (!dst || !src) return;
+    dst->ppid = src->pid;
+    dst->pgid = src->pgid;
+    dst->uid = src->uid;
+    dst->gid = src->gid;
+    dst->tty_id = src->tty_id;
+    dst->umask = src->umask;
     if (dst->pid_ns) pidns_unref(dst->pid_ns);
     dst->pid_ns = src->pid_ns;
     if (dst->pid_ns) pidns_ref(dst->pid_ns);
@@ -410,6 +458,8 @@ void task_clone_from(struct task *dst, const struct task *src) {
         resgroup_charge_mem(dst->res_grp, dst->res_mem_bytes);
     }
     dst->pending_signals = 0;
+    dst->exit_code = 0;
+    dst->stopped = 0;
     for (int i = 0; i < 32; ++i) {
         dst->sig_handlers[i] = src->sig_handlers[i];
     }
@@ -845,6 +895,30 @@ struct task *task_find_pid(uint32_t pid) {
     return NULL;
 }
 
+struct task *task_find_child_dead(struct task *parent, int pid) {
+    if (!parent) return NULL;
+    struct task *cur = g_task_head;
+    while (cur) {
+        if (cur->ppid == parent->pid && (pid < 0 || (int)cur->pid == pid)) {
+            if (cur->state == TASK_DEAD) return cur;
+        }
+        cur = cur->next;
+    }
+    return NULL;
+}
+
+struct task *task_find_child_stopped(struct task *parent, int pid) {
+    if (!parent) return NULL;
+    struct task *cur = g_task_head;
+    while (cur) {
+        if (cur->ppid == parent->pid && (pid < 0 || (int)cur->pid == pid)) {
+            if (cur->stopped) return cur;
+        }
+        cur = cur->next;
+    }
+    return NULL;
+}
+
 int task_signal_set_handler(struct task *t, int sig, uint64_t handler) {
     if (!t) return -1;
     if (sig <= 0 || sig >= 32) return -1;
@@ -882,8 +956,20 @@ int task_signal_handle_pending(struct task *t) {
         if (handler == 1) {
             return 0; /* SIG_IGN */
         }
+        if (sig == 19 || sig == 20) { /* SIGSTOP/SIGTSTP */
+            t->stopped = 1;
+            t->state = TASK_BLOCKED;
+            return 2;
+        }
+        if (sig == 18) { /* SIGCONT */
+            t->stopped = 0;
+            if (t->state == TASK_BLOCKED) t->state = TASK_READY;
+            return 0;
+        }
         if (default_action(sig)) {
             log_printf("signal %d default: terminate pid=%u\n", sig, (unsigned)t->pid);
+            t->exit_code = 128u + (uint32_t)sig;
+            t->state = TASK_DEAD;
             return 1;
         }
         return 0;

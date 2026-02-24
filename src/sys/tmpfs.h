@@ -16,5 +16,10 @@ int tmpfs_create(int cwd, const char *path, int is_dir);
 int tmpfs_list_dir(int node, char *out, uint64_t out_len);
 void tmpfs_pwd(int node);
 void tmpfs_ls(int node);
+int tmpfs_get_attr(int node, uint32_t *uid, uint32_t *gid, uint16_t *mode, int *is_dir);
+int tmpfs_set_attr(int node, uint32_t uid, uint32_t gid, uint16_t mode, int set_uid, int set_gid, int set_mode);
+int tmpfs_link_node(int parent, int target, const char *name);
+int tmpfs_symlink_node(int parent, const char *name, const char *target);
+int tmpfs_readlink(int node, char *out, uint64_t out_len);
 
 #endif /* SYS_TMPFS_H */

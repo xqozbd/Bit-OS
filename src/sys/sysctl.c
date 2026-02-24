@@ -8,6 +8,9 @@
 #include "drivers/net/pcnet.h"
 #include "kernel/swap.h"
 #include "sys/acpi.h"
+#include "drivers/ps2/keyboard.h"
+#include "kernel/heap.h"
+#include "kernel/slab.h"
 
 enum { SYSCTL_MAX = 32 };
 
@@ -24,6 +27,25 @@ static size_t g_sysctl_count = 0;
 static void u32_to_str(uint32_t v, char *out, size_t max) {
     if (!out || max == 0) return;
     char tmp[16];
+    size_t n = 0;
+    if (v == 0) {
+        if (max > 1) { out[0] = '0'; out[1] = '\0'; }
+        return;
+    }
+    while (v && n < sizeof(tmp)) {
+        tmp[n++] = (char)('0' + (v % 10u));
+        v /= 10u;
+    }
+    size_t i = 0;
+    while (n && i + 1 < max) {
+        out[i++] = tmp[--n];
+    }
+    out[i] = '\0';
+}
+
+static void u64_to_str(uint64_t v, char *out, size_t max) {
+    if (!out || max == 0) return;
+    char tmp[24];
     size_t n = 0;
     if (v == 0) {
         if (max > 1) { out[0] = '0'; out[1] = '\0'; }
@@ -160,6 +182,149 @@ static int sysctl_get_acpi_tz_present(char *out, size_t max, void *ctx) {
     return 1;
 }
 
+static int sysctl_get_kbd_layout(char *out, size_t max, void *ctx) {
+    (void)ctx;
+    const char *s = kb_layout_name(kb_get_layout());
+    size_t i = 0;
+    while (s[i] && i + 1 < max) {
+        out[i] = s[i];
+        i++;
+    }
+    if (max) out[i] = '\0';
+    return 1;
+}
+
+static int sysctl_set_kbd_layout(const char *val, void *ctx) {
+    (void)ctx;
+    return kb_set_layout_name(val);
+}
+
+static int sysctl_get_kbd_repeat_delay(char *out, size_t max, void *ctx) {
+    (void)ctx;
+    uint32_t delay_ms = 0;
+    kb_get_repeat(&delay_ms, NULL);
+    u32_to_str(delay_ms, out, max);
+    return 1;
+}
+
+static int sysctl_set_kbd_repeat_delay(const char *val, void *ctx) {
+    (void)ctx;
+    uint64_t v = 0;
+    if (!str_to_u64(val, &v)) return 0;
+    uint32_t delay_ms = (v > 60000u) ? 60000u : (uint32_t)v;
+    uint32_t rate_hz = 0;
+    kb_get_repeat(NULL, &rate_hz);
+    kb_set_repeat(delay_ms, rate_hz);
+    return 1;
+}
+
+static int sysctl_get_kbd_repeat_rate(char *out, size_t max, void *ctx) {
+    (void)ctx;
+    uint32_t rate_hz = 0;
+    kb_get_repeat(NULL, &rate_hz);
+    u32_to_str(rate_hz, out, max);
+    return 1;
+}
+
+static int sysctl_set_kbd_repeat_rate(const char *val, void *ctx) {
+    (void)ctx;
+    uint64_t v = 0;
+    if (!str_to_u64(val, &v)) return 0;
+    uint32_t rate_hz = (v > 50u) ? 50u : (uint32_t)v;
+    uint32_t delay_ms = 0;
+    kb_get_repeat(&delay_ms, NULL);
+    kb_set_repeat(delay_ms, rate_hz);
+    return 1;
+}
+
+static int sysctl_get_heap_active_bytes(char *out, size_t max, void *ctx) {
+    (void)ctx;
+    struct heap_stats s;
+    heap_get_stats(&s);
+    u64_to_str(s.active_bytes, out, max);
+    return 1;
+}
+
+static int sysctl_get_heap_active_allocs(char *out, size_t max, void *ctx) {
+    (void)ctx;
+    struct heap_stats s;
+    heap_get_stats(&s);
+    u64_to_str(s.active_allocs, out, max);
+    return 1;
+}
+
+static int sysctl_get_heap_peak_bytes(char *out, size_t max, void *ctx) {
+    (void)ctx;
+    struct heap_stats s;
+    heap_get_stats(&s);
+    u64_to_str(s.peak_bytes, out, max);
+    return 1;
+}
+
+static int sysctl_get_heap_total_allocs(char *out, size_t max, void *ctx) {
+    (void)ctx;
+    struct heap_stats s;
+    heap_get_stats(&s);
+    u64_to_str(s.allocs, out, max);
+    return 1;
+}
+
+static int sysctl_get_heap_total_frees(char *out, size_t max, void *ctx) {
+    (void)ctx;
+    struct heap_stats s;
+    heap_get_stats(&s);
+    u64_to_str(s.frees, out, max);
+    return 1;
+}
+
+static int sysctl_get_heap_failures(char *out, size_t max, void *ctx) {
+    (void)ctx;
+    struct heap_stats s;
+    heap_get_stats(&s);
+    u64_to_str(s.failures, out, max);
+    return 1;
+}
+
+static int sysctl_get_slab_active_bytes(char *out, size_t max, void *ctx) {
+    (void)ctx;
+    struct slab_stats s;
+    slab_get_stats(&s);
+    u64_to_str(s.active_bytes, out, max);
+    return 1;
+}
+
+static int sysctl_get_slab_active_allocs(char *out, size_t max, void *ctx) {
+    (void)ctx;
+    struct slab_stats s;
+    slab_get_stats(&s);
+    u64_to_str(s.active_allocs, out, max);
+    return 1;
+}
+
+static int sysctl_get_slab_peak_bytes(char *out, size_t max, void *ctx) {
+    (void)ctx;
+    struct slab_stats s;
+    slab_get_stats(&s);
+    u64_to_str(s.peak_bytes, out, max);
+    return 1;
+}
+
+static int sysctl_get_slab_total_allocs(char *out, size_t max, void *ctx) {
+    (void)ctx;
+    struct slab_stats s;
+    slab_get_stats(&s);
+    u64_to_str(s.allocs, out, max);
+    return 1;
+}
+
+static int sysctl_get_slab_total_frees(char *out, size_t max, void *ctx) {
+    (void)ctx;
+    struct slab_stats s;
+    slab_get_stats(&s);
+    u64_to_str(s.frees, out, max);
+    return 1;
+}
+
 void sysctl_init(void) {
     g_sysctl_count = 0;
     sysctl_register("log.level", sysctl_get_log_level, sysctl_set_log_level, NULL);
@@ -169,6 +334,20 @@ void sysctl_init(void) {
     sysctl_register("vm.swap.slots", sysctl_get_swap_slots, NULL, NULL);
     sysctl_register("acpi.thermal.present", sysctl_get_acpi_tz_present, NULL, NULL);
     sysctl_register("acpi.thermal.temp_c", sysctl_get_acpi_temp, NULL, NULL);
+    sysctl_register("kbd.layout", sysctl_get_kbd_layout, sysctl_set_kbd_layout, NULL);
+    sysctl_register("kbd.repeat_delay_ms", sysctl_get_kbd_repeat_delay, sysctl_set_kbd_repeat_delay, NULL);
+    sysctl_register("kbd.repeat_rate_hz", sysctl_get_kbd_repeat_rate, sysctl_set_kbd_repeat_rate, NULL);
+    sysctl_register("vm.heap.active_bytes", sysctl_get_heap_active_bytes, NULL, NULL);
+    sysctl_register("vm.heap.active_allocs", sysctl_get_heap_active_allocs, NULL, NULL);
+    sysctl_register("vm.heap.peak_bytes", sysctl_get_heap_peak_bytes, NULL, NULL);
+    sysctl_register("vm.heap.total_allocs", sysctl_get_heap_total_allocs, NULL, NULL);
+    sysctl_register("vm.heap.total_frees", sysctl_get_heap_total_frees, NULL, NULL);
+    sysctl_register("vm.heap.failures", sysctl_get_heap_failures, NULL, NULL);
+    sysctl_register("vm.slab.active_bytes", sysctl_get_slab_active_bytes, NULL, NULL);
+    sysctl_register("vm.slab.active_allocs", sysctl_get_slab_active_allocs, NULL, NULL);
+    sysctl_register("vm.slab.peak_bytes", sysctl_get_slab_peak_bytes, NULL, NULL);
+    sysctl_register("vm.slab.total_allocs", sysctl_get_slab_total_allocs, NULL, NULL);
+    sysctl_register("vm.slab.total_frees", sysctl_get_slab_total_frees, NULL, NULL);
 }
 
 int sysctl_register(const char *key, sysctl_get_fn get, sysctl_set_fn set, void *ctx) {

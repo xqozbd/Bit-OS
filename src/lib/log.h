@@ -22,6 +22,7 @@ int log_is_enabled(enum log_level level);
 void log_printf(const char *fmt, ...);
 void log_printf_level(enum log_level level, const char *fmt, ...);
 void log_printf_verbose(const char *fmt, ...);
+int log_serial_try_getc(void);
 
 #define log_debug(...) log_printf_level(LOG_DEBUG, __VA_ARGS__)
 #define log_info(...)  log_printf_level(LOG_INFO, __VA_ARGS__)

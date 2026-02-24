@@ -130,29 +130,29 @@
 - [x] Bootloader command line parsing and config file support.
 - [x] Userspace cron/task scheduling.
 - [x] RTC alarms + timers for wakeups.
+- [x] Multi-language keyboard layouts.
+- [x] Keyboard key repeat rate configuration.
+- [x] Userland shell scripting support.
+- [x] Environment variable support in shell.
+- [x] Pipes and redirection in shell (`|`, `>`, `<`) with pipe syscalls.
+- [x] Job control (foreground/background, `Ctrl+Z`, `fg/bg`).
+- [x] TTY/PTY support + virtual consoles (multiple VTs).
+- [x] File permission enforcement (`chmod/chown`).
+- [x] User accounts (UID/GID) + login.
+- [x] `umask` support.
+- [x] Sticky bit, SUID, SGID support.
+- [x] File system caching / read-ahead.
+- [x] Directory caching.
+- [x] Inode reference counting.
+- [x] Hard link support.
+- [x] Symbolic link support.
+- [x] Device node permissions.
+- [x] Mounted device auto-detection.
+- [x] Logging subsystem: persistent ring buffer + dump on panic.
+- [x] Debug console over serial.
+- [x] Kernel memory leak detection.
 
 ## Next
-- [ ] Multi-language keyboard layouts.
-- [ ] Keyboard key repeat rate configuration.
-- [ ] Userland shell scripting support.
-- [ ] Environment variable support in shell.
-- [ ] Pipes and redirection in shell (`|`, `>`, `<`) with pipe syscalls.
-- [ ] Job control (foreground/background, `Ctrl+Z`, `fg/bg`).
-- [ ] TTY/PTY support + virtual consoles (multiple VTs).
-- [ ] File permission enforcement (`chmod/chown`).
-- [ ] User accounts (UID/GID) + login.
-- [ ] `umask` support.
-- [ ] Sticky bit, SUID, SGID support.
-- [ ] File system caching / read-ahead.
-- [ ] Directory caching.
-- [ ] Inode reference counting.
-- [ ] Hard link support.
-- [ ] Symbolic link support.
-- [ ] Device node permissions.
-- [ ] Mounted device auto-detection.
-- [ ] Logging subsystem: persistent ring buffer + dump on panic.
-- [ ] Debug console over serial.
-- [ ] Kernel memory leak detection.
 - [ ] Kernel assertions / debug macros.
 - [ ] IRQ load balancing across CPUs.
 - [ ] Scheduler latency reduction.

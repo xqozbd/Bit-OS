@@ -59,6 +59,14 @@ Networking: UDP sockets + socket syscalls, TCP sockets (connect/listen/accept + 
 
 Init & Userland: Simple init process that spawns a user shell (init/busybox/sh), plus a Busybox-style multicall userland suite (`/bin/busybox` with applet links), and a userspace cron service (`/bin/cron`) driven by `/etc/cron.conf`.
 
+Input & Shell: Multi-language keyboard layouts (US/DE), configurable key repeat delay/rate via sysctl, and basic `sh` script execution in busybox.
+
+Shell: Environment variables, pipes and redirection (`|`, `<`, `>`, `>>`), and job control with foreground process groups (`&`, `fg`, `bg`, Ctrl+Z) via pipe/dup2/waitpid/execve and TTY foreground syscalls.
+
+Console & Accounts: Basic TTY/PTY support with virtual console switching (Alt+F1..F4), file permission enforcement with `chmod`/`chown`, and UID/GID-backed login via `/etc/passwd`.
+
+Security & FS: Added `umask`, sticky/SUID/SGID handling, exec permission checks, and simple read-ahead during ext2 file reads.
+
 Kernel Memory: SLAB/SLUB allocator and SLAB caches for VFS nodes and inodes.
 
 USB: xHCI controller init (MMIO map/reset + rings + port status logging) plus device manager staging (enumeration + HID keyboard/mouse and MSC hooks).
@@ -86,6 +94,16 @@ Initramfs content: service config (`/etc/services.conf`), motd, sample files und
 Userland ELF: dynamic linking in the user loader (DT_NEEDED + RELA relocations), shared library loading from `/lib`, and a PIE demo binary (`/bin/hello`) backed by `libu.so`.
 
 VFS: tmpfs-backed `/tmp` mount.
+
+Login & Accounts: login flow now supports first-boot user creation and adding additional users via `/etc/passwd`.
+
+Filesystem: directory lookup cache, inode link-count enforcement on unlink, hard links and symbolic links (with readlink + symlink resolution), plus device node permission defaults for `/dev`.
+
+Boot: auto-detect first valid FAT32/ext2 partition for mounting without hardcoding partition 0.
+
+Logging & Debug: panic-time persistent log ring dump to `/var/log/kpanic.log` (with `/kpanic.log` fallback), and serial debug console input (COM1) wired into the shell.
+
+Diagnostics: kernel heap/slab leak counters with `sysctl` exposure and a `leaks` console command.
 
 
 ## Features Changed:
