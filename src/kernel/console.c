@@ -26,7 +26,10 @@ static void console_idle(void) {
 static int console_poll_char(void) {
     int ch = kb_poll_char();
     if (ch >= 0) return ch;
-    return log_serial_try_getc();
+    ch = log_serial_try_getc();
+    if (ch <= 0) return -1;
+    if (ch == 0xFF) return -1;
+    return ch;
 }
 
 static void console_redraw(const char *line, int len, int cursor, int *last_len, int show_caret);
