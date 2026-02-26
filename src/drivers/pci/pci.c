@@ -3,7 +3,10 @@
 #include <stddef.h>
 
 #include "arch/x86_64/io.h"
+#include "arch/x86_64/cpu_info.h"
 #include "lib/log.h"
+#include "lib/strutil.h"
+#include "sys/boot_params.h"
 
 #define PCI_CONFIG_ADDR 0xCF8
 #define PCI_CONFIG_DATA 0xCFC
@@ -13,6 +16,13 @@ static uint32_t g_driver_count = 0;
 
 static struct pci_device g_devices[256];
 static uint32_t g_device_count = 0;
+static int g_rescan_active = 0;
+static const struct pci_device *g_old_devices = NULL;
+static uint32_t g_old_count = 0;
+static struct pci_device g_rescan_old[256];
+static volatile int g_rescan_busy = 0;
+static uint16_t g_scan_max_bus = 0xFF;
+static int g_scan_max_bus_set = 0;
 
 enum {
     PCI_BAR_IO = 1u << 0,
@@ -23,6 +33,31 @@ enum {
 static inline uint32_t pci_addr(uint8_t bus, uint8_t slot, uint8_t func, uint8_t offset) {
     return (1u << 31) | ((uint32_t)bus << 16) | ((uint32_t)slot << 11) |
            ((uint32_t)func << 8) | (offset & 0xFC);
+}
+
+static uint16_t pci_get_max_bus(void) {
+    if (g_scan_max_bus_set) return g_scan_max_bus;
+    g_scan_max_bus_set = 1;
+    uint16_t max_bus = 0xFF;
+    const char *param = boot_param_get("pci_max_bus");
+    if (param && param[0]) {
+        uint64_t val = 0;
+        if (str_to_u64(param, &val)) {
+            if (val > 0xFFu) val = 0xFFu;
+            max_bus = (uint16_t)val;
+        }
+    } else {
+        char hv[13];
+        cpu_get_hypervisor_vendor(hv);
+        if (hv[0] != '\0') {
+            if (str_eq(hv, "VMwareVMware") || str_eq(hv, "VBoxVBoxVBox")) {
+                max_bus = 0x1Fu;
+            }
+        }
+    }
+    g_scan_max_bus = max_bus;
+    log_printf("PCI: scanning buses 0..%u\n", (unsigned)g_scan_max_bus);
+    return g_scan_max_bus;
 }
 
 uint32_t pci_read_config32(uint8_t bus, uint8_t slot, uint8_t func, uint8_t offset) {
@@ -102,6 +137,19 @@ static int match_driver(const struct pci_driver *drv, const struct pci_device *d
     if (drv->class_code != PCI_CLASS_ANY && drv->class_code != dev->class_code) return 0;
     if (drv->subclass != PCI_SUBCLASS_ANY && drv->subclass != dev->subclass) return 0;
     return 1;
+}
+
+static int pci_dev_same(const struct pci_device *a, const struct pci_device *b) {
+    if (!a || !b) return 0;
+    return a->bus == b->bus && a->slot == b->slot && a->func == b->func;
+}
+
+static int pci_dev_in_list(const struct pci_device *list, uint32_t count, const struct pci_device *dev) {
+    if (!list || !dev) return 0;
+    for (uint32_t i = 0; i < count; ++i) {
+        if (pci_dev_same(&list[i], dev)) return 1;
+    }
+    return 0;
 }
 
 static void pci_probe_device(struct pci_device *dev) {
@@ -232,21 +280,21 @@ static void pci_scan_function(uint8_t bus, uint8_t slot, uint8_t func) {
     dev.msi_enabled = 0;
     pci_read_bars(&dev);
 
-    log_printf("PCI %u:%u.%u vendor=0x%x device=0x%x class=%u/%u\n",
-               dev.bus, dev.slot, dev.func,
-               (unsigned)dev.vendor_id, (unsigned)dev.device_id,
-               (unsigned)dev.class_code, (unsigned)dev.subclass);
-
-    if (dev.msi_cap) {
-        log_printf("PCI %u:%u.%u MSI cap=0x%x\n",
-                   dev.bus, dev.slot, dev.func, (unsigned)dev.msi_cap);
-    }
-
     if (g_device_count < (uint32_t)(sizeof(g_devices) / sizeof(g_devices[0]))) {
         g_devices[g_device_count++] = dev;
     }
 
-    pci_probe_device(&dev);
+    if (!g_rescan_active || !pci_dev_in_list(g_old_devices, g_old_count, &dev)) {
+        log_printf("PCI %u:%u.%u vendor=0x%x device=0x%x class=%u/%u\n",
+                   dev.bus, dev.slot, dev.func,
+                   (unsigned)dev.vendor_id, (unsigned)dev.device_id,
+                   (unsigned)dev.class_code, (unsigned)dev.subclass);
+        if (dev.msi_cap) {
+            log_printf("PCI %u:%u.%u MSI cap=0x%x\n",
+                       dev.bus, dev.slot, dev.func, (unsigned)dev.msi_cap);
+        }
+        pci_probe_device(&dev);
+    }
 }
 
 static void pci_scan_slot(uint8_t bus, uint8_t slot) {
@@ -261,10 +309,88 @@ static void pci_scan_slot(uint8_t bus, uint8_t slot) {
     }
 }
 
-void pci_init(void) {
-    for (uint16_t bus = 0; bus < 256; ++bus) {
+int pci_init(void) {
+    const char *param = boot_param_get("pci");
+    int force_on = (param && (param[0] == '1' || str_eq(param, "on")));
+    if (boot_param_has("nopci") || (param && (param[0] == '0' || str_eq(param, "off")))) {
+        log_printf("PCI: disabled by boot param\n");
+        return 0;
+    }
+    if (!force_on) {
+        char hv[13];
+        cpu_get_hypervisor_vendor(hv);
+        if (hv[0] != '\0' && (str_eq(hv, "VMwareVMware") || str_eq(hv, "VBoxVBoxVBox"))) {
+            log_printf("PCI: disabled on %s (use pci=on to enable)\n", hv);
+            return 0;
+        }
+    }
+    uint16_t max_bus = pci_get_max_bus();
+    for (uint16_t bus = 0; bus <= max_bus; ++bus) {
         for (uint8_t slot = 0; slot < 32; ++slot) {
             pci_scan_slot((uint8_t)bus, slot);
         }
     }
+    return 0;
+}
+
+int pci_rescan(void) {
+    const char *param = boot_param_get("pci");
+    int force_on = (param && (param[0] == '1' || str_eq(param, "on")));
+    if (boot_param_has("nopci") || (param && (param[0] == '0' || str_eq(param, "off")))) {
+        return 0;
+    }
+    if (!force_on) {
+        char hv[13];
+        cpu_get_hypervisor_vendor(hv);
+        if (hv[0] != '\0' && (str_eq(hv, "VMwareVMware") || str_eq(hv, "VBoxVBoxVBox"))) {
+            return 0;
+        }
+    }
+    if (g_rescan_busy) return 0;
+    g_rescan_busy = 1;
+    uint32_t old_count = g_device_count;
+    for (uint32_t i = 0; i < old_count && i < (uint32_t)(sizeof(g_rescan_old) / sizeof(g_rescan_old[0])); ++i) {
+        g_rescan_old[i] = g_devices[i];
+    }
+
+    g_device_count = 0;
+    g_rescan_active = 1;
+    g_old_devices = g_rescan_old;
+    g_old_count = old_count;
+
+    uint16_t max_bus = pci_get_max_bus();
+    for (uint16_t bus = 0; bus <= max_bus; ++bus) {
+        for (uint8_t slot = 0; slot < 32; ++slot) {
+            pci_scan_slot((uint8_t)bus, slot);
+        }
+    }
+
+    g_rescan_active = 0;
+    g_old_devices = NULL;
+    g_old_count = 0;
+
+    int changes = 0;
+    for (uint32_t i = 0; i < g_device_count; ++i) {
+        if (!pci_dev_in_list(g_rescan_old, old_count, &g_devices[i])) {
+            changes++;
+            log_printf("PCI hotplug: added %u:%u.%u vendor=0x%x device=0x%x\n",
+                       g_devices[i].bus, g_devices[i].slot, g_devices[i].func,
+                       (unsigned)g_devices[i].vendor_id, (unsigned)g_devices[i].device_id);
+        }
+    }
+    for (uint32_t i = 0; i < old_count; ++i) {
+        if (!pci_dev_in_list(g_devices, g_device_count, &g_rescan_old[i])) {
+            changes++;
+            log_printf("PCI hotplug: removed %u:%u.%u vendor=0x%x device=0x%x\n",
+                       g_rescan_old[i].bus, g_rescan_old[i].slot, g_rescan_old[i].func,
+                       (unsigned)g_rescan_old[i].vendor_id, (unsigned)g_rescan_old[i].device_id);
+        }
+    }
+    g_rescan_busy = 0;
+    return changes;
+}
+
+int pci_shutdown(void) {
+    g_device_count = 0;
+    return 1;
 }

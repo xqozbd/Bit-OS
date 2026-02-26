@@ -77,3 +77,14 @@ size_t pipe_write(struct pipe *p, const void *buf, size_t len) {
     }
     return n;
 }
+
+size_t pipe_count(struct pipe *p) {
+    if (!p) return 0;
+    return p->count;
+}
+
+size_t pipe_space(struct pipe *p) {
+    if (!p) return 0;
+    if (p->count >= PIPE_BUF_SIZE) return 0;
+    return PIPE_BUF_SIZE - p->count;
+}

@@ -1,6 +1,7 @@
 #include "sys/vfs.h"
 
 #include <stddef.h>
+#include <stdint.h>
 
 #include "sys/initramfs.h"
 #include "sys/fs_mock.h"
@@ -36,6 +37,9 @@ struct vfs_mount {
 static struct vfs_node *g_nodes[VFS_MAX_NODES];
 static int g_node_count = 0;
 static struct mount_namespace g_root_ns;
+
+static int mount_match(const char *path);
+static int vfs_wrap_node(int backend, int node);
 
 static int backend_get_attr(int backend, int node, uint32_t *uid, uint32_t *gid, uint16_t *mode, int *is_dir) {
     if (backend == VFS_BACKEND_DEV) {
@@ -278,6 +282,13 @@ static uint64_t backend_get_size(int backend, int node) {
     return 0;
 }
 
+static int backend_counts_quota(int backend) {
+    if (backend == VFS_BACKEND_EXT2) return 1;
+    if (backend == VFS_BACKEND_FAT32) return 1;
+    if (backend == VFS_BACKEND_BLOCK) return 1;
+    return 0;
+}
+
 static int backend_resolve(int backend, int cwd, const char *path) {
     if (backend == VFS_BACKEND_INITRAMFS) return initramfs_resolve(cwd, path);
     if (backend == VFS_BACKEND_BLOCK) return blockfs_resolve(cwd, path);
@@ -401,6 +412,18 @@ static int vfs_resolve_internal(int cwd, const char *path, int follow_symlinks, 
 int vfs_root_backend(void) {
     struct mount_namespace *ns = vfs_ns_current();
     return ns ? ns->root_backend : VFS_BACKEND_MOCK;
+}
+
+int vfs_node_backend(int node) {
+    if (node < 0 || node >= g_node_count) return -1;
+    if (!g_nodes[node]) return -1;
+    return g_nodes[node]->backend;
+}
+
+int vfs_node_raw(int node) {
+    if (node < 0 || node >= g_node_count) return -1;
+    if (!g_nodes[node]) return -1;
+    return g_nodes[node]->node;
 }
 
 int vfs_get_attr(int node, uint32_t *uid, uint32_t *gid, uint16_t *mode, int *is_dir) {
@@ -566,12 +589,28 @@ int vfs_write_file(int node, const uint8_t *data, uint64_t size, uint64_t offset
     if (node < 0 || node >= g_node_count || !g_nodes[node]) return -1;
     vfs_get_attr(node, NULL, NULL, NULL, NULL);
     if (!vfs_check_perm_node(g_nodes[node], 2)) return -1;
+    struct task *t = task_current();
+    uint64_t old_size = 0;
+    uint64_t growth = 0;
+    if (backend_counts_quota(g_nodes[node]->backend)) {
+        if (offset > UINT64_MAX - size) return -1;
+        old_size = backend_get_size(g_nodes[node]->backend, g_nodes[node]->node);
+        uint64_t end = offset + size;
+        if (end > old_size) growth = end - old_size;
+        if (growth > 0 && t && t->disk_quota_bytes &&
+            (t->disk_used_bytes + growth > t->disk_quota_bytes)) {
+            return -1;
+        }
+    }
     if (journal_can_log(node)) {
         (void)journal_log_write(node, offset, data, (uint32_t)size);
     }
     int rc = backend_write_file(g_nodes[node]->backend, g_nodes[node]->node, data, size, offset);
     if (rc >= 0 && journal_can_log(node)) {
         journal_clear();
+    }
+    if (rc >= 0 && growth > 0 && t) {
+        (void)task_charge_disk(t, growth);
     }
     return rc;
 }
@@ -580,12 +619,35 @@ int vfs_truncate(int node, uint64_t new_size) {
     if (node < 0 || node >= g_node_count || !g_nodes[node]) return -1;
     vfs_get_attr(node, NULL, NULL, NULL, NULL);
     if (!vfs_check_perm_node(g_nodes[node], 2)) return -1;
+    struct task *t = task_current();
+    uint64_t old_size = 0;
+    uint64_t growth = 0;
+    uint64_t shrink = 0;
+    if (backend_counts_quota(g_nodes[node]->backend)) {
+        old_size = backend_get_size(g_nodes[node]->backend, g_nodes[node]->node);
+        if (new_size > old_size) {
+            growth = new_size - old_size;
+            if (growth > 0 && t && t->disk_quota_bytes &&
+                (t->disk_used_bytes + growth > t->disk_quota_bytes)) {
+                return -1;
+            }
+        } else if (new_size < old_size) {
+            shrink = old_size - new_size;
+        }
+    }
     if (journal_can_log(node)) {
         (void)journal_log_truncate(node, new_size);
     }
     int rc = backend_truncate(g_nodes[node]->backend, g_nodes[node]->node, new_size);
     if (rc == 0 && journal_can_log(node)) {
         journal_clear();
+    }
+    if (rc == 0 && t) {
+        if (growth > 0) {
+            (void)task_charge_disk(t, growth);
+        } else if (shrink > 0) {
+            task_uncharge_disk(t, shrink);
+        }
     }
     return rc;
 }

@@ -11,6 +11,9 @@
 #include "drivers/ps2/keyboard.h"
 #include "kernel/heap.h"
 #include "kernel/slab.h"
+#include "kernel/time.h"
+#include "kernel/profiler.h"
+#include "kernel/task.h"
 
 enum { SYSCTL_MAX = 32 };
 
@@ -325,6 +328,81 @@ static int sysctl_get_slab_total_frees(char *out, size_t max, void *ctx) {
     return 1;
 }
 
+static int sysctl_get_disk_quota(char *out, size_t max, void *ctx) {
+    (void)ctx;
+    struct task *t = task_current();
+    u64_to_str(t ? t->disk_quota_bytes : 0, out, max);
+    return 1;
+}
+
+static int sysctl_set_disk_quota(const char *val, void *ctx) {
+    (void)ctx;
+    struct task *t = task_current();
+    if (!t) return 0;
+    uint64_t v = 0;
+    if (!str_to_u64(val, &v)) return 0;
+    t->disk_quota_bytes = v;
+    return 1;
+}
+
+static int sysctl_get_disk_used(char *out, size_t max, void *ctx) {
+    (void)ctx;
+    struct task *t = task_current();
+    u64_to_str(t ? t->disk_used_bytes : 0, out, max);
+    return 1;
+}
+
+static int sysctl_get_prof_ctx(char *out, size_t max, void *ctx) {
+    (void)ctx;
+    u64_to_str(profiler_get(PROF_CTX_SWITCHES), out, max);
+    return 1;
+}
+
+static int sysctl_get_prof_syscalls(char *out, size_t max, void *ctx) {
+    (void)ctx;
+    u64_to_str(profiler_get(PROF_SYSCALLS), out, max);
+    return 1;
+}
+
+static int sysctl_get_prof_faults(char *out, size_t max, void *ctx) {
+    (void)ctx;
+    u64_to_str(profiler_get(PROF_PAGE_FAULTS), out, max);
+    return 1;
+}
+
+static int sysctl_get_prof_evicts(char *out, size_t max, void *ctx) {
+    (void)ctx;
+    u64_to_str(profiler_get(PROF_TASK_EVICTS), out, max);
+    return 1;
+}
+
+static int sysctl_get_tz_offset(char *out, size_t max, void *ctx) {
+    (void)ctx;
+    int v = time_get_tz_offset_minutes();
+    if (v < 0) {
+        if (max < 2) return 0;
+        out[0] = '-';
+        v = -v;
+        u32_to_str((uint32_t)v, out + 1, max - 1);
+        return 1;
+    }
+    u32_to_str((uint32_t)v, out, max);
+    return 1;
+}
+
+static int sysctl_set_tz_offset(const char *val, void *ctx) {
+    (void)ctx;
+    if (!val) return 0;
+    int sign = 1;
+    size_t idx = 0;
+    if (val[0] == '-') { sign = -1; idx = 1; }
+    uint64_t v = 0;
+    if (!str_to_u64(val + idx, &v)) return 0;
+    if (v > 1440u) v = 1440u;
+    time_set_tz_offset_minutes((int)(sign * (int)v));
+    return 1;
+}
+
 void sysctl_init(void) {
     g_sysctl_count = 0;
     sysctl_register("log.level", sysctl_get_log_level, sysctl_set_log_level, NULL);
@@ -337,6 +415,7 @@ void sysctl_init(void) {
     sysctl_register("kbd.layout", sysctl_get_kbd_layout, sysctl_set_kbd_layout, NULL);
     sysctl_register("kbd.repeat_delay_ms", sysctl_get_kbd_repeat_delay, sysctl_set_kbd_repeat_delay, NULL);
     sysctl_register("kbd.repeat_rate_hz", sysctl_get_kbd_repeat_rate, sysctl_set_kbd_repeat_rate, NULL);
+    sysctl_register("time.tz_offset_min", sysctl_get_tz_offset, sysctl_set_tz_offset, NULL);
     sysctl_register("vm.heap.active_bytes", sysctl_get_heap_active_bytes, NULL, NULL);
     sysctl_register("vm.heap.active_allocs", sysctl_get_heap_active_allocs, NULL, NULL);
     sysctl_register("vm.heap.peak_bytes", sysctl_get_heap_peak_bytes, NULL, NULL);
@@ -348,6 +427,12 @@ void sysctl_init(void) {
     sysctl_register("vm.slab.peak_bytes", sysctl_get_slab_peak_bytes, NULL, NULL);
     sysctl_register("vm.slab.total_allocs", sysctl_get_slab_total_allocs, NULL, NULL);
     sysctl_register("vm.slab.total_frees", sysctl_get_slab_total_frees, NULL, NULL);
+    sysctl_register("kern.disk.quota_bytes", sysctl_get_disk_quota, sysctl_set_disk_quota, NULL);
+    sysctl_register("kern.disk.used_bytes", sysctl_get_disk_used, NULL, NULL);
+    sysctl_register("kern.prof.ctx_switches", sysctl_get_prof_ctx, NULL, NULL);
+    sysctl_register("kern.prof.syscalls", sysctl_get_prof_syscalls, NULL, NULL);
+    sysctl_register("kern.prof.page_faults", sysctl_get_prof_faults, NULL, NULL);
+    sysctl_register("kern.prof.task_evicts", sysctl_get_prof_evicts, NULL, NULL);
 }
 
 int sysctl_register(const char *key, sysctl_get_fn get, sysctl_set_fn set, void *ctx) {

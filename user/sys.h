@@ -69,8 +69,37 @@ enum {
     SYS_UMASK = 48,
     SYS_LINK = 49,
     SYS_SYMLINK = 50,
-    SYS_READLINK = 51
+    SYS_READLINK = 51,
+    SYS_USLEEP = 52,
+    SYS_NANOSLEEP = 53,
+    SYS_NICE = 54,
+    SYS_GETNICE = 55,
+    SYS_SETAFFINITY = 56,
+    SYS_GETAFFINITY = 57,
+    SYS_CLOCK_GETTIME = 58,
+    SYS_TIMER_HZ = 59,
+    SYS_UPTIME_TICKS = 60,
+    SYS_POLL = 61
 };
+
+enum {
+    CLOCK_REALTIME = 0,
+    CLOCK_MONOTONIC = 1
+};
+
+struct timespec {
+    uint64_t tv_sec;
+    uint64_t tv_nsec;
+};
+
+struct pollfd {
+    int fd;
+    short events;
+    short revents;
+};
+
+#define POLLIN  0x0001
+#define POLLOUT 0x0004
 
 enum {
     O_RDONLY = 0x0000u,
@@ -115,6 +144,46 @@ static inline long sys_exit(int code) {
 
 static inline long sys_sleep_ms(uint64_t ms) {
     return (long)sys_call6(SYS_SLEEP, ms, 0, 0, 0, 0, 0);
+}
+
+static inline long sys_usleep(uint64_t us) {
+    return (long)sys_call6(SYS_USLEEP, us, 0, 0, 0, 0, 0);
+}
+
+static inline long sys_nanosleep(uint64_t ns) {
+    return (long)sys_call6(SYS_NANOSLEEP, ns, 0, 0, 0, 0, 0);
+}
+
+static inline long sys_nice(int nice) {
+    return (long)sys_call6(SYS_NICE, (uint64_t)nice, 0, 0, 0, 0, 0);
+}
+
+static inline long sys_getnice(void) {
+    return (long)sys_call6(SYS_GETNICE, 0, 0, 0, 0, 0, 0);
+}
+
+static inline long sys_setaffinity(uint32_t mask) {
+    return (long)sys_call6(SYS_SETAFFINITY, mask, 0, 0, 0, 0, 0);
+}
+
+static inline long sys_getaffinity(void) {
+    return (long)sys_call6(SYS_GETAFFINITY, 0, 0, 0, 0, 0, 0);
+}
+
+static inline long sys_clock_gettime(int clk_id, struct timespec *ts) {
+    return (long)sys_call6(SYS_CLOCK_GETTIME, (uint64_t)clk_id, (uint64_t)ts, 0, 0, 0, 0);
+}
+
+static inline long sys_timer_hz(void) {
+    return (long)sys_call6(SYS_TIMER_HZ, 0, 0, 0, 0, 0, 0);
+}
+
+static inline long sys_uptime_ticks(void) {
+    return (long)sys_call6(SYS_UPTIME_TICKS, 0, 0, 0, 0, 0, 0);
+}
+
+static inline long sys_poll(struct pollfd *fds, uint32_t nfds, int timeout_ms) {
+    return (long)sys_call6(SYS_POLL, (uint64_t)fds, nfds, (uint64_t)timeout_ms, 0, 0, 0);
 }
 
 static inline long sys_open(const char *path, uint32_t flags) {

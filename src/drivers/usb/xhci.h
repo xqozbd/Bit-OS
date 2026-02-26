@@ -9,6 +9,7 @@ struct xhci_port_info {
 
 int xhci_init(void);
 int xhci_is_ready(void);
+int xhci_shutdown(void);
 unsigned char xhci_port_count(void);
 int xhci_port_info(unsigned char port_index, struct xhci_port_info *out);
 

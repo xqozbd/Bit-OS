@@ -1,8 +1,10 @@
 #include "sys/journal.h"
 
 #include <stddef.h>
+#include <stdint.h>
 
 #include "kernel/heap.h"
+#include "lib/compat.h"
 #include "lib/strutil.h"
 #include "lib/log.h"
 #include "lib/crc32.h"

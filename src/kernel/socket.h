@@ -28,6 +28,8 @@ int socket_recvfrom(int sid, uint8_t *buf, uint16_t len,
                     uint8_t *out_ip, uint16_t *out_port);
 int socket_recvfrom6(int sid, uint8_t *buf, uint16_t len,
                      uint8_t *out_ip, uint16_t *out_port);
+int socket_can_recv(int sid);
+int socket_can_send(int sid);
 void socket_close(int sid);
 
 void socket_net_rx(const uint8_t src_ip[4], uint16_t src_port,

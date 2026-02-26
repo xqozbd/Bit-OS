@@ -38,7 +38,9 @@ struct pci_driver {
     int (*probe)(const struct pci_device *dev);
 };
 
-void pci_init(void);
+int pci_init(void);
+int pci_rescan(void);
+int pci_shutdown(void);
 void pci_register_driver(struct pci_driver *drv);
 uint32_t pci_device_count(void);
 const struct pci_device *pci_device_at(uint32_t index);

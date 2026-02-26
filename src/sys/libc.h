@@ -33,6 +33,65 @@ static inline long sys_sleep_ms(uint64_t ms) {
     return __syscall6(3, (long)ms, 0, 0, 0, 0, 0);
 }
 
+static inline long sys_usleep(uint64_t us) {
+    return __syscall6(52, (long)us, 0, 0, 0, 0, 0);
+}
+
+static inline long sys_nanosleep(uint64_t ns) {
+    return __syscall6(53, (long)ns, 0, 0, 0, 0, 0);
+}
+
+static inline long sys_nice(int nice) {
+    return __syscall6(54, (long)nice, 0, 0, 0, 0, 0);
+}
+
+static inline long sys_getnice(void) {
+    return __syscall6(55, 0, 0, 0, 0, 0, 0);
+}
+
+static inline long sys_setaffinity(uint32_t mask) {
+    return __syscall6(56, (long)mask, 0, 0, 0, 0, 0);
+}
+
+static inline long sys_getaffinity(void) {
+    return __syscall6(57, 0, 0, 0, 0, 0, 0);
+}
+
+enum {
+    CLOCK_REALTIME = 0,
+    CLOCK_MONOTONIC = 1
+};
+
+struct timespec {
+    uint64_t tv_sec;
+    uint64_t tv_nsec;
+};
+
+struct pollfd {
+    int fd;
+    short events;
+    short revents;
+};
+
+#define POLLIN  0x0001
+#define POLLOUT 0x0004
+
+static inline long sys_clock_gettime(int clk_id, struct timespec *ts) {
+    return __syscall6(58, (long)clk_id, (long)ts, 0, 0, 0, 0);
+}
+
+static inline long sys_timer_hz(void) {
+    return __syscall6(59, 0, 0, 0, 0, 0, 0);
+}
+
+static inline long sys_uptime_ticks(void) {
+    return __syscall6(60, 0, 0, 0, 0, 0, 0);
+}
+
+static inline long sys_poll(struct pollfd *fds, uint32_t nfds, int timeout_ms) {
+    return __syscall6(61, (long)fds, (long)nfds, (long)timeout_ms, 0, 0, 0);
+}
+
 static inline long sys_open(const char *path, uint32_t flags) {
     return __syscall6(5, (long)path, (long)flags, 0, 0, 0, 0);
 }

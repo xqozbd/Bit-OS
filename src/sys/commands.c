@@ -33,6 +33,7 @@
 #include "sys/acpi.h"
 #include "sys/sysctl.h"
 #include "kernel/driver_registry.h"
+#include "kernel/module.h"
 #include "kernel/firewall.h"
 #include "kernel/resgroup.h"
 
@@ -42,6 +43,7 @@ static const char *const g_commands[] = {
     "ping6", "ip6",
     "mount", "umount", "dd",
     "shutdown", "restart", "s3", "s4", "thermal", "acpi", "sysctl", "alarm", "dmesg", "drivers",
+    "modules",
     "fw", "pidns", "mntns", "netns", "rlimit"
 };
 
@@ -80,6 +82,7 @@ static void cmd_help(void) {
     log_printf("  alarm list|set <seconds>|set_epoch <epoch>|clear <id>\n");
     log_printf("  dmesg (dump ring buffer log)\n");
     log_printf("  drivers (driver registry status)\n");
+    log_printf("  modules [load|unload] <name> (kernel modules)\n");
     log_printf("  fw list|clear|add <proto> <src_ip|any> <dst_ip|any> <src_port|any> <dst_port|any> <accept|drop>\n");
     log_printf("  pidns (create a new PID namespace for this shell)\n");
     log_printf("  mntns (create a new mount namespace for this shell)\n");
@@ -304,6 +307,26 @@ static void cmd_ps(void) {
 
 static void cmd_drivers(void) {
     driver_log_status();
+}
+
+static void cmd_modules(int argc, char **argv) {
+    if (argc < 2) {
+        module_log_status();
+        return;
+    }
+    if (argc >= 3 && str_eq(argv[1], "load")) {
+        if (!module_load(argv[2])) {
+            log_printf("modules: load failed: %s\n", argv[2]);
+        }
+        return;
+    }
+    if (argc >= 3 && str_eq(argv[1], "unload")) {
+        if (!module_unload(argv[2])) {
+            log_printf("modules: unload failed: %s\n", argv[2]);
+        }
+        return;
+    }
+    module_log_status();
 }
 
 static void cmd_pidns(void) {
@@ -977,6 +1000,8 @@ int commands_exec(int argc, char **argv, struct command_ctx *ctx) {
         cmd_dmesg();
     } else if (str_eq(argv[0], "drivers")) {
         cmd_drivers();
+    } else if (str_eq(argv[0], "modules")) {
+        cmd_modules(argc, argv);
     } else if (str_eq(argv[0], "fw")) {
         cmd_fw(argc, argv);
     } else if (str_eq(argv[0], "pidns")) {

@@ -6,8 +6,11 @@
 #include "drivers/pci/pci.h"
 #include "lib/compat.h"
 #include "arch/x86_64/paging.h"
+#include "arch/x86_64/cpu_info.h"
 #include "kernel/pmm.h"
 #include "kernel/sleep.h"
+#include "sys/boot_params.h"
+#include "lib/strutil.h"
 #include "lib/log.h"
 
 extern void *memset(void *s, int c, size_t n);
@@ -351,7 +354,14 @@ static int xhci_probe(const struct pci_device *dev) {
     pci_enable_mem(dev);
     pci_enable_bus_mastering(dev);
 
-    g_xhci.mmio = (volatile uint8_t *)(uintptr_t)(paging_hhdm_offset() + (bar0 & ~0xFULL));
+    uint64_t mmio_phys = (bar0 & ~0xFULL);
+    uint64_t mmio_size = dev->bar_size[0] ? (uint64_t)dev->bar_size[0] : 0x1000ull;
+    void *mmio = paging_map_mmio(mmio_phys, mmio_size);
+    if (!mmio) {
+        log_printf("xHCI: mmio map failed\n");
+        return -1;
+    }
+    g_xhci.mmio = (volatile uint8_t *)(uintptr_t)mmio;
     g_xhci.caplen = (uint8_t)mmio_read32(0x00);
     uint32_t hcs1 = mmio_read32(0x04);
     uint32_t dboff = mmio_read32(0x14);
@@ -410,6 +420,21 @@ static int xhci_probe(const struct pci_device *dev) {
 }
 
 int xhci_init(void) {
+    const char *param = boot_param_get("xhci");
+    int force_on = (param && (param[0] == '1' || str_eq(param, "on")));
+    if (param && (param[0] == '0' || str_eq(param, "off"))) {
+        log_printf("xHCI: disabled by boot param\n");
+        g_xhci.ready = 0;
+        return 0;
+    }
+    char hv[13];
+    cpu_get_hypervisor_vendor(hv);
+    if (!force_on && hv[0] != '\0' &&
+        (str_eq(hv, "VMwareVMware") || str_eq(hv, "VBoxVBoxVBox"))) {
+        log_printf("xHCI: disabled on %s (use xhci=on to enable)\n", hv);
+        g_xhci.ready = 0;
+        return 0;
+    }
     g_xhci.ready = 0;
     static struct pci_driver drv = {
         .vendor_id = PCI_VENDOR_ANY,
@@ -425,6 +450,15 @@ int xhci_init(void) {
 
 int xhci_is_ready(void) {
     return g_xhci.ready;
+}
+
+int xhci_shutdown(void) {
+    if (!g_xhci.ready) return 1;
+    g_xhci.ready = 0;
+    g_xhci.slot_id = 0;
+    g_xhci.max_ports = 0;
+    g_xhci.max_slots = 0;
+    return 1;
 }
 
 uint8_t xhci_port_count(void) {

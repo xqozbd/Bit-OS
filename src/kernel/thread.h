@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "lib/compat.h"
+#include "arch/x86_64/fpu.h"
 
 struct task;
 
@@ -33,16 +34,22 @@ struct thread {
     void *arg;
     uint8_t *stack;
     size_t stack_size;
+    uint8_t *stack_guard;
+    size_t stack_guard_size;
     uint32_t cpu;
     uint32_t id;
     uint32_t state;
     uint32_t base_prio;
     uint32_t dyn_prio;
+    int nice;
+    uint32_t cpu_mask;
     uint64_t cpu_ticks;
     uint64_t last_run_tick;
     uint64_t mem_current;
     uint64_t mem_peak;
     uint64_t pml4_phys;
+    uint8_t fpu_state[FPU_STATE_SIZE] __attribute__((aligned(FPU_STATE_ALIGN)));
+    uint8_t fpu_valid;
     struct thread *sleep_next;
     uint64_t sleep_wake_tick;
     uint8_t is_user;
@@ -56,5 +63,6 @@ void thread_exit(void) __attribute__((noreturn));
 int thread_join(struct thread *t);
 void thread_account_alloc(struct thread *t, size_t bytes);
 void thread_account_free(struct thread *t, size_t bytes);
+int thread_is_stack_guard_fault(struct thread *t, uint64_t addr);
 
 #endif /* KERNEL_THREAD_H */

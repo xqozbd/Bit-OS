@@ -3,6 +3,8 @@
 #include <stddef.h>
 
 #include "arch/x86_64/cpu.h"
+#include "arch/x86_64/fpu.h"
+#include "kernel/profiler.h"
 #include "arch/x86_64/gdt.h"
 #include "arch/x86_64/paging.h"
 #include "arch/x86_64/smp.h"
@@ -10,6 +12,7 @@
 #include "kernel/thread.h"
 #include "kernel/sleep.h"
 #include "kernel/task.h"
+#include "kernel/assert.h"
 #include "lib/log.h"
 
 extern void context_switch(struct cpu_context *prev, struct cpu_context *next);
@@ -46,8 +49,30 @@ uint32_t sched_cpu_index(void) {
     return smp_bsp_index();
 }
 
+uint32_t sched_cpu_count(void) {
+    return g_cpu_count;
+}
+
 uint32_t sched_next_tid(void) {
     return __atomic_fetch_add(&g_next_tid, 1u, __ATOMIC_SEQ_CST);
+}
+
+static uint32_t sched_default_mask(void) {
+    if (g_cpu_count == 0) return 1u;
+    if (g_cpu_count >= 32) return 0xFFFFFFFFu;
+    return (1u << g_cpu_count) - 1u;
+}
+
+static uint32_t sched_sanitize_mask(uint32_t mask) {
+    uint32_t all = sched_default_mask();
+    if (mask == 0) return all;
+    mask &= all;
+    return mask ? mask : all;
+}
+
+static int sched_mask_allows(uint32_t mask, uint32_t cpu) {
+    if (cpu >= 32) return 0;
+    return (mask & (1u << cpu)) != 0;
 }
 
 static void runq_push(struct runqueue *rq, struct thread *t) {
@@ -69,6 +94,25 @@ static struct thread *runq_pop_head(struct runqueue *rq) {
     return t;
 }
 
+static struct thread *runq_pop_allowed(struct runqueue *rq, uint32_t cpu) {
+    if (!rq || !rq->head) return NULL;
+    struct thread *prev = NULL;
+    struct thread *cur = rq->head;
+    while (cur) {
+        uint32_t mask = sched_sanitize_mask(cur->cpu_mask);
+        if (sched_mask_allows(mask, cpu)) {
+            if (prev) prev->next = cur->next;
+            else rq->head = cur->next;
+            if (rq->tail == cur) rq->tail = prev;
+            cur->next = NULL;
+            return cur;
+        }
+        prev = cur;
+        cur = cur->next;
+    }
+    return NULL;
+}
+
 static uint32_t runq_len(const struct runqueue *rq) {
     uint32_t n = 0;
     const struct thread *cur = rq ? rq->head : NULL;
@@ -77,6 +121,23 @@ static uint32_t runq_len(const struct runqueue *rq) {
         cur = cur->next;
     }
     return n;
+}
+
+static void runq_remove(struct runqueue *rq, struct thread *t) {
+    if (!rq || !t) return;
+    struct thread *prev = NULL;
+    struct thread *cur = rq->head;
+    while (cur) {
+        if (cur == t) {
+            if (prev) prev->next = cur->next;
+            else rq->head = cur->next;
+            if (rq->tail == cur) rq->tail = prev;
+            cur->next = NULL;
+            return;
+        }
+        prev = cur;
+        cur = cur->next;
+    }
 }
 
 static struct thread *runq_pick(struct runqueue *rq) {
@@ -104,6 +165,22 @@ static struct thread *runq_pick(struct runqueue *rq) {
     return best;
 }
 
+static uint32_t sched_pick_cpu(uint32_t mask) {
+    uint32_t allowed = sched_sanitize_mask(mask);
+    uint32_t best_cpu = sched_cpu_index();
+    if (!g_runq || g_cpu_count == 0) return best_cpu;
+    uint32_t best_len = 0xFFFFFFFFu;
+    for (uint32_t i = 0; i < g_cpu_count; ++i) {
+        if (!sched_mask_allows(allowed, i)) continue;
+        uint32_t len = runq_len(&g_runq[i]);
+        if (len < best_len) {
+            best_len = len;
+            best_cpu = i;
+        }
+    }
+    return best_cpu;
+}
+
 static void sched_balance(void) {
     if (!g_runq || g_cpu_count < 2) return;
     uint32_t cpu = sched_cpu_index();
@@ -123,7 +200,7 @@ static void sched_balance(void) {
     if (best_cpu == cpu) return;
     if (best_len <= local_len + 1) return;
 
-    struct thread *stolen = runq_pop_head(&g_runq[best_cpu]);
+    struct thread *stolen = runq_pop_allowed(&g_runq[best_cpu], cpu);
     if (!stolen) return;
     stolen->cpu = cpu;
     runq_push(&g_runq[cpu], stolen);
@@ -131,9 +208,15 @@ static void sched_balance(void) {
 
 void sched_enqueue(struct thread *t) {
     if (!t) return;
+    KASSERT(t->state != THREAD_DEAD);
     if (!g_runq) return;
+    uint32_t mask = sched_sanitize_mask(t->cpu_mask);
     uint32_t cpu = t->cpu;
+    if (!sched_mask_allows(mask, cpu)) {
+        cpu = sched_pick_cpu(mask);
+    }
     if (cpu >= g_cpu_count) cpu = 0;
+    t->cpu = cpu;
     uint64_t waited = 0;
     if (g_sched_ticks > t->last_run_tick) {
         waited = g_sched_ticks - t->last_run_tick;
@@ -143,6 +226,10 @@ void sched_enqueue(struct thread *t) {
     if (target > g_max_prio) target = g_max_prio;
     t->dyn_prio = target;
     runq_push(&g_runq[cpu], t);
+    struct thread *cur = g_current ? g_current[cpu] : NULL;
+    if (cur && cur->state == THREAD_RUNNING && t->dyn_prio > cur->dyn_prio) {
+        g_need_resched[cpu] = 1;
+    }
 }
 
 struct thread *thread_current(void) {
@@ -189,11 +276,15 @@ void sched_init(void) {
     g_boot_thread.state = THREAD_RUNNING;
     g_boot_thread.base_prio = 3;
     g_boot_thread.dyn_prio = 3;
+    g_boot_thread.nice = 0;
+    g_boot_thread.cpu_mask = sched_default_mask();
     g_boot_thread.cpu_ticks = 0;
     g_boot_thread.last_run_tick = 0;
     g_boot_thread.mem_current = 0;
     g_boot_thread.mem_peak = 0;
     g_boot_thread.pml4_phys = paging_pml4_phys();
+    fpu_state_init(g_boot_thread.fpu_state);
+    g_boot_thread.fpu_valid = 1;
     g_boot_thread.is_user = 0;
     g_boot_thread.name = "bootstrap";
     g_boot_thread.task = NULL;
@@ -228,8 +319,14 @@ void sched_init(void) {
         idle->cpu = i;
         idle->id = sched_next_tid();
         idle->state = THREAD_IDLE;
+        idle->base_prio = 0;
+        idle->dyn_prio = 0;
+        idle->nice = 19;
+        idle->cpu_mask = (1u << i);
         idle->name = "idle";
         idle->pml4_phys = paging_pml4_phys();
+        fpu_state_init(idle->fpu_state);
+        idle->fpu_valid = 1;
         idle->is_user = 0;
         idle->task = NULL;
         g_idle[i] = idle;
@@ -237,6 +334,10 @@ void sched_init(void) {
 
     g_sched_ready = 1;
     log_printf("sched: initialized (cpus=%u)\n", (unsigned)g_cpu_count);
+}
+
+int sched_is_ready(void) {
+    return g_sched_ready != 0;
 }
 
 void sched_tick(void) {
@@ -320,6 +421,9 @@ void sched_yield(void) {
     if (next->pml4_phys && prev->pml4_phys != next->pml4_phys) {
         paging_switch_to(next->pml4_phys);
     }
+    if (prev->fpu_valid) fpu_save(prev->fpu_state);
+    if (next->fpu_valid) fpu_restore(next->fpu_state);
+    profiler_inc(PROF_CTX_SWITCHES);
     context_switch(&prev->ctx, &next->ctx);
     cpu_enable_interrupts();
 }
@@ -367,5 +471,58 @@ void sched_preempt_from_isr(void) {
     if (next->pml4_phys && prev->pml4_phys != next->pml4_phys) {
         paging_switch_to(next->pml4_phys);
     }
+    if (prev->fpu_valid) fpu_save(prev->fpu_state);
+    if (next->fpu_valid) fpu_restore(next->fpu_state);
+    profiler_inc(PROF_CTX_SWITCHES);
     context_switch(&prev->ctx, &next->ctx);
+}
+
+static uint32_t nice_to_prio(int nice) {
+    if (nice < -20) nice = -20;
+    if (nice > 19) nice = 19;
+    if (nice <= -15) return 4;
+    if (nice <= -5) return 3;
+    if (nice <= 4) return 2;
+    if (nice <= 14) return 1;
+    return 0;
+}
+
+int sched_set_nice(struct thread *t, int nice) {
+    if (!t) return 0;
+    if (nice < -20) nice = -20;
+    if (nice > 19) nice = 19;
+    t->nice = nice;
+    t->base_prio = nice_to_prio(nice);
+    t->dyn_prio = t->base_prio;
+    return 1;
+}
+
+int sched_get_nice(const struct thread *t) {
+    if (!t) return 0;
+    return t->nice;
+}
+
+int sched_set_affinity(struct thread *t, uint32_t mask) {
+    if (!t) return 0;
+    uint32_t new_mask = sched_sanitize_mask(mask);
+    if (new_mask == 0) return 0;
+    t->cpu_mask = new_mask;
+    if (!sched_mask_allows(new_mask, t->cpu)) {
+        uint32_t old_cpu = t->cpu;
+        uint32_t new_cpu = sched_pick_cpu(new_mask);
+        t->cpu = new_cpu;
+        if (g_runq && t->state == THREAD_READY && old_cpu < g_cpu_count && new_cpu < g_cpu_count) {
+            runq_remove(&g_runq[old_cpu], t);
+            runq_push(&g_runq[new_cpu], t);
+        }
+        if (g_current && old_cpu < g_cpu_count && g_current[old_cpu] == t) {
+            g_need_resched[old_cpu] = 1;
+        }
+    }
+    return 1;
+}
+
+uint32_t sched_get_affinity(const struct thread *t) {
+    if (!t) return 0;
+    return sched_sanitize_mask(t->cpu_mask);
 }

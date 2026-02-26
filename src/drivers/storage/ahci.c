@@ -7,6 +7,9 @@
 #include "kernel/block.h"
 #include "kernel/pmm.h"
 #include "arch/x86_64/paging.h"
+#include "arch/x86_64/cpu_info.h"
+#include "sys/boot_params.h"
+#include "lib/strutil.h"
 #include "lib/log.h"
 
 extern void *memcpy(void *restrict dest, const void *restrict src, size_t n);
@@ -142,18 +145,22 @@ static inline void *phys_to_virt(uint64_t phys) {
     return (void *)(uintptr_t)(paging_hhdm_offset() + phys);
 }
 
-static void port_stop(volatile struct hba_port *p) {
+static int port_stop(volatile struct hba_port *p) {
     p->cmd &= ~(PORT_CMD_ST | PORT_CMD_FRE);
-    while (p->cmd & (PORT_CMD_FR | PORT_CMD_CR)) {
-        /* wait */
+    for (uint32_t i = 0; i < 1000000u; ++i) {
+        if ((p->cmd & (PORT_CMD_FR | PORT_CMD_CR)) == 0) return 0;
     }
+    return -1;
 }
 
-static void port_start(volatile struct hba_port *p) {
-    while (p->cmd & PORT_CMD_CR) {
+static int port_start(volatile struct hba_port *p) {
+    for (uint32_t i = 0; i < 1000000u; ++i) {
+        if ((p->cmd & PORT_CMD_CR) == 0) break;
     }
+    if (p->cmd & PORT_CMD_CR) return -1;
     p->cmd |= PORT_CMD_FRE;
     p->cmd |= PORT_CMD_ST;
+    return 0;
 }
 
 static int port_wait_ready(volatile struct hba_port *p) {
@@ -281,7 +288,10 @@ static int ahci_init_port(uint32_t port_index) {
     if (det != 3 || ipm != 1) return -1;
     if (p->sig != 0x00000101u) return -1;
 
-    port_stop(p);
+    if (port_stop(p) != 0) {
+        log_printf("AHCI: port %u stop timeout\n", port_index);
+        return -1;
+    }
 
     uint64_t clb_phys = pmm_alloc_frame();
     uint64_t fis_phys = pmm_alloc_frame();
@@ -299,7 +309,10 @@ static int ahci_init_port(uint32_t port_index) {
     memset(phys_to_virt(tbl_phys), 0, 256);
     memset(phys_to_virt(bounce_phys), 0, 512);
 
-    port_start(p);
+    if (port_start(p) != 0) {
+        log_printf("AHCI: port %u start timeout\n", port_index);
+        return -1;
+    }
 
     g_port_ctx.port = p;
     g_port_ctx.cmd_list = (struct hba_cmd_header *)phys_to_virt(clb_phys);
@@ -342,6 +355,19 @@ static int ahci_init_port(uint32_t port_index) {
 }
 
 static int ahci_probe(const struct pci_device *dev) {
+    const char *param = boot_param_get("ahci");
+    int force_on = (param && (param[0] == '1' || str_eq(param, "on")));
+    if (param && (param[0] == '0' || str_eq(param, "off"))) {
+        log_printf("AHCI: disabled by boot param\n");
+        return 0;
+    }
+    char hv[13];
+    cpu_get_hypervisor_vendor(hv);
+    if (!force_on && hv[0] != '\0' &&
+        (str_eq(hv, "VMwareVMware") || str_eq(hv, "VBoxVBoxVBox"))) {
+        log_printf("AHCI: disabled on %s (use ahci=on to enable)\n", hv);
+        return 0;
+    }
     if (dev->class_code != AHCI_CLASS || dev->subclass != AHCI_SUBCLASS) return 0;
     if (dev->prog_if != AHCI_PROGIF) return 0;
 
@@ -354,7 +380,14 @@ static int ahci_probe(const struct pci_device *dev) {
     pci_enable_bus_mastering(dev);
     pci_enable_mem(dev);
 
-    g_hba = (struct hba_mem *)phys_to_virt(bar5 & ~0xFULL);
+    uint64_t abar_phys = bar5 & ~0xFULL;
+    uint64_t abar_size = dev->bar_size[5] ? (uint64_t)dev->bar_size[5] : 0x1000ull;
+    void *abar = paging_map_mmio(abar_phys, abar_size);
+    if (!abar) {
+        log_printf("AHCI: mmio map failed\n");
+        return 0;
+    }
+    g_hba = (struct hba_mem *)abar;
     g_hba->ghc |= HBA_GHC_AE;
     g_hba->ghc |= HBA_GHC_IE;
 

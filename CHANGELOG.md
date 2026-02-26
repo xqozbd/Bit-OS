@@ -105,6 +105,28 @@ Logging & Debug: panic-time persistent log ring dump to `/var/log/kpanic.log` (w
 
 Diagnostics: kernel heap/slab leak counters with `sysctl` exposure and a `leaks` console command.
 
+Kernel: assertion/debug macros (KASSERT/KDEBUG), plus nicer scheduling latency via preempt-on-wake and CPU-aware enqueue.
+
+Scheduling: per-task nice values and CPU affinity masks with syscalls.
+
+Syscalls: added `usleep` and `nanosleep` alongside existing `sleep`.
+
+Init: services now fall back to `/initramfs/etc/services.conf` and `/initramfs/*` binaries if the root FS is missing entries.
+
+Time & Syscalls: userspace timer APIs (`clock_gettime`, `timer_hz`, `uptime_ticks`) with monotonic clocks, `/etc/timezone` parsing plus `time.tz_offset_min` sysctl, and basic `poll` for I/O multiplexing.
+
+Syscall ABI: standardized negative errno returns (POSIX-like) with `ENOSYS` for unknown syscalls.
+
+Filesystem: `/etc` and `/var/log` ensured at boot for configuration and logging.
+
+Modules & Hotplug: kernel module registry with load/unload commands, plus periodic PCI/USB hotplug monitoring and rescan logging.
+
+Security: syscall pointer validation rejects user access to kernel addresses (basic EFAULT gating).
+
+RNG & Devices: simple kernel RNG with `/dev/random` and `/dev/urandom`.
+
+Kernel: FPU state save/restore on task switch.
+
 
 ## Features Changed:
 Build warnings cleaned up (log/acpi prototypes).

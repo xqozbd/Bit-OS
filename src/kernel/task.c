@@ -16,6 +16,8 @@
 #include "kernel/resgroup.h"
 #include "sys/vfs.h"
 #include "kernel/swap.h"
+#include "kernel/profiler.h"
+#include "kernel/core_dump.h"
 #include "sys/mman.h"
 
 /* From memutils.c */
@@ -128,6 +130,21 @@ void task_uncharge_socket(struct task *t, uint32_t count) {
     if (t->res_sock_count < count) t->res_sock_count = 0;
     else t->res_sock_count -= count;
     resgroup_uncharge_socket(t->res_grp, count);
+}
+
+int task_charge_disk(struct task *t, uint64_t bytes) {
+    if (!t || bytes == 0) return 1;
+    if (t->disk_quota_bytes && (t->disk_used_bytes + bytes > t->disk_quota_bytes)) {
+        return 0;
+    }
+    t->disk_used_bytes += bytes;
+    return 1;
+}
+
+void task_uncharge_disk(struct task *t, uint64_t bytes) {
+    if (!t || bytes == 0) return;
+    if (t->disk_used_bytes < bytes) t->disk_used_bytes = 0;
+    else t->disk_used_bytes -= bytes;
 }
 
 void task_fd_init(struct task *t) {
@@ -262,17 +279,27 @@ void task_init_bootstrap(struct thread *t) {
     g_boot_task.res_mem_bytes = 0;
     g_boot_task.res_fd_count = 0;
     g_boot_task.res_sock_count = 0;
+    g_boot_task.disk_quota_bytes = 0;
+    g_boot_task.disk_used_bytes = 0;
     g_boot_task.pending_signals = 0;
     g_boot_task.exit_code = 0;
     g_boot_task.stopped = 0;
+    g_boot_task.core_pending = 0;
+    g_boot_task.core_fault_addr = 0;
+    g_boot_task.core_rip = 0;
+    g_boot_task.core_rsp = 0;
+    g_boot_task.core_err = 0;
+    g_boot_task.core_reason[0] = '\0';
     for (int i = 0; i < 32; ++i) g_boot_task.sig_handlers[i] = 0;
     g_boot_task.ppid = 0;
     g_boot_task.pgid = g_boot_task.pid;
     g_boot_task.uid = 0;
     g_boot_task.gid = 0;
-    g_boot_task.tty_id = 0;
-    g_boot_task.umask = 0022u;
-    g_boot_task.name = t->name ? t->name : "bootstrap";
+      g_boot_task.tty_id = 0;
+      g_boot_task.umask = 0022u;
+      g_boot_task.nice = 0;
+      g_boot_task.cpu_mask = 0;
+      g_boot_task.name = t->name ? t->name : "bootstrap";
     g_boot_task.fds = g_boot_fds;
     g_boot_task.maps = NULL;
     g_boot_task.next = NULL;
@@ -353,13 +380,23 @@ struct task *task_create_for_thread(struct thread *t, const char *name) {
     task->res_mem_bytes = 0;
     task->res_fd_count = 0;
     task->res_sock_count = 0;
-    task->uid = 0;
-    task->gid = 0;
-    task->tty_id = 0;
-    task->umask = 0022u;
+    task->disk_quota_bytes = 0;
+    task->disk_used_bytes = 0;
+      task->uid = 0;
+      task->gid = 0;
+      task->tty_id = 0;
+      task->umask = 0022u;
+      task->nice = 0;
+      task->cpu_mask = 0;
     task->pending_signals = 0;
     task->exit_code = 0;
     task->stopped = 0;
+    task->core_pending = 0;
+    task->core_fault_addr = 0;
+    task->core_rip = 0;
+    task->core_rsp = 0;
+    task->core_err = 0;
+    task->core_reason[0] = '\0';
     for (int i = 0; i < 32; ++i) task->sig_handlers[i] = 0;
     task->name = name ? name : "task";
     task->fds = NULL;
@@ -367,15 +404,22 @@ struct task *task_create_for_thread(struct thread *t, const char *name) {
     task_fd_init(task);
     task->next = NULL;
     t->task = task;
-    {
-        struct task *parent = task_current();
-        task->ppid = parent ? parent->pid : 0;
-        task->pgid = parent ? parent->pgid : task->pid;
-        task->uid = parent ? parent->uid : 0;
-        task->gid = parent ? parent->gid : 0;
-        task->tty_id = parent ? parent->tty_id : 0;
-        task->umask = parent ? parent->umask : 0022u;
-    }
+      {
+          struct task *parent = task_current();
+          task->ppid = parent ? parent->pid : 0;
+          task->pgid = parent ? parent->pgid : task->pid;
+          task->uid = parent ? parent->uid : 0;
+          task->gid = parent ? parent->gid : 0;
+          task->tty_id = parent ? parent->tty_id : 0;
+          task->umask = parent ? parent->umask : 0022u;
+          task->nice = parent ? parent->nice : 0;
+          task->cpu_mask = parent ? parent->cpu_mask : 0;
+          task->disk_quota_bytes = parent ? parent->disk_quota_bytes : 0;
+      }
+      t->nice = task->nice;
+      t->cpu_mask = task->cpu_mask;
+      sched_set_nice(t, t->nice);
+      sched_set_affinity(t, t->cpu_mask);
     if (!g_task_head) {
         g_task_head = g_task_tail = task;
     } else {
@@ -415,8 +459,10 @@ void task_clone_from(struct task *dst, const struct task *src) {
     dst->pgid = src->pgid;
     dst->uid = src->uid;
     dst->gid = src->gid;
-    dst->tty_id = src->tty_id;
-    dst->umask = src->umask;
+      dst->tty_id = src->tty_id;
+      dst->umask = src->umask;
+      dst->nice = src->nice;
+      dst->cpu_mask = src->cpu_mask;
     if (dst->pid_ns) pidns_unref(dst->pid_ns);
     dst->pid_ns = src->pid_ns;
     if (dst->pid_ns) pidns_ref(dst->pid_ns);
@@ -435,8 +481,8 @@ void task_clone_from(struct task *dst, const struct task *src) {
     dst->brk_limit = src->brk_limit;
     dst->user_stack_top = src->user_stack_top;
     dst->user_stack_size = src->user_stack_size;
-    dst->mmap_base = src->mmap_base;
-    dst->mmap_limit = src->mmap_limit;
+      dst->mmap_base = src->mmap_base;
+      dst->mmap_limit = src->mmap_limit;
     if (old_rg) {
         resgroup_uncharge_fd(old_rg, dst->res_fd_count);
         resgroup_uncharge_socket(old_rg, dst->res_sock_count);
@@ -452,6 +498,8 @@ void task_clone_from(struct task *dst, const struct task *src) {
     dst->res_fd_count = src->res_fd_count;
     dst->res_sock_count = src->res_sock_count;
     dst->res_mem_bytes = src->res_mem_bytes;
+    dst->disk_quota_bytes = src->disk_quota_bytes;
+    dst->disk_used_bytes = 0;
     if (dst->res_grp) {
         resgroup_charge_fd(dst->res_grp, dst->res_fd_count);
         resgroup_charge_socket(dst->res_grp, dst->res_sock_count);
@@ -460,6 +508,12 @@ void task_clone_from(struct task *dst, const struct task *src) {
     dst->pending_signals = 0;
     dst->exit_code = 0;
     dst->stopped = 0;
+    dst->core_pending = 0;
+    dst->core_fault_addr = 0;
+    dst->core_rip = 0;
+    dst->core_rsp = 0;
+    dst->core_err = 0;
+    dst->core_reason[0] = '\0';
     for (int i = 0; i < 32; ++i) {
         dst->sig_handlers[i] = src->sig_handlers[i];
     }
@@ -618,6 +672,7 @@ static int evict_one_page(void) {
                     p->swapped = 1;
                     p->swap_slot = slot;
                     p->phys = 0;
+                    profiler_inc(PROF_TASK_EVICTS);
                     return 1;
                 }
                 p = p->next;
@@ -627,6 +682,65 @@ static int evict_one_page(void) {
         t = t->next;
     }
     return 0;
+}
+
+static void task_leak_report(struct task *t) {
+    if (!t || !t->is_user) return;
+    uint32_t maps = 0;
+    uint64_t map_bytes = 0;
+    uint32_t pages = 0;
+    uint32_t swapped = 0;
+    struct task_map *m = t->maps;
+    while (m) {
+        maps++;
+        map_bytes += m->size;
+        struct task_page *p = m->pages;
+        while (p) {
+            pages += p->present ? 1u : 0u;
+            swapped += p->swapped ? 1u : 0u;
+            p = p->next;
+        }
+        m = m->next;
+    }
+    if (maps || pages || swapped) {
+        log_printf("leak-sanitizer: pid=%u maps=%u bytes=%u pages=%u swapped=%u\n",
+                   (unsigned)t->pid, (unsigned)maps, (unsigned)map_bytes,
+                   (unsigned)pages, (unsigned)swapped);
+    }
+}
+
+static void task_release_maps(struct task *t) {
+    if (!t) return;
+    struct task_map *m = t->maps;
+    while (m) {
+        struct task_page *p = m->pages;
+        while (p) {
+            struct task_page *next = p->next;
+            if (p->present) {
+                paging_unmap_user_4k(t->pml4_phys, p->vaddr);
+                pmm_dec_ref(p->phys);
+                task_uncharge_mem(t, 0x1000ull);
+            }
+            if (p->swapped) {
+                swap_free(p->swap_slot);
+            }
+            kfree(p);
+            p = next;
+        }
+        struct task_map *nextm = m->next;
+        kfree(m);
+        m = nextm;
+    }
+    t->maps = NULL;
+}
+int task_reclaim_pages(uint32_t max_pages) {
+    if (max_pages == 0) max_pages = 1;
+    uint32_t freed = 0;
+    while (freed < max_pages) {
+        if (!evict_one_page()) break;
+        freed++;
+    }
+    return (int)freed;
 }
 
 uint64_t task_mmap_anonymous(struct task *t, uint64_t addr, uint64_t len, uint32_t prot, uint32_t flags) {
@@ -791,12 +905,16 @@ int task_handle_page_fault(struct task *t, uint64_t addr, uint64_t error_code) {
     p->present = 1;
     p->phys = phys;
     task_charge_mem(t, 0x1000ull);
-    return 1;
+                    profiler_inc(PROF_TASK_EVICTS);
+                    return 1;
 }
 
 void task_on_thread_exit(struct thread *t) {
     if (!t || !t->task) return;
     t->task->state = TASK_DEAD;
+    task_core_dump_try(t->task);
+    task_leak_report(t->task);
+    task_release_maps(t->task);
     if (t->task->res_grp) {
         resgroup_uncharge_fd(t->task->res_grp, t->task->res_fd_count);
         resgroup_uncharge_socket(t->task->res_grp, t->task->res_sock_count);

@@ -193,6 +193,13 @@ int tcp_recv(int conn_id, uint8_t *buf, uint16_t len) {
     return (int)out;
 }
 
+int tcp_rx_available(int conn_id) {
+    if (conn_id < 0 || conn_id >= TCP_MAX_CONNS) return 0;
+    struct tcp_conn *c = &g_conns[conn_id];
+    if (!c->used) return 0;
+    return c->rx_head != c->rx_tail;
+}
+
 void tcp_close(int conn_id) {
     if (conn_id < 0 || conn_id >= TCP_MAX_CONNS) return;
     struct tcp_conn *c = &g_conns[conn_id];

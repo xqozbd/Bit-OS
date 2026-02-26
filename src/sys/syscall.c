@@ -18,6 +18,7 @@
 #include "kernel/socket.h"
 #include "kernel/dhcp.h"
 #include "kernel/sched.h"
+#include "arch/x86_64/timer.h"
 #include "kernel/tty.h"
 #include "kernel/pty.h"
 #include "sys/journal.h"
@@ -27,11 +28,64 @@
 #include "sys/fs_mock.h"
 #include "kernel/pipe.h"
 #include "drivers/ps2/keyboard.h"
+#include "kernel/time.h"
+#include "kernel/rng.h"
+#include "sys/errno.h"
+#include "sys/pseudofs.h"
+#include "kernel/profiler.h"
+
+#define SYS_ERR(e) ((uint64_t)(-(int)(e)))
 
 extern void *memcpy(void *restrict dest, const void *restrict src, size_t n);
 
 typedef uint64_t (*syscall_fn)(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 static uint32_t g_fg_pgid = 0;
+
+enum {
+    CLOCK_REALTIME = 0,
+    CLOCK_MONOTONIC = 1
+};
+
+struct timespec {
+    uint64_t tv_sec;
+    uint64_t tv_nsec;
+};
+
+struct pollfd {
+    int fd;
+    short events;
+    short revents;
+};
+
+#define POLLIN  0x0001
+#define POLLOUT 0x0004
+
+static int user_range_ok(struct task *t, const void *ptr, uint64_t len) {
+    if (!t || !t->is_user) return 1;
+    if (!ptr) return 0;
+    if (len == 0) return 1;
+    uint64_t addr = (uint64_t)(uintptr_t)ptr;
+    uint64_t limit = t->mmap_limit ? t->mmap_limit : 0xF0000000ull;
+    if (addr < 0x1000ull) return 0;
+    if (addr >= limit) return 0;
+    if (addr + len < addr) return 0;
+    if (addr + len > limit) return 0;
+    return 1;
+}
+
+static int user_str_ok(struct task *t, const char *ptr) {
+    if (!t || !t->is_user) return 1;
+    if (!ptr) return 0;
+    uint64_t addr = (uint64_t)(uintptr_t)ptr;
+    uint64_t limit = t->mmap_limit ? t->mmap_limit : 0xF0000000ull;
+    if (addr < 0x1000ull || addr >= limit) return 0;
+    for (uint64_t i = 0; i < 256; ++i) {
+        uint64_t cur = addr + i;
+        if (cur >= limit) return 0;
+        if (((const char *)ptr)[i] == '\0') return 1;
+    }
+    return 0;
+}
 
 static uint64_t sys_write_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
     (void)a4; (void)a5; (void)a6;
@@ -42,12 +96,19 @@ static uint64_t sys_write_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a
     if (len > 4096) len = 4096;
 
     struct task *t = task_current();
+    if (!user_range_ok(t, buf, len)) return SYS_ERR(EFAULT);
     if (!t) {
         for (uint64_t i = 0; i < len; ++i) log_printf("%c", (char)buf[i]);
         return len;
     }
     struct task_fd *ent = task_fd_get(t, fd);
     if (!ent) return (uint64_t)-1;
+    int backend = vfs_node_backend(ent->node);
+    int raw = vfs_node_raw(ent->node);
+    if (backend == VFS_BACKEND_DEV &&
+        (raw == PSEUDOFS_DEV_RANDOM || raw == PSEUDOFS_DEV_URANDOM)) {
+        return len;
+    }
     if (ent->type == FD_TYPE_CONSOLE) {
         return (uint64_t)tty_write((int)t->tty_id, buf, (size_t)len);
     }
@@ -103,6 +164,206 @@ static uint64_t sys_sleep_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a
     return 0;
 }
 
+static uint64_t sys_usleep_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    uint64_t us = a1;
+    if (us == 0) return 0;
+    uint32_t hz = timer_pit_hz();
+    if (hz == 0) hz = 100;
+    uint64_t ticks = (us * (uint64_t)hz + 999999ull) / 1000000ull;
+    if (ticks == 0) ticks = 1;
+    sleep_ticks(ticks);
+    return 0;
+}
+
+static uint64_t sys_nanosleep_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    uint64_t ns = a1;
+    if (ns == 0) return 0;
+    uint32_t hz = timer_pit_hz();
+    if (hz == 0) hz = 100;
+    uint64_t ticks = (ns * (uint64_t)hz + 999999999ull) / 1000000000ull;
+    if (ticks == 0) ticks = 1;
+    sleep_ticks(ticks);
+    return 0;
+}
+
+static uint64_t sys_nice_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    struct thread *t = thread_current();
+    if (!t) return (uint64_t)-1;
+    int nice = (int)a1;
+    if (!sched_set_nice(t, nice)) return (uint64_t)-1;
+    if (t->task) t->task->nice = sched_get_nice(t);
+    return (uint64_t)sched_get_nice(t);
+}
+
+static uint64_t sys_getnice_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a1; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    struct thread *t = thread_current();
+    if (!t) return (uint64_t)-1;
+    return (uint64_t)sched_get_nice(t);
+}
+
+static uint64_t sys_setaffinity_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    struct thread *t = thread_current();
+    if (!t) return (uint64_t)-1;
+    uint32_t mask = (uint32_t)a1;
+    if (!sched_set_affinity(t, mask)) return (uint64_t)-1;
+    if (t->task) t->task->cpu_mask = sched_get_affinity(t);
+    return (uint64_t)sched_get_affinity(t);
+}
+
+static uint64_t sys_getaffinity_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a1; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    struct thread *t = thread_current();
+    if (!t) return (uint64_t)-1;
+    return (uint64_t)sched_get_affinity(t);
+}
+
+static uint64_t sys_clock_gettime_impl(uint64_t a1, uint64_t a2, uint64_t a3,
+                                       uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a3; (void)a4; (void)a5; (void)a6;
+    int clk_id = (int)a1;
+    struct timespec *ts = (struct timespec *)a2;
+    if (!ts) return SYS_ERR(EINVAL);
+    if (clk_id == CLOCK_REALTIME) {
+        uint64_t ns = time_now_epoch_ns();
+        if (ns == 0) return SYS_ERR(EINVAL);
+        ts->tv_sec = ns / 1000000000ull;
+        ts->tv_nsec = ns % 1000000000ull;
+        return 0;
+    }
+    if (clk_id == CLOCK_MONOTONIC) {
+        uint64_t ns = time_monotonic_ns();
+        ts->tv_sec = ns / 1000000000ull;
+        ts->tv_nsec = ns % 1000000000ull;
+        return 0;
+    }
+    return SYS_ERR(EINVAL);
+}
+
+static uint64_t sys_timer_hz_impl(uint64_t a1, uint64_t a2, uint64_t a3,
+                                  uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a1; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    uint32_t hz = timer_pit_hz();
+    if (hz == 0) hz = 100;
+    return (uint64_t)hz;
+}
+
+static uint64_t sys_uptime_ticks_impl(uint64_t a1, uint64_t a2, uint64_t a3,
+                                      uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a1; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    return timer_uptime_ticks();
+}
+
+static int poll_fd_ready(struct task *t, struct pollfd *pfd) {
+    if (!t || !pfd) return 0;
+    pfd->revents = 0;
+    if (pfd->fd < 0) return 0;
+    struct task_fd *ent = task_fd_get(t, pfd->fd);
+    if (!ent || !ent->used) return -1;
+
+    if ((pfd->events & POLLIN) != 0) {
+        switch (ent->type) {
+        case FD_TYPE_FILE:
+            if ((ent->flags & O_WRONLY) == 0) {
+                uint64_t size = vfs_get_size(ent->node);
+                if (ent->offset < size) pfd->revents |= POLLIN;
+            }
+            break;
+        case FD_TYPE_PIPE:
+            if (pipe_count((struct pipe *)ent->pipe) > 0) pfd->revents |= POLLIN;
+            break;
+        case FD_TYPE_SOCKET:
+            if (socket_can_recv(ent->sock_id)) pfd->revents |= POLLIN;
+            break;
+        case FD_TYPE_CONSOLE:
+            if (tty_can_read((int)t->tty_id)) pfd->revents |= POLLIN;
+            break;
+        case FD_TYPE_PTY_MASTER:
+            if (pty_can_read((struct pty *)ent->pipe, 1)) pfd->revents |= POLLIN;
+            break;
+        case FD_TYPE_PTY_SLAVE:
+            if (pty_can_read((struct pty *)ent->pipe, 0)) pfd->revents |= POLLIN;
+            break;
+        default:
+            break;
+        }
+    }
+
+    if ((pfd->events & POLLOUT) != 0) {
+        switch (ent->type) {
+        case FD_TYPE_FILE:
+            if ((ent->flags & (O_WRONLY | O_RDWR)) != 0) pfd->revents |= POLLOUT;
+            break;
+        case FD_TYPE_PIPE:
+            if (pipe_space((struct pipe *)ent->pipe) > 0) pfd->revents |= POLLOUT;
+            break;
+        case FD_TYPE_SOCKET:
+            if (socket_can_send(ent->sock_id)) pfd->revents |= POLLOUT;
+            break;
+        case FD_TYPE_CONSOLE:
+            pfd->revents |= POLLOUT;
+            break;
+        case FD_TYPE_PTY_MASTER:
+            if (pty_can_write((struct pty *)ent->pipe, 1)) pfd->revents |= POLLOUT;
+            break;
+        case FD_TYPE_PTY_SLAVE:
+            if (pty_can_write((struct pty *)ent->pipe, 0)) pfd->revents |= POLLOUT;
+            break;
+        default:
+            break;
+        }
+    }
+
+    return pfd->revents != 0;
+}
+
+static uint64_t sys_poll_impl(uint64_t a1, uint64_t a2, uint64_t a3,
+                              uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a4; (void)a5; (void)a6;
+    struct pollfd *fds = (struct pollfd *)a1;
+    uint32_t nfds = (uint32_t)a2;
+    int timeout_ms = (int)a3;
+    if (!fds || nfds == 0) return SYS_ERR(EINVAL);
+    if (nfds > 128) return SYS_ERR(EINVAL);
+
+    struct task *t = task_current();
+    if (!t) return SYS_ERR(EINVAL);
+    if (!user_range_ok(t, fds, (uint64_t)nfds * sizeof(struct pollfd))) return SYS_ERR(EFAULT);
+
+    uint32_t hz = timer_pit_hz();
+    if (hz == 0) hz = 100;
+    uint64_t start = timer_uptime_ticks();
+    uint64_t timeout_ticks = 0;
+    int wait_forever = 0;
+    if (timeout_ms < 0) {
+        wait_forever = 1;
+    } else if (timeout_ms > 0) {
+        timeout_ticks = (uint64_t)timeout_ms * (uint64_t)hz;
+        timeout_ticks = (timeout_ticks + 999) / 1000;
+        if (timeout_ticks == 0) timeout_ticks = 1;
+    }
+
+    while (1) {
+        int ready = 0;
+        for (uint32_t i = 0; i < nfds; ++i) {
+            int rc = poll_fd_ready(t, &fds[i]);
+            if (rc < 0) return SYS_ERR(EBADF);
+            if (rc > 0) ready++;
+        }
+        if (ready > 0) return (uint64_t)ready;
+        if (!wait_forever && timeout_ms == 0) return 0;
+        if (!wait_forever) {
+            uint64_t now = timer_uptime_ticks();
+            if ((now - start) >= timeout_ticks) return 0;
+        }
+        sleep_ms(1);
+    }
+}
+
 static uint64_t sys_sbrk_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
     (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
     struct task *task = task_current();
@@ -149,6 +410,8 @@ static uint64_t sys_open_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4
     const char *path = (const char *)a1;
     uint32_t flags = (uint32_t)a2;
     if (!path) return (uint64_t)-1;
+    struct task *t = task_current();
+    if (!user_str_ok(t, path)) return SYS_ERR(EFAULT);
     int node = vfs_resolve(0, path);
     if (node < 0) {
         if (flags & O_CREAT) {
@@ -160,25 +423,23 @@ static uint64_t sys_open_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4
         uint32_t uid = 0, gid = 0;
         uint16_t mode = 0;
         if (!vfs_get_attr(node, &uid, &gid, &mode, NULL)) return (uint64_t)-1;
-        struct task *t = task_current();
         if (t && t->uid != 0) {
             uint16_t bits = 0;
             if (t->uid == uid) bits = (uint16_t)((mode >> 6) & 0x7);
             else if (t->gid == gid) bits = (uint16_t)((mode >> 3) & 0x7);
             else bits = (uint16_t)(mode & 0x7);
-        if ((flags & O_WRONLY) == 0 || (flags & O_RDWR)) {
-            if (!(bits & 4)) return (uint64_t)-1;
-        }
-        if ((flags & O_WRONLY) || (flags & O_RDWR)) {
-            if (!(bits & 2)) return (uint64_t)-1;
-        }
+            if ((flags & O_WRONLY) == 0 || (flags & O_RDWR)) {
+                if (!(bits & 4)) return (uint64_t)-1;
+            }
+            if ((flags & O_WRONLY) || (flags & O_RDWR)) {
+                if (!(bits & 2)) return (uint64_t)-1;
+            }
         }
         if (flags & O_TRUNC) {
             if (vfs_truncate(node, 0) != 0) return (uint64_t)-1;
         }
     }
     if (vfs_is_dir(node)) return (uint64_t)-1;
-    struct task *t = task_current();
     if (!t) return (uint64_t)-1;
     int fd = task_fd_alloc(t, node, flags);
     if (fd < 0) return (uint64_t)-1;
@@ -197,6 +458,7 @@ static uint64_t sys_read_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4
     if (!buf || len == 0) return 0;
     struct task *t = task_current();
     if (!t) return (uint64_t)-1;
+    if (!user_range_ok(t, buf, len)) return SYS_ERR(EFAULT);
     struct task_fd *ent = task_fd_get(t, fd);
     if (!ent) return (uint64_t)-1;
     if (ent->type == FD_TYPE_CONSOLE) {
@@ -247,6 +509,15 @@ static uint64_t sys_read_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4
         }
         return read;
     }
+    if (ent->type == FD_TYPE_FILE) {
+        int backend = vfs_node_backend(ent->node);
+        int raw = vfs_node_raw(ent->node);
+        if (backend == VFS_BACKEND_DEV &&
+            (raw == PSEUDOFS_DEV_RANDOM || raw == PSEUDOFS_DEV_URANDOM)) {
+            rng_fill(buf, (size_t)len);
+            return len;
+        }
+    }
     const uint8_t *data = NULL;
     uint64_t size = 0;
     if (!vfs_read_file(ent->node, &data, &size) || !data) return (uint64_t)-1;
@@ -293,6 +564,7 @@ static uint64_t sys_pipe_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4
     if (!fds) return (uint64_t)-1;
     struct task *t = task_current();
     if (!t) return (uint64_t)-1;
+    if (!user_range_ok(t, fds, 2 * sizeof(int))) return SYS_ERR(EFAULT);
     struct pipe *p = pipe_create();
     if (!p) return (uint64_t)-1;
     int rfd = -1;
@@ -338,6 +610,7 @@ static uint64_t sys_waitpid_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t
     int *status = (int *)a2;
     struct task *self = task_current();
     if (!self) return (uint64_t)-1;
+    if (status && !user_range_ok(self, status, sizeof(int))) return SYS_ERR(EFAULT);
     for (;;) {
         struct task *found = task_find_child_dead(self, pid);
         if (!found) {
@@ -365,6 +638,20 @@ static uint64_t sys_execve_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t 
     struct task *task = task_current();
     if (!t || !task || !path) return (uint64_t)-1;
     if (argc < 0 || argc > 16) return (uint64_t)-1;
+    if (!user_str_ok(task, path)) return SYS_ERR(EFAULT);
+    if (argc > 0) {
+        if (!user_range_ok(task, argv, (uint64_t)argc * sizeof(char *))) return SYS_ERR(EFAULT);
+        for (int i = 0; i < argc; ++i) {
+            if (argv && argv[i] && !user_str_ok(task, argv[i])) return SYS_ERR(EFAULT);
+        }
+    }
+    if (envp) {
+        if (!user_range_ok(task, envp, 16 * sizeof(char *))) return SYS_ERR(EFAULT);
+        for (int i = 0; i < 16; ++i) {
+            if (!envp[i]) break;
+            if (!user_str_ok(task, envp[i])) return SYS_ERR(EFAULT);
+        }
+    }
 
     char **kargv = NULL;
     if (argc > 0) {
@@ -536,12 +823,13 @@ static uint64_t sys_chmod_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a
     const char *path = (const char *)a1;
     uint16_t mode = (uint16_t)a2;
     if (!path) return (uint64_t)-1;
+    struct task *t = task_current();
+    if (!user_str_ok(t, path)) return SYS_ERR(EFAULT);
     int node = vfs_resolve(0, path);
     if (node < 0) return (uint64_t)-1;
     uint32_t uid = 0, gid = 0;
     uint16_t cur_mode = 0;
     if (!vfs_get_attr(node, &uid, &gid, &cur_mode, NULL)) return (uint64_t)-1;
-    struct task *t = task_current();
     if (!t) return (uint64_t)-1;
     if (t->uid != 0 && t->uid != uid) return (uint64_t)-1;
     if (!vfs_chmod(node, mode)) return (uint64_t)-1;
@@ -554,9 +842,10 @@ static uint64_t sys_chown_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a
     uint32_t uid = (uint32_t)a2;
     uint32_t gid = (uint32_t)a3;
     if (!path) return (uint64_t)-1;
+    struct task *t = task_current();
+    if (!user_str_ok(t, path)) return SYS_ERR(EFAULT);
     int node = vfs_resolve(0, path);
     if (node < 0) return (uint64_t)-1;
-    struct task *t = task_current();
     if (!t || t->uid != 0) return (uint64_t)-1;
     if (!vfs_chown(node, uid, gid)) return (uint64_t)-1;
     return 0;
@@ -590,6 +879,8 @@ static uint64_t sys_pty_open_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_
     if (!master_fd || !slave_fd) return (uint64_t)-1;
     struct task *t = task_current();
     if (!t) return (uint64_t)-1;
+    if (!user_range_ok(t, master_fd, sizeof(int))) return SYS_ERR(EFAULT);
+    if (!user_range_ok(t, slave_fd, sizeof(int))) return SYS_ERR(EFAULT);
     struct pty *p = pty_create();
     if (!p) return (uint64_t)-1;
     int mfd = -1, sfd = -1;
@@ -619,6 +910,8 @@ static uint64_t sys_link_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4
     const char *oldpath = (const char *)a1;
     const char *newpath = (const char *)a2;
     if (!oldpath || !newpath) return (uint64_t)-1;
+    struct task *t = task_current();
+    if (!user_str_ok(t, oldpath) || !user_str_ok(t, newpath)) return SYS_ERR(EFAULT);
     int rc = vfs_link(0, oldpath, newpath);
     return (rc < 0) ? (uint64_t)-1 : 0;
 }
@@ -628,6 +921,8 @@ static uint64_t sys_symlink_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t
     const char *target = (const char *)a1;
     const char *linkpath = (const char *)a2;
     if (!target || !linkpath) return (uint64_t)-1;
+    struct task *t = task_current();
+    if (!user_str_ok(t, target) || !user_str_ok(t, linkpath)) return SYS_ERR(EFAULT);
     int rc = vfs_symlink(0, target, linkpath);
     return (rc < 0) ? (uint64_t)-1 : 0;
 }
@@ -638,6 +933,9 @@ static uint64_t sys_readlink_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_
     char *out = (char *)a2;
     uint64_t len = a3;
     if (!path || !out || len == 0) return (uint64_t)-1;
+    struct task *t = task_current();
+    if (!user_str_ok(t, path)) return SYS_ERR(EFAULT);
+    if (!user_range_ok(t, out, len)) return SYS_ERR(EFAULT);
     int rc = vfs_readlink(path, out, (size_t)len);
     return (rc < 0) ? (uint64_t)-1 : (uint64_t)rc;
 }
@@ -691,10 +989,14 @@ static uint64_t sys_fork_impl(struct syscall_frame *f) {
     }
     child->is_user = 1;
     child->pml4_phys = ctx->pml4_phys;
-    if (child->task) {
-        task_clone_from(child->task, ptask);
-        child->task->pml4_phys = ctx->pml4_phys;
-    }
+      if (child->task) {
+          task_clone_from(child->task, ptask);
+          child->task->pml4_phys = ctx->pml4_phys;
+          child->nice = child->task->nice;
+          child->cpu_mask = child->task->cpu_mask;
+          sched_set_nice(child, child->nice);
+          sched_set_affinity(child, child->cpu_mask);
+      }
     paging_switch_to(parent->pml4_phys);
     return (uint64_t)task_pid_ns(child->task);
 }
@@ -707,6 +1009,13 @@ static uint64_t sys_exec_impl(uint64_t a1, uint64_t a2, uint64_t a3) {
     struct task *task = task_current();
     if (!t || !task || !path) return (uint64_t)-1;
     if (argc < 0 || argc > 16) return (uint64_t)-1;
+    if (!user_str_ok(task, path)) return SYS_ERR(EFAULT);
+    if (argc > 0) {
+        if (!user_range_ok(task, argv, (uint64_t)argc * sizeof(char *))) return SYS_ERR(EFAULT);
+        for (int i = 0; i < argc; ++i) {
+            if (argv && argv[i] && !user_str_ok(task, argv[i])) return SYS_ERR(EFAULT);
+        }
+    }
 
     char **kargv = NULL;
     if (argc > 0) {
@@ -833,6 +1142,7 @@ static uint64_t sys_connect_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t
     const uint8_t *ip = (const uint8_t *)a2;
     uint16_t port = (uint16_t)a3;
     struct task *t = task_current();
+    if (ip && !user_range_ok(t, ip, 4)) return SYS_ERR(EFAULT);
     int sid = fd_to_socket(t, fd);
     if (sid < 0) return (uint64_t)-1;
     return (uint64_t)socket_connect(sid, ip, port);
@@ -844,6 +1154,7 @@ static uint64_t sys_connect6_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_
     const uint8_t *ip = (const uint8_t *)a2;
     uint16_t port = (uint16_t)a3;
     struct task *t = task_current();
+    if (ip && !user_range_ok(t, ip, 16)) return SYS_ERR(EFAULT);
     int sid = fd_to_socket(t, fd);
     if (sid < 0) return (uint64_t)-1;
     return (uint64_t)socket_connect6(sid, ip, port);
@@ -857,6 +1168,8 @@ static uint64_t sys_sendto_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t 
     const uint8_t *ip = (const uint8_t *)a4;
     uint16_t port = (uint16_t)a5;
     struct task *t = task_current();
+    if (!user_range_ok(t, buf, len)) return SYS_ERR(EFAULT);
+    if (ip && !user_range_ok(t, ip, 4)) return SYS_ERR(EFAULT);
     int sid = fd_to_socket(t, fd);
     if (sid < 0) return (uint64_t)-1;
     return (uint64_t)socket_sendto(sid, buf, len, ip, port);
@@ -870,6 +1183,8 @@ static uint64_t sys_sendto6_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t
     const uint8_t *ip = (const uint8_t *)a4;
     uint16_t port = (uint16_t)a5;
     struct task *t = task_current();
+    if (!user_range_ok(t, buf, len)) return SYS_ERR(EFAULT);
+    if (ip && !user_range_ok(t, ip, 16)) return SYS_ERR(EFAULT);
     int sid = fd_to_socket(t, fd);
     if (sid < 0) return (uint64_t)-1;
     return (uint64_t)socket_sendto6(sid, buf, len, ip, port);
@@ -883,6 +1198,9 @@ static uint64_t sys_recvfrom_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_
     uint8_t *out_ip = (uint8_t *)a4;
     uint16_t *out_port = (uint16_t *)a5;
     struct task *t = task_current();
+    if (!user_range_ok(t, buf, len)) return SYS_ERR(EFAULT);
+    if (out_ip && !user_range_ok(t, out_ip, 4)) return SYS_ERR(EFAULT);
+    if (out_port && !user_range_ok(t, out_port, sizeof(uint16_t))) return SYS_ERR(EFAULT);
     int sid = fd_to_socket(t, fd);
     if (sid < 0) return (uint64_t)-1;
     return (uint64_t)socket_recvfrom(sid, buf, len, out_ip, out_port);
@@ -896,6 +1214,9 @@ static uint64_t sys_recvfrom6_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64
     uint8_t *out_ip = (uint8_t *)a4;
     uint16_t *out_port = (uint16_t *)a5;
     struct task *t = task_current();
+    if (!user_range_ok(t, buf, len)) return SYS_ERR(EFAULT);
+    if (out_ip && !user_range_ok(t, out_ip, 16)) return SYS_ERR(EFAULT);
+    if (out_port && !user_range_ok(t, out_port, sizeof(uint16_t))) return SYS_ERR(EFAULT);
     int sid = fd_to_socket(t, fd);
     if (sid < 0) return (uint64_t)-1;
     return (uint64_t)socket_recvfrom6(sid, buf, len, out_ip, out_port);
@@ -932,6 +1253,7 @@ static uint64_t sys_send_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4
     const uint8_t *buf = (const uint8_t *)a2;
     uint16_t len = (uint16_t)a3;
     struct task *t = task_current();
+    if (!user_range_ok(t, buf, len)) return SYS_ERR(EFAULT);
     int sid = fd_to_socket(t, fd);
     if (sid < 0) return (uint64_t)-1;
     return (uint64_t)socket_sendto(sid, buf, len, NULL, 0);
@@ -943,6 +1265,7 @@ static uint64_t sys_recv_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4
     uint8_t *buf = (uint8_t *)a2;
     uint16_t len = (uint16_t)a3;
     struct task *t = task_current();
+    if (!user_range_ok(t, buf, len)) return SYS_ERR(EFAULT);
     int sid = fd_to_socket(t, fd);
     if (sid < 0) return (uint64_t)-1;
     return (uint64_t)socket_recvfrom(sid, buf, len, NULL, NULL);
@@ -983,6 +1306,8 @@ static uint64_t sys_getdns_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t 
     (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
     uint8_t *out = (uint8_t *)a1;
     if (!out) return (uint64_t)-1;
+    struct task *t = task_current();
+    if (!user_range_ok(t, out, 4)) return SYS_ERR(EFAULT);
     if (dhcp_get_dns(out) != 0) return (uint64_t)-1;
     return 0;
 }
@@ -993,6 +1318,9 @@ static uint64_t sys_listdir_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t
     char *buf = (char *)a2;
     uint64_t len = a3;
     if (!buf || len == 0) return (uint64_t)-1;
+    struct task *t = task_current();
+    if (!user_str_ok(t, path)) return SYS_ERR(EFAULT);
+    if (!user_range_ok(t, buf, len)) return SYS_ERR(EFAULT);
     int rc = vfs_list_dir(path, buf, len);
     return (rc < 0) ? (uint64_t)-1 : (uint64_t)rc;
 }
@@ -1101,26 +1429,41 @@ static syscall_fn g_syscalls[SYS_MAX] = {
     sys_umask_impl,
     sys_link_impl,
     sys_symlink_impl,
-    sys_readlink_impl
+    sys_readlink_impl,
+    sys_usleep_impl,
+    sys_nanosleep_impl,
+    sys_nice_impl,
+    sys_getnice_impl,
+    sys_setaffinity_impl,
+    sys_getaffinity_impl,
+    sys_clock_gettime_impl,
+    sys_timer_hz_impl,
+    sys_uptime_ticks_impl,
+    sys_poll_impl
 };
 
 uint64_t syscall_dispatch(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3,
                           uint64_t a4, uint64_t a5, uint64_t a6) {
-    if (num >= SYS_MAX) return (uint64_t)-1;
+    if (num >= SYS_MAX) return SYS_ERR(ENOSYS);
     syscall_fn fn = g_syscalls[num];
-    if (!fn) return (uint64_t)-1;
-    return fn(a1, a2, a3, a4, a5, a6);
+    if (!fn) return SYS_ERR(ENOSYS);
+    uint64_t ret = fn(a1, a2, a3, a4, a5, a6);
+    if (ret == (uint64_t)-1) return SYS_ERR(EINVAL);
+    return ret;
 }
 
 uint64_t syscall_handler(struct syscall_frame *f) {
     if (!f) return (uint64_t)-1;
+    profiler_inc(PROF_SYSCALLS);
     uint64_t ret = 0;
     if (f->rax == SYS_FORK) {
         ret = sys_fork_impl(f);
+        if (ret == (uint64_t)-1) ret = SYS_ERR(EINVAL);
         goto signal_check;
     }
     if (f->rax == SYS_EXEC) {
         ret = sys_exec_impl(f->rdi, f->rsi, f->rdx);
+        if (ret == (uint64_t)-1) ret = SYS_ERR(EINVAL);
         goto signal_check;
     }
     ret = syscall_dispatch(f->rax, f->rdi, f->rsi, f->rdx, f->r10, f->r8, f->r9);

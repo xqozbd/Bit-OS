@@ -17,6 +17,7 @@ int tcp_accept(int listener_id);
 int tcp_connect(const uint8_t ip[4], uint16_t port);
 int tcp_send(int conn_id, const uint8_t *data, uint16_t len);
 int tcp_recv(int conn_id, uint8_t *buf, uint16_t len);
+int tcp_rx_available(int conn_id);
 void tcp_close(int conn_id);
 
 void tcp_on_rx(const uint8_t src_ip[4], const uint8_t dst_ip[4],

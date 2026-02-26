@@ -17,14 +17,18 @@ struct usb_dev_stub {
 static struct usb_dev_stub g_devices[16];
 static uint8_t g_device_count;
 static int g_ready;
+static uint8_t g_port_state[32];
+static uint8_t g_port_count;
 
 static void usbmgr_stage1_enumerate(void) {
     g_device_count = 0;
     uint8_t ports = xhci_port_count();
+    g_port_count = ports;
     log_printf("USB: enumerating ports (%u)\n", (unsigned)ports);
     for (uint8_t i = 0; i < ports && g_device_count < (uint8_t)(sizeof(g_devices) / sizeof(g_devices[0])); ++i) {
         struct xhci_port_info info;
         if (xhci_port_info(i, &info) != 0) continue;
+        g_port_state[i] = info.connected ? 1u : 0u;
         if (!info.connected) continue;
         struct usb_dev_stub *dev = &g_devices[g_device_count++];
         dev->port = (uint8_t)(i + 1);
@@ -76,6 +80,8 @@ int usbmgr_init(void) {
         log_printf("USB: xHCI not ready\n");
         return -1;
     }
+    for (uint8_t i = 0; i < (uint8_t)sizeof(g_port_state); ++i) g_port_state[i] = 0;
+    g_port_count = 0;
     usbmgr_stage1_enumerate();
     usbmgr_stage2_hid_keyboard();
     usbmgr_stage3_hid_mouse();
@@ -86,4 +92,42 @@ int usbmgr_init(void) {
 
 int usbmgr_is_ready(void) {
     return g_ready;
+}
+
+void usbmgr_poll(void) {
+    if (!g_ready || !xhci_is_ready()) return;
+    uint8_t ports = xhci_port_count();
+    if (ports > (uint8_t)sizeof(g_port_state)) ports = (uint8_t)sizeof(g_port_state);
+    int changed = 0;
+    for (uint8_t i = 0; i < ports; ++i) {
+        struct xhci_port_info info;
+        if (xhci_port_info(i, &info) != 0) continue;
+        uint8_t connected = info.connected ? 1u : 0u;
+        if (connected != g_port_state[i]) {
+            g_port_state[i] = connected;
+            changed = 1;
+            if (connected) {
+                log_printf("USB: hotplug connect port %u speed=%u\n",
+                           (unsigned)(i + 1), (unsigned)info.speed);
+            } else {
+                log_printf("USB: hotplug disconnect port %u\n", (unsigned)(i + 1));
+            }
+        }
+    }
+    if (ports != g_port_count) {
+        g_port_count = ports;
+        changed = 1;
+    }
+    if (changed) {
+        usbmgr_stage1_enumerate();
+        usbmgr_stage2_hid_keyboard();
+        usbmgr_stage3_hid_mouse();
+        usbmgr_stage4_msc();
+    }
+}
+
+int usbmgr_shutdown(void) {
+    g_ready = 0;
+    g_device_count = 0;
+    return 1;
 }

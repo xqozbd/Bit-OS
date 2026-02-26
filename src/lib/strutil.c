@@ -6,6 +6,7 @@ size_t str_len(const char *s) {
     return n;
 }
 
+// lul im coding this drunk
 int str_eq(const char *a, const char *b) {
     if (!a || !b) return 0;
     while (*a && *b) {

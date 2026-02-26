@@ -151,26 +151,26 @@
 - [x] Logging subsystem: persistent ring buffer + dump on panic.
 - [x] Debug console over serial.
 - [x] Kernel memory leak detection.
+- [x] Kernel assertions / debug macros.
+- [x] IRQ load balancing across CPUs.
+- [x] Scheduler latency reduction.
+- [x] Sleep / usleep / nanosleep system calls.
+- [x] Userland process priority / nice values.
+- [x] Per-task CPU affinity.
+- [x] Kernel timer APIs for userspace.
+- [x] Timezone support.
+- [x] Userspace monotonic clocks.
+- [x] `/etc` configuration filesystem support.
+- [x] Syscall error codes standardized (POSIX-like).
+- [x] select/poll for I/O multiplexing.
+- [x] Kernel module / driver load/unload support.
+- [x] Hot-plug detection for PCI/USB devices.
+- [x] Basic security: deny access to kernel memory from userspace.
+- [x] Simple random number generator (RNG) for kernel/userspace.
+- [x] `/dev/random` and `/dev/urandom` devices.
+- [x] Floating point context save/restore on task switch.
 
 ## Next
-- [ ] Kernel assertions / debug macros.
-- [ ] IRQ load balancing across CPUs.
-- [ ] Scheduler latency reduction.
-- [ ] Sleep / usleep / nanosleep system calls.
-- [ ] Userland process priority / nice values.
-- [ ] Per-task CPU affinity.
-- [ ] Kernel timer APIs for userspace.
-- [ ] Timezone support.
-- [ ] Userspace monotonic clocks.
-- [ ] `/etc` configuration filesystem support.
-- [ ] Syscall error codes standardized (POSIX-like).
-- [ ] select/poll for I/O multiplexing.
-- [ ] Kernel module / driver load/unload support.
-- [ ] Hot-plug detection for PCI/USB devices.
-- [ ] Basic security: deny access to kernel memory from userspace.
-- [ ] Simple random number generator (RNG) for kernel/userspace.
-- [ ] `/dev/random` and `/dev/urandom` devices.
-- [ ] Floating point context save/restore on task switch.
 - [ ] SSE/AVX context support.
 - [ ] Memory leak sanitizer for userspace processes.
 - [ ] Kernel profiling counters.

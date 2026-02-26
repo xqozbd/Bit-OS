@@ -82,3 +82,9 @@ size_t tty_write(int tty_id, const uint8_t *buf, size_t len) {
     }
     return n;
 }
+
+int tty_can_read(int tty_id) {
+    if (tty_id < 0 || tty_id >= TTY_MAX) return 0;
+    struct tty *t = &g_ttys[tty_id];
+    return t->in_tail != t->in_head;
+}

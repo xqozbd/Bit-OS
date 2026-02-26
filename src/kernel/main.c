@@ -9,6 +9,7 @@
 #include "kernel/tty.h"
 #include "arch/x86_64/cpu.h"
 #include "arch/x86_64/cpu_info.h"
+#include "arch/x86_64/fpu.h"
 #include "drivers/video/fb_printf.h"
 #include "kernel/heap.h"
 #include "arch/x86_64/idt.h"
@@ -38,6 +39,8 @@
 #include "drivers/pci/pci.h"
 #include "drivers/net/pcnet.h"
 #include "drivers/usb/xhci.h"
+#include "kernel/time.h"
+#include "lib/strutil.h"
 #include "drivers/usb/usbmgr.h"
 #include "kernel/time.h"
 #include "kernel/pstate.h"
@@ -45,7 +48,10 @@
 #include "kernel/power.h"
 #include "kernel/socket.h"
 #include "kernel/driver_registry.h"
+#include "kernel/module.h"
 #include "kernel/init.h"
+#include "kernel/hotplug.h"
+#include "kernel/memwatch.h"
 #include "kernel/dhcp.h"
 #include "kernel/firewall.h"
 #include "sys/boot_params.h"
@@ -54,6 +60,51 @@
 #include "kernel/crash_dump.h"
 #include "sys/tmpfs.h"
 #include "kernel/swap.h"
+#include "kernel/rng.h"
+
+static void ensure_dir(const char *path) {
+    if (!path || !path[0]) return;
+    int node = vfs_resolve(0, path);
+    if (node < 0) {
+        (void)vfs_create(0, path, 1);
+    }
+}
+
+static int parse_tz_offset(const char *buf, uint64_t len, int *out_minutes) {
+    if (!buf || !out_minutes || len == 0) return 0;
+    uint64_t i = 0;
+    while (i < len && (buf[i] == ' ' || buf[i] == '\t' || buf[i] == '\n' || buf[i] == '\r')) i++;
+    if (i >= len) return 0;
+    if (i + 3 < len && buf[i] == 'U' && buf[i + 1] == 'T' && buf[i + 2] == 'C') i += 3;
+    int sign = 1;
+    if (i < len && buf[i] == '+') { sign = 1; i++; }
+    else if (i < len && buf[i] == '-') { sign = -1; i++; }
+    uint64_t val = 0;
+    int got = 0;
+    while (i < len && buf[i] >= '0' && buf[i] <= '9') {
+        got = 1;
+        val = val * 10u + (uint64_t)(buf[i] - '0');
+        i++;
+    }
+    if (!got) return 0;
+    if (val <= 24u) val = val * 60u;
+    if (val > 1440u) val = 1440u;
+    *out_minutes = (int)(sign * (int)val);
+    return 1;
+}
+
+static void load_timezone_from_etc(void) {
+    int node = vfs_resolve(0, "/etc/timezone");
+    if (node < 0) return;
+    const uint8_t *data = NULL;
+    uint64_t size = 0;
+    if (vfs_read_file(node, &data, &size) != 0 || !data || size == 0) return;
+    int offset = 0;
+    if (parse_tz_offset((const char *)data, size, &offset)) {
+        time_set_tz_offset_minutes(offset);
+        log_printf("time: tz offset %d min\n", offset);
+    }
+}
 
 /* Bootstrap stack: keep it inside the kernel image so it's mapped in our page tables. */
 #define KSTACK_SIZE (64 * 1024)
@@ -92,6 +143,7 @@ static void kmain_stage2(void) {
     log_init_serial();
     log_printf("Boot: serial logger ready (COM1)\n");
     driver_registry_init();
+    module_registry_init();
     uint32_t drv_order = 0;
     int drv_idt = driver_register("idt", drv_order++);
     int drv_fb = driver_register("framebuffer", drv_order++);
@@ -116,6 +168,11 @@ static void kmain_stage2(void) {
     int drv_sched = driver_register("sched", drv_order++);
     int drv_console = driver_register("console", drv_order++);
     int drv_mouse = driver_register("mouse", drv_order++);
+    module_register("pci", pci_init, pci_shutdown);
+    module_register("xhci", xhci_init, xhci_shutdown);
+    module_register("usbmgr", usbmgr_init, usbmgr_shutdown);
+    module_register("hotplug", hotplug_start, hotplug_stop);
+    module_register("memwatch", memwatch_start, memwatch_stop);
     watchdog_early_stage("kmain_start");
     log_printf("Boot: initializing GDT/TSS...\n");
     gdt_init();
@@ -124,6 +181,7 @@ static void kmain_stage2(void) {
     log_printf("Boot: enabling CPU SSE...\n");
     cpu_enable_sse();
     log_printf("Boot: CPU SSE enabled\n");
+    fpu_init();
     log_printf("Boot: initializing IDT...\n");
     idt_init();
     watchdog_early_stage("idt_init");
@@ -141,6 +199,27 @@ static void kmain_stage2(void) {
         log_printf("Boot: cmdline=%s\n", exec_cmdline_request.response->cmdline);
     } else {
         boot_params_init(NULL);
+    }
+    int safe_mode = 0;
+    const char *safe_param = boot_param_get("safe");
+    if (safe_param) {
+        if ((safe_param[0] == '0' && safe_param[1] == '\0') || str_eq(safe_param, "off")) {
+            safe_mode = 0;
+        } else {
+            safe_mode = 1;
+        }
+    } else if (boot_param_has("nomod")) {
+        safe_mode = 1;
+    } else {
+        char hv[13];
+        cpu_get_hypervisor_vendor(hv);
+        if (hv[0] != '\0' && (str_eq(hv, "VMwareVMware") || str_eq(hv, "VBoxVBoxVBox"))) {
+            safe_mode = 1;
+            log_printf("Boot: safe mode auto-enabled on %s\n", hv);
+        }
+    }
+    if (safe_mode) {
+        log_printf("Boot: safe mode enabled (modules disabled)\n");
     }
     const char *log_mode = boot_param_get("log");
     if (log_mode) {
@@ -191,6 +270,9 @@ static void kmain_stage2(void) {
     driver_set_status_idx(drv_banner, DRIVER_STATUS_OK, NULL);
     log_printf("Boot: showing boot screen...\n");
     boot_screen_print_loading();
+    if (safe_mode) {
+        fb_printf("SAFE MODE: modules disabled\n");
+    }
 
     boot_screen_set_status("pmm");
     log_printf("Boot: initializing PMM...\n");
@@ -223,10 +305,18 @@ static void kmain_stage2(void) {
     }
     boot_screen_set_status("ahci");
     log_printf("Boot: initializing AHCI...\n");
-    ahci_init();
+    if (!safe_mode) {
+        ahci_init();
+    } else {
+        log_printf("Boot: safe mode, skipping AHCI\n");
+    }
     boot_screen_set_status("ata");
     log_printf("Boot: initializing ATA...\n");
-    ata_init();
+    if (!safe_mode) {
+        ata_init();
+    } else {
+        log_printf("Boot: safe mode, skipping ATA\n");
+    }
     if (ata_has_device()) {
         driver_set_status_idx(drv_ata, DRIVER_STATUS_OK, NULL);
     } else {
@@ -244,13 +334,27 @@ static void kmain_stage2(void) {
     log_printf("Boot: initializing PCNet driver...\n");
     pcnet_init();
     log_printf("Boot: registering xHCI driver...\n");
-    xhci_init();
+    boot_screen_set_status("xhci");
+    log_printf("Boot: loading xHCI module...\n");
+    if (!safe_mode) {
+        module_load("xhci");
+    } else {
+        log_printf("Boot: safe mode, skipping xHCI module\n");
+    }
+    log_printf("Boot: xHCI module returned\n");
     watchdog_early_stage("pcnet_init");
     watchdog_log_stage("pcnet_init");
     log_printf("Boot: PCNet ready\n");
-    boot_screen_set_status("pci");
+    boot_screen_set_status("pci-scan");
     log_printf("Boot: scanning PCI...\n");
-    pci_init();
+    log_printf("Boot: loading PCI module...\n");
+    if (!safe_mode) {
+        module_load("pci");
+    } else {
+        log_printf("Boot: safe mode, skipping PCI module\n");
+    }
+    log_printf("Boot: PCI module returned\n");
+    boot_screen_set_status("pci-done");
     watchdog_early_stage("pci_init");
     watchdog_log_stage("pci_init");
     log_printf("Boot: PCI scan complete\n");
@@ -270,11 +374,17 @@ static void kmain_stage2(void) {
     }
     if (xhci_is_ready()) {
         driver_set_status_idx(drv_xhci, DRIVER_STATUS_OK, NULL);
+        boot_screen_set_status("usbmgr");
         log_printf("Boot: starting USB manager...\n");
-        if (usbmgr_init() == 0) {
+        log_printf("Boot: loading USB manager module...\n");
+        if (!safe_mode && module_load("usbmgr")) {
             driver_set_status_idx(drv_usbmgr, DRIVER_STATUS_OK, NULL);
         } else {
-            driver_set_status_idx(drv_usbmgr, DRIVER_STATUS_FAIL, "init failed");
+            if (safe_mode) {
+                driver_set_status_idx(drv_usbmgr, DRIVER_STATUS_SKIPPED, "safe mode");
+            } else {
+                driver_set_status_idx(drv_usbmgr, DRIVER_STATUS_FAIL, "init failed");
+            }
         }
     } else {
         driver_set_status_idx(drv_xhci, DRIVER_STATUS_SKIPPED, "not found");
@@ -292,7 +402,11 @@ static void kmain_stage2(void) {
     }
     boot_screen_set_status("acpi");
     log_printf("Boot: initializing ACPI...\n");
-    acpi_init();
+    if (!safe_mode) {
+        acpi_init();
+    } else {
+        log_printf("Boot: safe mode, skipping ACPI\n");
+    }
     watchdog_early_stage("acpi_init");
     watchdog_log_stage("acpi_init");
     acpi_log_status();
@@ -305,7 +419,11 @@ static void kmain_stage2(void) {
     power_init();
     boot_screen_set_status("pstate");
     log_printf("Boot: initializing P-states...\n");
-    pstate_init();
+    if (!safe_mode) {
+        pstate_init();
+    } else {
+        log_printf("Boot: safe mode, skipping P-states\n");
+    }
     watchdog_early_stage("pstate_init");
     watchdog_log_stage("pstate_init");
     log_printf("Boot: P-states ready\n");
@@ -356,11 +474,11 @@ static void kmain_stage2(void) {
         log_printf("Boot: VFS root set to initramfs\n");
         vfs_mount("/mock", VFS_BACKEND_MOCK, fs_root());
         log_printf("Boot: mounted mock FS at /mock\n");
-    } else {
-        if (ext2_ready) {
-            vfs_set_root(VFS_BACKEND_EXT2, ext2_root());
-            log_printf("Boot: VFS root set to ext2\n");
-            journal_init();
+      } else {
+          if (ext2_ready) {
+              vfs_set_root(VFS_BACKEND_EXT2, ext2_root());
+              log_printf("Boot: VFS root set to ext2\n");
+              journal_init();
         } else if (fat_ready) {
             vfs_set_root(VFS_BACKEND_FAT32, fat32_root());
             log_printf("Boot: VFS root set to FAT32\n");
@@ -368,11 +486,15 @@ static void kmain_stage2(void) {
             vfs_set_root(VFS_BACKEND_BLOCK, blockfs_root());
             log_printf("Boot: VFS root set to block device\n");
         } else {
-            vfs_set_root(VFS_BACKEND_MOCK, fs_root());
-            log_printf("Boot: VFS root set to mock FS\n");
-        }
-    }
-    if (boot_params_load_config("/etc/boot.conf")) {
+              vfs_set_root(VFS_BACKEND_MOCK, fs_root());
+              log_printf("Boot: VFS root set to mock FS\n");
+          }
+      }
+      ensure_dir("/etc");
+      ensure_dir("/var");
+      ensure_dir("/var/log");
+      load_timezone_from_etc();
+      if (boot_params_load_config("/etc/boot.conf")) {
         log_printf("Boot: loaded config /etc/boot.conf\n");
     } else if (boot_params_load_config("/boot/boot.conf")) {
         log_printf("Boot: loaded config /boot/boot.conf\n");
@@ -433,6 +555,13 @@ static void kmain_stage2(void) {
     timer_switch_to_apic(100);
     watchdog_checkpoint("apic_done");
     time_init();
+    rng_init();
+    if (!safe_mode) {
+        module_load("hotplug");
+        module_load("memwatch");
+    } else {
+        log_printf("Boot: safe mode, skipping hotplug/memwatch\n");
+    }
     log_printf("Boot: preparing console screen...\n");
     boot_delay_ms(1000);
     fb_clear();

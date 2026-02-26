@@ -89,6 +89,12 @@ void sleep_tick(void) {
 
 void sleep_ticks(uint64_t ticks) {
     if (ticks == 0) return;
+    if (!sched_is_ready()) {
+        for (volatile uint64_t spin = 0; spin < ticks * 20000ull; ++spin) {
+            cpu_pause();
+        }
+        return;
+    }
     struct thread *t = thread_current();
     if (!t) return;
 

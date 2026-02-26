@@ -9,6 +9,7 @@ static uint64_t g_tick_base = 0;
 static uint32_t g_tick_hz = 0;
 static int g_time_ok = 0;
 static uint64_t g_last_alarm_check = 0;
+static int g_tz_offset_min = 0;
 
 #define TIME_MAX_ALARMS 8
 struct time_alarm {
@@ -106,10 +107,35 @@ uint64_t time_now_epoch(void) {
     return g_epoch_base + (ticks / (uint64_t)g_tick_hz);
 }
 
+uint64_t time_now_epoch_ns(void) {
+    if (!g_time_ok) return 0;
+    uint64_t ticks = timer_uptime_ticks() - g_tick_base;
+    uint64_t secs = ticks / (uint64_t)g_tick_hz;
+    uint64_t rem = ticks % (uint64_t)g_tick_hz;
+    uint64_t nsec = (rem * 1000000000ull) / (uint64_t)g_tick_hz;
+    return (g_epoch_base + secs) * 1000000000ull + nsec;
+}
+
+uint64_t time_now_local_epoch(void) {
+    uint64_t epoch = time_now_epoch();
+    if (epoch == 0) return 0;
+    int64_t offset = (int64_t)g_tz_offset_min * 60;
+    int64_t local = (int64_t)epoch + offset;
+    if (local < 0) return 0;
+    return (uint64_t)local;
+}
+
+uint64_t time_monotonic_ns(void) {
+    uint32_t hz = timer_pit_hz();
+    if (hz == 0) hz = 100;
+    uint64_t ticks = timer_uptime_ticks();
+    return (ticks * 1000000000ull) / (uint64_t)hz;
+}
+
 int time_get_string(char out[20]) {
     if (!out) return -1;
     if (!g_time_ok) return -2;
-    uint64_t epoch = time_now_epoch();
+    uint64_t epoch = time_now_local_epoch();
     struct rtc_time t;
     epoch_to_rtc(epoch, &t);
     out[0] = (char)('0' + (t.year / 1000) % 10);
@@ -133,6 +159,16 @@ int time_get_string(char out[20]) {
     out[18] = (char)('0' + (t.second % 10));
     out[19] = '\0';
     return 0;
+}
+
+void time_set_tz_offset_minutes(int minutes) {
+    if (minutes < -720) minutes = -720;
+    if (minutes > 840) minutes = 840;
+    g_tz_offset_min = minutes;
+}
+
+int time_get_tz_offset_minutes(void) {
+    return g_tz_offset_min;
 }
 
 int time_alarm_set_epoch(uint64_t epoch) {

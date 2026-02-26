@@ -9,6 +9,7 @@ void *kmalloc(size_t size);
 void kfree(void *ptr);
 void *krealloc(void *ptr, size_t size);
 int heap_check(void);
+void heap_reclaim(void);
 
 struct heap_stats {
     uint64_t allocs;

@@ -7,6 +7,11 @@
 #define PSEUDOFS_PROC 2
 #define PSEUDOFS_SYS 3
 
+#define PSEUDOFS_DEV_NULL 1
+#define PSEUDOFS_DEV_TTY0 2
+#define PSEUDOFS_DEV_RANDOM 3
+#define PSEUDOFS_DEV_URANDOM 4
+
 int pseudofs_is_ready(int fs_id);
 int pseudofs_root(int fs_id);
 int pseudofs_resolve(int fs_id, int cwd, const char *path);

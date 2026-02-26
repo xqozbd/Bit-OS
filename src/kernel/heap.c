@@ -136,6 +136,11 @@ static void heap_trim(void) {
     }
 }
 
+void heap_reclaim(void) {
+    heap_coalesce();
+    heap_trim();
+}
+
 static void heap_track_alloc(size_t size) {
     g_heap_allocs++;
     g_heap_active_allocs++;

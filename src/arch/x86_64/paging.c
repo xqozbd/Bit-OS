@@ -227,6 +227,17 @@ uint64_t paging_pml4_phys(void) {
     return g_pml4_phys;
 }
 
+void *paging_map_mmio(uint64_t phys, uint64_t size) {
+    if (!g_pml4 || g_hhdm_offset == 0) return NULL;
+    if (size == 0) size = PAGE_SIZE;
+    uint64_t start = phys & ~(PAGE_SIZE - 1);
+    uint64_t end = align_up_u64(phys + size, PAGE_SIZE);
+    for (uint64_t p = start; p < end; p += PAGE_SIZE) {
+        paging_map_4k(g_hhdm_offset + p, p, PTE_NX);
+    }
+    return (void *)(uintptr_t)(g_hhdm_offset + phys);
+}
+
 void paging_switch_to(uint64_t pml4_phys) {
     if (pml4_phys == 0) return;
     load_cr3(pml4_phys);

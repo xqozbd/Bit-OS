@@ -15,7 +15,9 @@
 #include "kernel/sched.h"
 #include "kernel/thread.h"
 #include "kernel/task.h"
+#include "kernel/core_dump.h"
 #include "arch/x86_64/paging.h"
+#include "kernel/profiler.h"
 
 /* IDT + exceptions */
 struct idt_entry {
@@ -124,6 +126,7 @@ void isr_err_14(struct interrupt_frame *frame, uint64_t error_code) {
     uint64_t cr2 = read_cr2();
     struct thread *t = thread_current();
     int is_user = (((frame->cs & 0x3u) == 0x3u) || (t && t->is_user));
+    profiler_inc(PROF_PAGE_FAULTS);
     log_printf("\nEXCEPTION 14 err=0x%x", (unsigned)error_code);
     log_printf(" cr2=%p rip=%p cs=0x%x rflags=0x%x rsp=%p ss=0x%x\n",
                (void *)cr2, (void *)frame->rip, (unsigned)frame->cs,
@@ -144,10 +147,15 @@ void isr_err_14(struct interrupt_frame *frame, uint64_t error_code) {
         if (task_handle_page_fault(t->task, cr2, error_code)) {
             return;
         }
+        task_core_mark(t->task, "page-fault", cr2, frame->rip, frame->rsp, error_code);
         log_printf("PF: killing userspace task tid=%u name=%s\n",
                    (unsigned)t->id, t->name ? t->name : "(null)");
         thread_exit();
         __builtin_unreachable();
+    }
+    if (t && thread_is_stack_guard_fault(t, cr2)) {
+        log_printf("PF: kernel stack overflow (tid=%u name=%s)\n",
+                   (unsigned)t->id, t->name ? t->name : "(null)");
     }
     log_printf("System halted.\n");
     halt_forever();

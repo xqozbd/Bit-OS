@@ -94,6 +94,35 @@ uint32_t cpu_get_feature_edx(void) {
     return d;
 }
 
+int cpu_has_hypervisor(void) {
+    uint32_t a, b, c, d;
+    cpuid(1, 0, &a, &b, &c, &d);
+    return (c & (1u << 31)) != 0;
+}
+
+void cpu_get_hypervisor_vendor(char out[13]) {
+    if (!out) return;
+    if (!cpu_has_hypervisor()) {
+        out[0] = '\0';
+        return;
+    }
+    uint32_t a, b, c, d;
+    cpuid(0x40000000u, 0, &a, &b, &c, &d);
+    out[0] = (char)(b & 0xFF);
+    out[1] = (char)((b >> 8) & 0xFF);
+    out[2] = (char)((b >> 16) & 0xFF);
+    out[3] = (char)((b >> 24) & 0xFF);
+    out[4] = (char)(c & 0xFF);
+    out[5] = (char)((c >> 8) & 0xFF);
+    out[6] = (char)((c >> 16) & 0xFF);
+    out[7] = (char)((c >> 24) & 0xFF);
+    out[8] = (char)(d & 0xFF);
+    out[9] = (char)((d >> 8) & 0xFF);
+    out[10] = (char)((d >> 16) & 0xFF);
+    out[11] = (char)((d >> 24) & 0xFF);
+    out[12] = '\0';
+}
+
 uint32_t cpu_get_ext_feature_ecx(void) {
     uint32_t a, b, c, d;
     cpuid(0x80000001u, 0, &a, &b, &c, &d);

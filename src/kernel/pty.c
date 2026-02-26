@@ -57,3 +57,15 @@ size_t pty_write(struct pty *p, int is_master, const void *buf, size_t len) {
     }
     return pipe_write(p->to_master, buf, len);
 }
+
+int pty_can_read(struct pty *p, int is_master) {
+    if (!p) return 0;
+    struct pipe *src = is_master ? p->to_master : p->to_slave;
+    return pipe_count(src) > 0;
+}
+
+int pty_can_write(struct pty *p, int is_master) {
+    if (!p) return 0;
+    struct pipe *dst = is_master ? p->to_slave : p->to_master;
+    return pipe_space(dst) > 0;
+}

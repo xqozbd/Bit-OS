@@ -12,6 +12,7 @@ uint64_t paging_pml4_phys(void);
 int paging_map_4k(uint64_t virt, uint64_t phys, uint64_t flags);
 int paging_map_4k_in_pml4(uint64_t pml4_phys, uint64_t virt, uint64_t phys, uint64_t flags);
 int paging_map_user_4k(uint64_t pml4_phys, uint64_t virt, uint64_t phys, uint64_t flags);
+void *paging_map_mmio(uint64_t phys, uint64_t size);
 uint64_t paging_unmap_4k(uint64_t virt);
 uint64_t paging_unmap_user_4k(uint64_t pml4_phys, uint64_t virt);
 uint64_t paging_new_user_pml4(void);

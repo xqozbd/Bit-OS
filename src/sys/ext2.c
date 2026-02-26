@@ -19,6 +19,8 @@ extern void *memset(void *s, int c, size_t n);
 #define EXT2_MAX_NAME  64
 #define EXT2_DIR_CACHE 8
 
+static void dir_cache_put(uint32_t parent, const char *name, uint32_t node);
+
 struct ext2_superblock {
     uint32_t s_inodes_count;
     uint32_t s_blocks_count;

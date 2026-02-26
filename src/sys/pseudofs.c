@@ -9,6 +9,7 @@
 #include "kernel/meminfo.h"
 #include "kernel/task.h"
 #include "kernel/driver_registry.h"
+#include "kernel/rng.h"
 #include "lib/version.h"
 
 static char g_buf[256];
@@ -36,8 +37,10 @@ static int node_for_path(int fs_id, const char *path) {
     if (!path || path[0] == '\0' || str_eq(path, "/")) return 0;
     if (path[0] == '/') path++;
     if (fs_id == PSEUDOFS_DEV) {
-        if (str_eq(path, "null")) return 1;
-        if (str_eq(path, "tty0")) return 2;
+        if (str_eq(path, "null")) return PSEUDOFS_DEV_NULL;
+        if (str_eq(path, "tty0")) return PSEUDOFS_DEV_TTY0;
+        if (str_eq(path, "random")) return PSEUDOFS_DEV_RANDOM;
+        if (str_eq(path, "urandom")) return PSEUDOFS_DEV_URANDOM;
     } else if (fs_id == PSEUDOFS_PROC) {
         if (str_eq(path, "uptime")) return 1;
         if (str_eq(path, "meminfo")) return 2;
@@ -130,10 +133,15 @@ int pseudofs_read_file(int fs_id, int node, const uint8_t **data, uint64_t *size
             remain = (remain > used) ? (remain - used) : 0;
         }
     } else if (fs_id == PSEUDOFS_DEV) {
-        if (node == 1) {
+        if (node == PSEUDOFS_DEV_NULL) {
             append_str(&w, &remain, "null\n");
-        } else if (node == 2) {
+        } else if (node == PSEUDOFS_DEV_TTY0) {
             append_str(&w, &remain, "tty0\n");
+        } else if (node == PSEUDOFS_DEV_RANDOM || node == PSEUDOFS_DEV_URANDOM) {
+            size_t n = remain > 64 ? 64 : remain;
+            rng_fill(g_buf, n);
+            w = g_buf + n;
+            remain = (remain > n) ? (remain - n) : 0;
         }
     }
     *w = '\0';
@@ -149,8 +157,10 @@ void pseudofs_pwd(int fs_id, int cwd) {
     }
     const char *base = fs_name(fs_id);
     if (fs_id == PSEUDOFS_DEV) {
-        if (cwd == 1) log_printf("/%s/null\n", base);
-        else if (cwd == 2) log_printf("/%s/tty0\n", base);
+        if (cwd == PSEUDOFS_DEV_NULL) log_printf("/%s/null\n", base);
+        else if (cwd == PSEUDOFS_DEV_TTY0) log_printf("/%s/tty0\n", base);
+        else if (cwd == PSEUDOFS_DEV_RANDOM) log_printf("/%s/random\n", base);
+        else if (cwd == PSEUDOFS_DEV_URANDOM) log_printf("/%s/urandom\n", base);
         else log_printf("/%s\n", base);
     } else if (fs_id == PSEUDOFS_PROC) {
         if (cwd == 1) log_printf("/%s/uptime\n", base);
@@ -173,7 +183,7 @@ void pseudofs_ls(int fs_id, int node) {
         return;
     }
     if (fs_id == PSEUDOFS_DEV) {
-        log_printf("null tty0\n");
+        log_printf("null tty0 random urandom\n");
     } else if (fs_id == PSEUDOFS_PROC) {
         log_printf("uptime meminfo tasks\n");
     } else if (fs_id == PSEUDOFS_SYS) {

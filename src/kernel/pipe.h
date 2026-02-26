@@ -14,5 +14,7 @@ int pipe_has_reader(struct pipe *p);
 int pipe_has_writer(struct pipe *p);
 size_t pipe_read(struct pipe *p, void *buf, size_t len);
 size_t pipe_write(struct pipe *p, const void *buf, size_t len);
+size_t pipe_count(struct pipe *p);
+size_t pipe_space(struct pipe *p);
 
 #endif /* KERNEL_PIPE_H */

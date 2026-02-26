@@ -276,6 +276,29 @@ int socket_recvfrom6(int sid, uint8_t *buf, uint16_t len,
     return (int)to_copy;
 }
 
+int socket_can_recv(int sid) {
+    if (sid < 0 || sid >= SOCKET_MAX) return 0;
+    struct ksocket *s = &g_sockets[sid];
+    if (!s->used) return 0;
+    if (!socket_netns_ok(s)) return 0;
+    if (s->type == SOCKET_SOCK_STREAM) {
+        if (s->tcp_id < 0) return 0;
+        return tcp_rx_available(s->tcp_id);
+    }
+    if (s->type != SOCKET_SOCK_DGRAM) return 0;
+    return s->rx[s->rx_tail].used ? 1 : 0;
+}
+
+int socket_can_send(int sid) {
+    if (sid < 0 || sid >= SOCKET_MAX) return 0;
+    struct ksocket *s = &g_sockets[sid];
+    if (!s->used) return 0;
+    if (!socket_netns_ok(s)) return 0;
+    if (s->type == SOCKET_SOCK_STREAM) return s->tcp_id >= 0;
+    if (s->type != SOCKET_SOCK_DGRAM) return 0;
+    return 1;
+}
+
 void socket_close(int sid) {
     if (sid < 0 || sid >= SOCKET_MAX) return;
     struct ksocket *s = &g_sockets[sid];
