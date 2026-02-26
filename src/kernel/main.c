@@ -1,3 +1,33 @@
+/*
+######################################################################
+# BitOS Kernel Main                                                   #
+######################################################################
+# Purpose                                                            #
+# - Defines the kernel entry point and the primary boot sequence.     #
+# - Coordinates subsystem bring-up, driver init, and userland start.  #
+#                                                                    #
+# High-Level Boot Flow                                                #
+# 1) Early CPU + runtime: stack canary, GDT/TSS, SSE/FPU, IDT.         #
+# 2) Memory: PMM -> paging -> heap.                                   #
+# 3) Devices/IO: block, storage (AHCI/ATA), PCI scan, xHCI/USB.        #
+# 4) Platform: ACPI, P-states, timers, SMP, watchdog.                 #
+# 5) VFS + mounts: initramfs/root fs, /dev /proc /sys /tmp.            #
+# 6) Userland: console, init process, main loop.                      #
+#                                                                    #
+# Boot Status + Logging                                               #
+# - boot_screen_* updates the on-screen "Loading" status.             #
+# - log_* provides serial/framebuffer logging.                        #
+# - watchdog_* tracks stages and can reboot on hangs.                 #
+#                                                                    #
+# Safe Mode                                                          #
+# - safe=1 or nomod disables risky modules (PCI, xHCI, AHCI, ACPI...). #
+# - Auto-enabled on VMware/VirtualBox unless safe=0 is set.           #
+#                                                                    #
+# BitOS (what it is)                                                  #
+# - 64-bit x86_64 hobby OS with a pragmatic, readable kernel.          #
+# - Goal: clear bring-up, predictable behavior, small userspace.       #
+######################################################################
+*/
 #include <stdbool.h>
 #include <stdint.h>
 
