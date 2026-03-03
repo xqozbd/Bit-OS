@@ -6,6 +6,7 @@
 #include "drivers/video/fb_printf.h"
 #include "drivers/video/banner.h"
 #include "kernel/time.h"
+#include "arch/x86_64/apic.h"
 
 static uint32_t g_status_y = 0;
 static uint32_t g_status_x = 0;
@@ -33,6 +34,7 @@ void boot_screen_print_main(void) {
         if (rrc == 0) fb_printf("RTC: %s\n", rtc_buf);
         else fb_printf("RTC: unavailable (err=%d)\n", rrc);
     }
+    fb_printf("APIC: %s\n", apic_is_x2apic() ? "x2APIC" : "xAPIC");
 
     bootinfo_log();
     systeminfo_log();

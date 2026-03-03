@@ -9,5 +9,6 @@ void apic_timer_set_periodic(uint8_t vector, uint32_t initial_count);
 uint32_t apic_timer_current(void);
 int apic_is_ready(void);
 void apic_set_tpr(uint8_t tpr);
+int apic_is_x2apic(void);
 
 #endif /* APIC_H */
