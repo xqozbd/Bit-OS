@@ -85,15 +85,6 @@ static void runq_push(struct runqueue *rq, struct thread *t) {
     rq->tail = t;
 }
 
-static struct thread *runq_pop_head(struct runqueue *rq) {
-    if (!rq || !rq->head) return NULL;
-    struct thread *t = rq->head;
-    rq->head = t->next;
-    if (!rq->head) rq->tail = NULL;
-    t->next = NULL;
-    return t;
-}
-
 static struct thread *runq_pop_allowed(struct runqueue *rq, uint32_t cpu) {
     if (!rq || !rq->head) return NULL;
     struct thread *prev = NULL;

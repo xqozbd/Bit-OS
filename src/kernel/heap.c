@@ -294,7 +294,6 @@ void *krealloc(void *ptr, size_t size) {
         return ptr;
     }
 
-    size_t old_size = b->size;
     struct heap_block *next = b->next;
     uintptr_t b_end = (uintptr_t)b + sizeof(struct heap_block) + b->size;
     if (next && next->free && b_end == (uintptr_t)next) {
