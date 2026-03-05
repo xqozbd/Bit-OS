@@ -5,8 +5,12 @@ make -j
 bash ./iso.sh
 
 echo "Run in VM Box"
-if [ -f BitOS.iso ]; then
-  size_bytes=$(wc -c < BitOS.iso)
+ISO=BitOS.iso
+if [ -f .last_iso ]; then
+  ISO=$(cat .last_iso)
+fi
+if [ -f "$ISO" ]; then
+  size_bytes=$(wc -c < "$ISO")
   size_mb=$(awk "BEGIN { printf \"%.2f\", $size_bytes/1024/1024 }")
   size_gb=$(awk "BEGIN { printf \"%.2f\", $size_bytes/1024/1024/1024 }")
   echo "ISO size: ${size_mb} MB (${size_gb} GB)"

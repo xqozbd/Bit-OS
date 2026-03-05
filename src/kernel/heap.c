@@ -3,6 +3,7 @@
 
 #include "kernel/heap.h"
 #include "kernel/slab.h"
+#include "kernel/kmsan.h"
 #include "lib/log.h"
 #include "arch/x86_64/paging.h"
 #include "kernel/pmm.h"
@@ -175,6 +176,7 @@ void heap_init(void) {
     heap_end = heap_base;
     heap_head = NULL;
     slab_init();
+    kmsan_init();
     g_heap_allocs = 0;
     g_heap_frees = 0;
     g_heap_active_allocs = 0;
@@ -219,6 +221,7 @@ void *kmalloc(size_t size) {
         best->owner = thread_current();
         thread_account_alloc(best->owner, best->size);
         heap_track_alloc(best->size);
+        kmsan_alloc((void *)((uintptr_t)best + sizeof(struct heap_block)), best->size);
         return (void *)((uintptr_t)best + sizeof(struct heap_block));
     }
 
@@ -243,6 +246,7 @@ void kfree(void *ptr) {
         log_printf("Heap: bad free (magic)\n");
         return;
     }
+    kmsan_free(ptr, b->size);
     thread_account_free(b->owner, b->size);
     heap_track_free(b->size);
     b->free = 1;
@@ -291,6 +295,9 @@ void *krealloc(void *ptr, size_t size) {
             thread_account_free(b->owner, old_size - size);
         }
         heap_track_resize(old_size, size);
+        if (old_size > size) {
+            kmsan_free((uint8_t *)ptr + size, old_size - size);
+        }
         return ptr;
     }
 
@@ -321,6 +328,9 @@ void *krealloc(void *ptr, size_t size) {
                 }
             }
             heap_track_resize(old_size, size);
+            if (old_size > size) {
+                kmsan_free((uint8_t *)ptr + size, old_size - size);
+            }
             return ptr;
         }
     }

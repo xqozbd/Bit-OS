@@ -603,7 +603,8 @@ static void kmain_stage2(void) {
     console_init();
     driver_set_status_idx(drv_console, DRIVER_STATUS_OK, NULL);
     log_printf("Boot: spawning init...\n");
-    if (init_spawn() == 0) {
+    int init_ok = (init_spawn() == 0);
+    if (init_ok) {
         log_printf("Boot: init started\n");
     } else {
         log_printf("Boot: init not started\n");
@@ -613,9 +614,14 @@ static void kmain_stage2(void) {
     log_printf("Boot: initializing mouse...\n");
     ms_init();
     driver_set_status_idx(drv_mouse, DRIVER_STATUS_OK, NULL);
-    log_printf("Boot: entering console loop\n");
-    log_printf("\b");
-    console_run();
+    if (!init_ok) {
+        log_printf("Boot: entering console loop\n");
+        log_printf("\b");
+        console_run();
+    }
+    for (;;) {
+        cpu_idle();
+    }
 }
 
 static void boot_delay_ms(uint32_t ms) {

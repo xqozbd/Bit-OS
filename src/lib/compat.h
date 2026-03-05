@@ -2,16 +2,21 @@
 #define COMPAT_H
 
 /* IntelliSense/MSC compatibility: silence GNU attributes + asm errors */
-#if !defined(__GNUC__) && !defined(__clang__)
-#  define __attribute__(x)
-#endif
-#if defined(__INTELLISENSE__) && !defined(__x86_64__)
-#  define __x86_64__ 1
-#endif
 #if defined(__INTELLISENSE__)
 /* Force non-asm fallbacks for IntelliSense parsing. */
 #  undef __GNUC__
 #  undef __clang__
+#  if !defined(__x86_64__)
+#    define __x86_64__ 1
+#  endif
+#  ifndef __attribute__
+#    define __attribute__(x)
+#  endif
+#endif
+#if !defined(__GNUC__) && !defined(__clang__)
+#  ifndef __attribute__
+#    define __attribute__(x)
+#  endif
 #endif
 
 /* IntelliSense: provide atomic order constants to avoid parse errors. */

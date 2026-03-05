@@ -37,6 +37,17 @@ static const uint32_t g_balance_interval = 50;
 
 static struct thread g_boot_thread;
 
+static inline void sched_apply_tls(const struct thread *t) {
+    uint64_t fs = 0;
+    uint64_t gs = 0;
+    if (t) {
+        fs = t->tls_fs_base;
+        gs = t->tls_gs_base;
+    }
+    cpu_write_msr(MSR_IA32_FS_BASE, fs);
+    cpu_write_msr(MSR_IA32_GS_BASE, gs);
+}
+
 static void idle_thread(void *arg) {
     (void)arg;
     for (;;) {
@@ -274,6 +285,8 @@ void sched_init(void) {
     g_boot_thread.mem_current = 0;
     g_boot_thread.mem_peak = 0;
     g_boot_thread.pml4_phys = paging_pml4_phys();
+    g_boot_thread.tls_fs_base = 0;
+    g_boot_thread.tls_gs_base = 0;
     fpu_state_init(g_boot_thread.fpu_state);
     g_boot_thread.fpu_valid = 1;
     g_boot_thread.is_user = 0;
@@ -316,6 +329,8 @@ void sched_init(void) {
         idle->cpu_mask = (1u << i);
         idle->name = "idle";
         idle->pml4_phys = paging_pml4_phys();
+        idle->tls_fs_base = 0;
+        idle->tls_gs_base = 0;
         fpu_state_init(idle->fpu_state);
         idle->fpu_valid = 1;
         idle->is_user = 0;
@@ -412,6 +427,7 @@ void sched_yield(void) {
     if (next->pml4_phys && prev->pml4_phys != next->pml4_phys) {
         paging_switch_to(next->pml4_phys);
     }
+    sched_apply_tls(next);
     if (prev->fpu_valid) fpu_save(prev->fpu_state);
     if (next->fpu_valid) fpu_restore(next->fpu_state);
     profiler_inc(PROF_CTX_SWITCHES);
@@ -462,6 +478,7 @@ void sched_preempt_from_isr(void) {
     if (next->pml4_phys && prev->pml4_phys != next->pml4_phys) {
         paging_switch_to(next->pml4_phys);
     }
+    sched_apply_tls(next);
     if (prev->fpu_valid) fpu_save(prev->fpu_state);
     if (next->fpu_valid) fpu_restore(next->fpu_state);
     profiler_inc(PROF_CTX_SWITCHES);

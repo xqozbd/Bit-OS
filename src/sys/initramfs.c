@@ -6,6 +6,7 @@
 #include "boot/boot_requests.h"
 #include "lib/log.h"
 #include "lib/strutil.h"
+#include "arch/x86_64/paging.h"
 #include "kernel/slab.h"
 
 enum { IR_MAX_NODES = 256 };
@@ -24,6 +25,47 @@ static int g_node_count = 0;
 static char g_name_buf[IR_NAME_BUF];
 static size_t g_name_used = 0;
 static int g_available = 0;
+
+static int has_newc_magic(const uint8_t *p) {
+    if (!p) return 0;
+    return (p[0] == '0' && p[1] == '7' && p[2] == '0' &&
+            p[3] == '7' && p[4] == '0' && (p[5] == '1' || p[5] == '2'));
+}
+
+static int str_ends_with(const char *s, const char *suffix) {
+    if (!s || !suffix) return 0;
+    size_t slen = str_len(s);
+    size_t tlen = str_len(suffix);
+    if (tlen == 0) return 1;
+    if (slen < tlen) return 0;
+    size_t off = slen - tlen;
+    for (size_t i = 0; i < tlen; ++i) {
+        if (s[off + i] != suffix[i]) return 0;
+    }
+    return 1;
+}
+
+static struct limine_file *pick_initramfs_module(void) {
+    if (!module_request.response || module_request.response->module_count == 0) return NULL;
+    struct limine_module_response *resp = module_request.response;
+    struct limine_file *fallback = NULL;
+    for (uint64_t i = 0; i < resp->module_count; ++i) {
+        struct limine_file *m = resp->modules[i];
+        if (!m) continue;
+        if (!fallback) fallback = m;
+        if (m->string && str_eq(m->string, "initramfs")) {
+            return m;
+        }
+    }
+    for (uint64_t i = 0; i < resp->module_count; ++i) {
+        struct limine_file *m = resp->modules[i];
+        if (!m || !m->path) continue;
+        if (str_ends_with(m->path, "initramfs.cpio")) {
+            return m;
+        }
+    }
+    return fallback;
+}
 
 static uint32_t hex8_to_u32(const char *p) {
     uint32_t v = 0;
@@ -140,18 +182,29 @@ int initramfs_init_from_limine(void) {
     g_node_count = 0;
     g_name_used = 0;
 
-    if (!module_request.response || module_request.response->module_count == 0) {
-        return 0;
-    }
-
-    struct limine_module_response *resp = module_request.response;
-    struct limine_file *mod = resp->modules[0];
+    struct limine_file *mod = pick_initramfs_module();
     if (!mod || !mod->address || mod->size == 0) return 0;
 
     g_node_count = 0;
     node_new("/", -1, 1);
 
-    const uint8_t *base = (const uint8_t *)mod->address;
+    uintptr_t addr = (uintptr_t)mod->address;
+    uint64_t hhdm = paging_hhdm_offset();
+    uintptr_t alt = addr;
+    if (hhdm && addr < hhdm) {
+        alt = addr + (uintptr_t)hhdm;
+    }
+    const uint8_t *base = (const uint8_t *)addr;
+    if (!has_newc_magic(base) && alt != addr) {
+        const uint8_t *alt_base = (const uint8_t *)alt;
+        if (has_newc_magic(alt_base)) {
+            base = alt_base;
+        }
+    }
+    if (!has_newc_magic(base)) {
+        log_printf("initramfs: bad magic at %p\n", base);
+        return 0;
+    }
     uint64_t size = mod->size;
     uint64_t off = 0;
 

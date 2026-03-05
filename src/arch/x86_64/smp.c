@@ -5,6 +5,7 @@
 
 #include "boot/boot_requests.h"
 #include "arch/x86_64/cpu.h"
+#include "arch/x86_64/fpu.h"
 #include "arch/x86_64/idt.h"
 #include "arch/x86_64/paging.h"
 #include "kernel/heap.h"
@@ -42,6 +43,8 @@ static void ap_main(struct limine_mp_info *info) {
 
 __attribute__((noreturn, used))
 static void ap_entry_c(struct limine_mp_info *info) {
+    cpu_enable_sse();
+    fpu_init();
     idt_reload();
     ap_main(info);
 }

@@ -3,6 +3,7 @@
 #include "kernel/slab.h"
 #include "kernel/pmm.h"
 #include "arch/x86_64/paging.h"
+#include "kernel/kmsan.h"
 
 enum { SLAB_PAGE_SIZE = 0x1000u };
 enum { SLAB_MAGIC = 0x51424C53u }; /* 'SLBQ' */
@@ -134,6 +135,7 @@ void *slab_alloc(size_t size) {
     page->free_list = *(void **)obj;
     page->free_count--;
     slab_track_alloc(page->obj_size);
+    kmsan_alloc(obj, page->obj_size);
     return obj;
 }
 
@@ -142,6 +144,7 @@ void slab_free(void *ptr) {
     struct slab_page *page = (struct slab_page *)((uintptr_t)ptr & ~(SLAB_PAGE_SIZE - 1));
     if (page->magic != SLAB_MAGIC) return;
 
+    kmsan_free(ptr, page->obj_size);
     *(void **)ptr = page->free_list;
     page->free_list = ptr;
     page->free_count++;

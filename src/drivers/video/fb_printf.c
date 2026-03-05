@@ -2,9 +2,12 @@
 #include "drivers/video/fb_printf.h"
 #include "drivers/video/font8x8_basic.h"
 #include "drivers/ps2/mouse.h"
+#include "kernel/heap.h"
 #include <stddef.h>
 #include <stdint.h>
 #include <stdarg.h>
+
+extern void *memcpy(void *restrict dest, const void *restrict src, size_t n);
 
 /* global framebuffer state */
 static struct limine_framebuffer *g_fb = 0;
@@ -15,6 +18,9 @@ static uint8_t fb_rm_size = 0, fb_rm_shift = 0;
 static uint8_t fb_gm_size = 0, fb_gm_shift = 0;
 static uint8_t fb_bm_size = 0, fb_bm_shift = 0;
 static uint32_t fb_bytes_per_pixel = 0;
+static uint8_t *bb_ptr = 0;
+static uint64_t bb_size = 0;
+static int bb_ready = 0;
 
 /* cursor (pixel coordinates) */
 static uint32_t cursor_x = 0, cursor_y = 0;
@@ -304,6 +310,36 @@ static void clear_to_eol(void) {
     }
 }
 
+static void put_pixel_buf(uint8_t *buf, int x, int y, uint32_t rgb24) {
+    if (!g_fb || !buf) return;
+    if ((unsigned)x >= fb_width || (unsigned)y >= fb_height) return;
+    uint8_t *addr = buf + (size_t)y * fb_pitch + (size_t)x * fb_bytes_per_pixel;
+    uint32_t pixel = pack_pixel(rgb24);
+
+    if (fb_bytes_per_pixel == 4) {
+        *((uint32_t *)addr) = pixel;
+    } else if (fb_bytes_per_pixel == 3) {
+        addr[0] = pixel & 0xFF;
+        addr[1] = (pixel >> 8) & 0xFF;
+        addr[2] = (pixel >> 16) & 0xFF;
+    } else if (fb_bytes_per_pixel == 2) {
+        uint16_t v = (uint16_t)(pixel & 0xFFFF);
+        addr[0] = v & 0xFF;
+        addr[1] = (v >> 8) & 0xFF;
+    }
+}
+
+static int backbuffer_ensure(void) {
+    if (bb_ready && bb_ptr) return 1;
+    if (!g_fb) return 0;
+    bb_size = fb_pitch * fb_height;
+    bb_ptr = (uint8_t *)kmalloc(bb_size);
+    if (!bb_ptr) return 0;
+    memcpy(bb_ptr, fb_ptr, (size_t)bb_size);
+    bb_ready = 1;
+    return 1;
+}
+
 static void vt_apply_sgr(void) {
     if (vt_param_count == 0) {
         cur_fg = def_fg;
@@ -524,6 +560,12 @@ static void itoa_signed(int64_t val, char *out) {
 
 void fb_init(struct limine_framebuffer *fb, uint32_t fg, uint32_t bg) {
     if (!fb) return;
+    if (bb_ptr) {
+        kfree(bb_ptr);
+        bb_ptr = 0;
+    }
+    bb_ready = 0;
+    bb_size = 0;
     g_fb = fb;
     fb_ptr = (uint8_t *)fb->address;
     fb_width = fb->width;
@@ -587,6 +629,23 @@ void fb_get_dimensions(uint32_t *w, uint32_t *h) {
     if (h) *h = (uint32_t)fb_height;
 }
 
+uint32_t fb_get_pitch(void) {
+    return (uint32_t)fb_pitch;
+}
+
+uint32_t fb_get_bpp(void) {
+    return (uint32_t)fb_bpp;
+}
+
+int fb_get_info(struct fb_info *out) {
+    if (!out || !g_fb) return 0;
+    out->width = (uint32_t)fb_width;
+    out->height = (uint32_t)fb_height;
+    out->pitch = (uint32_t)fb_pitch;
+    out->bpp = (uint32_t)fb_bpp;
+    return 1;
+}
+
 uint32_t fb_line_height(void) {
     return line_step();
 }
@@ -609,6 +668,85 @@ void fb_draw_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t rgb24
             put_pixel((int)px, (int)py, rgb24);
         }
     }
+}
+
+static void draw_line_buf(uint8_t *buf, int x0, int y0, int x1, int y1, uint32_t rgb24) {
+    int dx = (x0 < x1) ? (x1 - x0) : (x0 - x1);
+    int sx = (x0 < x1) ? 1 : -1;
+    int dy = (y0 < y1) ? (y1 - y0) : (y0 - y1);
+    int sy = (y0 < y1) ? 1 : -1;
+    int err = (dx > dy ? dx : -dy) / 2;
+    for (;;) {
+        put_pixel_buf(buf, x0, y0, rgb24);
+        if (x0 == x1 && y0 == y1) break;
+        int e2 = err;
+        if (e2 > -dx) { err -= dy; x0 += sx; }
+        if (e2 < dy) { err += dx; y0 += sy; }
+    }
+}
+
+void fb_draw_line(uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1, uint32_t rgb24) {
+    if (!g_fb) return;
+    draw_line_buf(fb_ptr, (int)x0, (int)y0, (int)x1, (int)y1, rgb24);
+}
+
+int fb_backbuffer_init(void) {
+    return backbuffer_ensure();
+}
+
+int fb_backbuffer_ready(void) {
+    return (bb_ready && bb_ptr) ? 1 : 0;
+}
+
+void fb_backbuffer_clear(uint32_t rgb24) {
+    if (!backbuffer_ensure()) return;
+    uint32_t pixel = pack_pixel(rgb24);
+    for (uint64_t y = 0; y < fb_height; ++y) {
+        uint8_t *addr = bb_ptr + (size_t)y * fb_pitch;
+        if (fb_bytes_per_pixel == 4) {
+            uint32_t *p = (uint32_t *)addr;
+            for (uint64_t i = 0; i < fb_pitch / 4; ++i) p[i] = pixel;
+        } else if (fb_bytes_per_pixel == 3) {
+            for (uint64_t i = 0; i < fb_pitch; i += 3) {
+                addr[i + 0] = pixel & 0xFF;
+                addr[i + 1] = (pixel >> 8) & 0xFF;
+                addr[i + 2] = (pixel >> 16) & 0xFF;
+            }
+        } else if (fb_bytes_per_pixel == 2) {
+            uint16_t v = (uint16_t)(pixel & 0xFFFF);
+            for (uint64_t i = 0; i < fb_pitch; i += 2) {
+                addr[i + 0] = v & 0xFF;
+                addr[i + 1] = (v >> 8) & 0xFF;
+            }
+        }
+    }
+}
+
+void fb_backbuffer_write_pixel(uint32_t x, uint32_t y, uint32_t rgb24) {
+    if (!backbuffer_ensure()) return;
+    put_pixel_buf(bb_ptr, (int)x, (int)y, rgb24);
+}
+
+void fb_backbuffer_draw_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t rgb24) {
+    if (!backbuffer_ensure()) return;
+    if (x >= fb_width || y >= fb_height) return;
+    if (x + w > fb_width) w = fb_width - x;
+    if (y + h > fb_height) h = fb_height - y;
+    for (uint32_t py = y; py < y + h; ++py) {
+        for (uint32_t px = x; px < x + w; ++px) {
+            put_pixel_buf(bb_ptr, (int)px, (int)py, rgb24);
+        }
+    }
+}
+
+void fb_backbuffer_draw_line(uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1, uint32_t rgb24) {
+    if (!backbuffer_ensure()) return;
+    draw_line_buf(bb_ptr, (int)x0, (int)y0, (int)x1, (int)y1, rgb24);
+}
+
+void fb_backbuffer_swap(void) {
+    if (!backbuffer_ensure()) return;
+    memcpy(fb_ptr, bb_ptr, (size_t)bb_size);
 }
 
 void fb_vprintf(const char *fmt, va_list ap) {

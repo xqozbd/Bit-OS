@@ -6,7 +6,14 @@ ISO=BitOS.iso
 INITRAMFS_DIR=initramfs
 INITRAMFS_IMG=initramfs.cpio
 
-rm -rf iso_root "$ISO"
+rm -rf iso_root
+if [ -e "$ISO" ]; then
+  if ! rm -f "$ISO" 2>/dev/null; then
+    ts=$(date +%Y%m%d-%H%M%S)
+    ISO="BitOS-$ts.iso"
+    echo "Warning: BitOS.iso is in use. Writing to $ISO instead."
+  fi
+fi
 
 mkdir -p iso_root/boot/limine
 mkdir -p iso_root/EFI/BOOT
@@ -107,3 +114,4 @@ else
 fi
 
 echo "ISO built: $ISO"
+printf '%s\n' "$ISO" > .last_iso

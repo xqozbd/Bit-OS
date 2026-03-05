@@ -11,7 +11,9 @@
 #include "kernel/sched.h"
 #include "kernel/socket.h"
 #include "kernel/pipe.h"
+#include "kernel/ksync.h"
 #include "kernel/pty.h"
+#include "kernel/flock.h"
 #include "kernel/netns.h"
 #include "kernel/resgroup.h"
 #include "sys/vfs.h"
@@ -162,6 +164,8 @@ void task_fd_init(struct task *t) {
         t->fds[i].pipe_end = 0;
         t->fds[i].offset = 0;
         t->fds[i].flags = 0;
+        t->fds[i].flock_mode = 0;
+        t->fds[i].flock_count = 0;
     }
     fd_set_console(&t->fds[0]);
     fd_set_console(&t->fds[1]);
@@ -189,6 +193,8 @@ int task_fd_alloc(struct task *t, int node, uint32_t flags) {
             t->fds[i].pipe_end = 0;
             t->fds[i].offset = 0;
             t->fds[i].flags = flags;
+            t->fds[i].flock_mode = 0;
+            t->fds[i].flock_count = 0;
             return i;
         }
     }
@@ -213,10 +219,34 @@ int task_fd_alloc_socket(struct task *t, int sock_id) {
             t->fds[i].pipe_end = 0;
             t->fds[i].offset = 0;
             t->fds[i].flags = 0;
+            t->fds[i].flock_mode = 0;
+            t->fds[i].flock_count = 0;
             return i;
         }
     }
     task_uncharge_socket(t, 1);
+    task_uncharge_fd(t, 1);
+    return -1;
+}
+
+int task_fd_alloc_obj(struct task *t, int type, void *obj) {
+    if (!t || !t->fds) return -1;
+    if (!task_charge_fd(t, 1)) return -1;
+    for (int i = 0; i < 16; ++i) {
+        if (!t->fds[i].used) {
+            t->fds[i].used = 1;
+            t->fds[i].type = type;
+            t->fds[i].node = -1;
+            t->fds[i].sock_id = -1;
+            t->fds[i].pipe = obj;
+            t->fds[i].pipe_end = 0;
+            t->fds[i].offset = 0;
+            t->fds[i].flags = 0;
+            t->fds[i].flock_mode = 0;
+            t->fds[i].flock_count = 0;
+            return i;
+        }
+    }
     task_uncharge_fd(t, 1);
     return -1;
 }
@@ -236,6 +266,15 @@ int task_fd_close(struct task *t, int fd) {
         t->fds[fd].pipe) {
         pty_close_end((struct pty *)t->fds[fd].pipe, t->fds[fd].type == FD_TYPE_PTY_MASTER);
     }
+    if (t->fds[fd].type == FD_TYPE_FILE && t->fds[fd].flock_mode && t->fds[fd].flock_count) {
+        flock_unlock(t->fds[fd].node, t->pid, t->fds[fd].flock_mode, t->fds[fd].flock_count);
+    }
+    if (t->fds[fd].type == FD_TYPE_SEM && t->fds[fd].pipe) {
+        ksem_unref((struct ksem *)t->fds[fd].pipe);
+    }
+    if (t->fds[fd].type == FD_TYPE_COND && t->fds[fd].pipe) {
+        kcond_unref((struct kcond *)t->fds[fd].pipe);
+    }
     t->fds[fd].used = 0;
     t->fds[fd].type = 0;
     t->fds[fd].node = -1;
@@ -244,6 +283,8 @@ int task_fd_close(struct task *t, int fd) {
     t->fds[fd].pipe_end = 0;
     t->fds[fd].offset = 0;
     t->fds[fd].flags = 0;
+    t->fds[fd].flock_mode = 0;
+    t->fds[fd].flock_count = 0;
     if (t->res_fd_count > 0) task_uncharge_fd(t, 1);
     return 0;
 }
@@ -523,6 +564,13 @@ void task_clone_from(struct task *dst, const struct task *src) {
     if (dst->fds && src->fds) {
         for (int i = 0; i < 16; ++i) {
             dst->fds[i] = src->fds[i];
+            if (dst->fds[i].used) {
+                if (dst->fds[i].type == FD_TYPE_SEM && dst->fds[i].pipe) {
+                    ksem_ref((struct ksem *)dst->fds[i].pipe);
+                } else if (dst->fds[i].type == FD_TYPE_COND && dst->fds[i].pipe) {
+                    kcond_ref((struct kcond *)dst->fds[i].pipe);
+                }
+            }
         }
     }
     dst->maps = NULL;
@@ -914,6 +962,7 @@ void task_on_thread_exit(struct thread *t) {
     t->task->state = TASK_DEAD;
     task_core_dump_try(t->task);
     task_leak_report(t->task);
+    flock_release_pid(t->task->pid);
     task_release_maps(t->task);
     if (t->task->res_grp) {
         resgroup_uncharge_fd(t->task->res_grp, t->task->res_fd_count);
@@ -1203,4 +1252,28 @@ void task_dump_list(void) {
                    cur->name ? cur->name : "-");
         cur = cur->next;
     }
+}
+
+void task_get_counts(uint32_t *total, uint32_t *running, uint32_t *blocked, uint32_t *dead) {
+    uint32_t t_total = 0;
+    uint32_t t_running = 0;
+    uint32_t t_blocked = 0;
+    uint32_t t_dead = 0;
+    struct task *cur = g_task_head;
+    while (cur) {
+        t_total++;
+        if (cur->state == TASK_RUNNING) t_running++;
+        else if (cur->state == TASK_BLOCKED) t_blocked++;
+        else if (cur->state == TASK_DEAD) t_dead++;
+        cur = cur->next;
+    }
+    if (total) *total = t_total;
+    if (running) *running = t_running;
+    if (blocked) *blocked = t_blocked;
+    if (dead) *dead = t_dead;
+}
+
+uint32_t task_total_created(void) {
+    uint32_t next = __atomic_load_n(&g_next_pid, __ATOMIC_SEQ_CST);
+    return next > 0 ? (next - 1u) : 0u;
 }

@@ -33,11 +33,32 @@ void fb_get_colors(uint32_t *fg, uint32_t *bg);
 void fb_set_cursor_px(uint32_t x, uint32_t y);
 void fb_get_cursor_px(uint32_t *x, uint32_t *y);
 void fb_get_dimensions(uint32_t *w, uint32_t *h);
+uint32_t fb_get_pitch(void);
+uint32_t fb_get_bpp(void);
 uint32_t fb_read_pixel(uint32_t x, uint32_t y);
 void fb_write_pixel(uint32_t x, uint32_t y, uint32_t rgb24);
 uint32_t fb_line_height(void);
 uint32_t fb_margin_x(void);
 uint32_t fb_margin_y(void);
 void fb_draw_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t rgb24);
+void fb_draw_line(uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1, uint32_t rgb24);
+
+struct fb_info {
+    uint32_t width;
+    uint32_t height;
+    uint32_t pitch;
+    uint32_t bpp;
+};
+
+int fb_get_info(struct fb_info *out);
+
+/* Double buffer helpers */
+int fb_backbuffer_init(void);
+int fb_backbuffer_ready(void);
+void fb_backbuffer_clear(uint32_t rgb24);
+void fb_backbuffer_write_pixel(uint32_t x, uint32_t y, uint32_t rgb24);
+void fb_backbuffer_draw_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t rgb24);
+void fb_backbuffer_draw_line(uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1, uint32_t rgb24);
+void fb_backbuffer_swap(void);
 
 #endif /* FB_PRINTF_H */

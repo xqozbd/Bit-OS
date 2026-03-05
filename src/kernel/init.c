@@ -10,6 +10,7 @@
 #include "lib/log.h"
 #include "sys/boot_params.h"
 #include "sys/elf_loader.h"
+#include "sys/initramfs.h"
 #include "sys/vfs.h"
 
 struct init_payload {
@@ -66,6 +67,11 @@ static void init_thread(void *arg) {
 }
 
 int init_spawn(void) {
+    if (!initramfs_available()) {
+        if (initramfs_init_from_limine()) {
+            vfs_set_root(VFS_BACKEND_INITRAMFS, initramfs_root());
+        }
+    }
     const char *init_param = boot_param_get("init");
     const char *candidates[] = {
         init_param,
@@ -74,6 +80,11 @@ int init_spawn(void) {
         "/init",
         "/bin/sh",
         "/bin/busybox",
+        "/initramfs/bin/init",
+        "/initramfs/sbin/init",
+        "/initramfs/init",
+        "/initramfs/bin/sh",
+        "/initramfs/bin/busybox",
         NULL
     };
 

@@ -92,6 +92,106 @@ static inline long sys_poll(struct pollfd *fds, uint32_t nfds, int timeout_ms) {
     return __syscall6(61, (long)fds, (long)nfds, (long)timeout_ms, 0, 0, 0);
 }
 
+static inline long sys_flock(int fd, uint32_t op) {
+    return __syscall6(62, (long)fd, (long)op, 0, 0, 0, 0);
+}
+
+enum {
+    FUTEX_WAIT = 0,
+    FUTEX_WAKE = 1
+};
+
+static inline long sys_futex(uint32_t *uaddr, int op, uint32_t val) {
+    return __syscall6(63, (long)uaddr, (long)op, (long)val, 0, 0, 0);
+}
+
+static inline long sys_sem_create(int initial) {
+    return __syscall6(64, (long)initial, 0, 0, 0, 0, 0);
+}
+
+static inline long sys_sem_wait(int sem) {
+    return __syscall6(65, (long)sem, 0, 0, 0, 0, 0);
+}
+
+static inline long sys_sem_post(int sem) {
+    return __syscall6(66, (long)sem, 0, 0, 0, 0, 0);
+}
+
+static inline long sys_sem_destroy(int sem) {
+    return __syscall6(67, (long)sem, 0, 0, 0, 0, 0);
+}
+
+static inline long sys_cond_create(void) {
+    return __syscall6(68, 0, 0, 0, 0, 0, 0);
+}
+
+static inline long sys_cond_wait(int cond, int sem) {
+    return __syscall6(69, (long)cond, (long)sem, 0, 0, 0, 0);
+}
+
+static inline long sys_cond_signal(int cond) {
+    return __syscall6(70, (long)cond, 0, 0, 0, 0, 0);
+}
+
+static inline long sys_cond_broadcast(int cond) {
+    return __syscall6(71, (long)cond, 0, 0, 0, 0, 0);
+}
+
+static inline long sys_cond_destroy(int cond) {
+    return __syscall6(72, (long)cond, 0, 0, 0, 0, 0);
+}
+
+static inline long sys_set_fs_base(uint64_t base) {
+    return __syscall6(73, (long)base, 0, 0, 0, 0, 0);
+}
+
+static inline long sys_get_fs_base(void) {
+    return __syscall6(74, 0, 0, 0, 0, 0, 0);
+}
+
+static inline long sys_tty_setmode(int mode) {
+    return __syscall6(75, (long)mode, 0, 0, 0, 0, 0);
+}
+
+static inline long sys_tty_getmode(void) {
+    return __syscall6(76, 0, 0, 0, 0, 0, 0);
+}
+
+struct fb_info {
+    uint32_t width;
+    uint32_t height;
+    uint32_t pitch;
+    uint32_t bpp;
+};
+
+static inline long sys_fb_info(struct fb_info *out) {
+    return __syscall6(77, (long)out, 0, 0, 0, 0, 0);
+}
+
+static inline long sys_fb_putpix(uint32_t x, uint32_t y, uint32_t rgb24) {
+    return __syscall6(78, (long)x, (long)y, (long)rgb24, 0, 0, 0);
+}
+
+static inline long sys_fb_drawline(uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1, uint32_t rgb24) {
+    return __syscall6(79, (long)x0, (long)y0, (long)x1, (long)y1, (long)rgb24, 0);
+}
+
+static inline long sys_fb_drawrect(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t rgb24) {
+    return __syscall6(80, (long)x, (long)y, (long)w, (long)h, (long)rgb24, 0);
+}
+
+static inline long sys_fb_clear(uint32_t rgb24) {
+    return __syscall6(81, (long)rgb24, 0, 0, 0, 0, 0);
+}
+
+static inline long sys_fb_swap(void) {
+    return __syscall6(82, 0, 0, 0, 0, 0, 0);
+}
+
+static inline long sys_hid_kbd_report(const uint8_t *report, size_t len) {
+    return __syscall6(83, (long)report, (long)len, 0, 0, 0, 0);
+}
+
 static inline long sys_open(const char *path, uint32_t flags) {
     return __syscall6(5, (long)path, (long)flags, 0, 0, 0, 0);
 }
@@ -128,8 +228,16 @@ static inline long sys_bind(int fd, uint16_t port) {
     return __syscall6(13, (long)fd, (long)port, 0, 0, 0, 0);
 }
 
+static inline long sys_bind_path(int fd, const char *path, uint32_t len) {
+    return __syscall6(13, (long)fd, (long)path, (long)len, 0, 0, 0);
+}
+
 static inline long sys_connect(int fd, const uint8_t ip[4], uint16_t port) {
     return __syscall6(14, (long)fd, (long)ip, (long)port, 0, 0, 0);
+}
+
+static inline long sys_connect_path(int fd, const char *path, uint32_t len) {
+    return __syscall6(14, (long)fd, (long)path, (long)len, 0, 0, 0);
 }
 
 static inline long sys_connect6(int fd, const uint8_t ip[16], uint16_t port) {
@@ -240,8 +348,14 @@ enum {
 };
 
 enum {
+    AF_UNIX = 1,
     AF_INET = 2,
     AF_INET6 = 10
+};
+
+enum {
+    TTY_MODE_RAW = 0,
+    TTY_MODE_COOKED = 1
 };
 
 enum {

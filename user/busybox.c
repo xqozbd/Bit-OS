@@ -8,10 +8,14 @@ static const char *base_name(const char *path) {
     return last ? last : path;
 }
 
-enum { MAX_ENV = 16, MAX_ENV_LEN = 64, MAX_JOBS = 8 };
+enum { MAX_ENV = 16, MAX_ENV_LEN = 64, MAX_JOBS = 8, HIST_MAX = 16, LINE_MAX = 256, MATCH_MAX = 32, MATCH_LEN = 64 };
 
 static char g_env[MAX_ENV][MAX_ENV_LEN];
 static int g_env_count = 0;
+static char g_history[HIST_MAX][LINE_MAX];
+static int g_hist_count = 0;
+static int g_hist_next = 0;
+static const char *g_prompt = "bitos$ ";
 
 struct job {
     int id;
@@ -23,9 +27,24 @@ struct job {
 static struct job g_jobs[MAX_JOBS];
 static int g_job_next = 1;
 static int g_shell_pgid = 0;
+static const char *g_cmds[] = {
+    "ls", "ps", "top", "mount", "umount", "dd", "sh", "help",
+    "set", "export", "unset", "env", "jobs", "fg", "bg",
+    "sleep", "echo", "exit", 0
+};
 
 static int is_space(char c) {
     return (c == ' ' || c == '\t' || c == '\n' || c == '\r');
+}
+
+static int starts_with(const char *s, const char *p) {
+    if (!s || !p) return 0;
+    size_t i = 0;
+    while (s[i] && p[i]) {
+        if (s[i] != p[i]) return 0;
+        i++;
+    }
+    return p[i] == '\0';
 }
 
 static void trim_line(char *s) {
@@ -147,6 +166,70 @@ static void env_dump(void) {
         uputs(g_env[i]);
         uputc('\n');
     }
+}
+
+static const char *history_get(int index) {
+    if (index < 1 || index > g_hist_count) return 0;
+    int start = (g_hist_next - g_hist_count + HIST_MAX) % HIST_MAX;
+    int idx = (start + (index - 1)) % HIST_MAX;
+    return g_history[idx];
+}
+
+static void history_add(const char *line) {
+    if (!line || !line[0]) return;
+    if (g_hist_count > 0) {
+        const char *last = history_get(g_hist_count);
+        if (last && ustrcmp(last, line) == 0) return;
+    }
+    char *dst = g_history[g_hist_next];
+    int i = 0;
+    while (line[i] && i + 1 < LINE_MAX) {
+        dst[i] = line[i];
+        i++;
+    }
+    dst[i] = '\0';
+    g_hist_next = (g_hist_next + 1) % HIST_MAX;
+    if (g_hist_count < HIST_MAX) g_hist_count++;
+}
+
+static const char *history_find_prefix(const char *prefix) {
+    if (!prefix) return 0;
+    for (int i = g_hist_count; i >= 1; --i) {
+        const char *line = history_get(i);
+        if (line && starts_with(line, prefix)) return line;
+    }
+    return 0;
+}
+
+static int history_expand(const char *line, char *out, int out_max, int *out_changed) {
+    if (!line || !out || out_max <= 0) return 0;
+    int i = 0;
+    while (line[i] && is_space(line[i])) i++;
+    if (line[i] != '!') {
+        int w = 0;
+        while (line[w] && w + 1 < out_max) { out[w] = line[w]; w++; }
+        out[w] = '\0';
+        if (out_changed) *out_changed = 0;
+        return 1;
+    }
+    const char *exp = NULL;
+    if (line[i + 1] == '!') {
+        exp = history_get(g_hist_count);
+    } else if (line[i + 1] >= '0' && line[i + 1] <= '9') {
+        int idx = uatoi(&line[i + 1]);
+        exp = history_get(idx);
+    } else {
+        exp = history_find_prefix(&line[i + 1]);
+    }
+    if (!exp) {
+        uputs("history: not found\n");
+        return 0;
+    }
+    int w = 0;
+    while (exp[w] && w + 1 < out_max) { out[w] = exp[w]; w++; }
+    out[w] = '\0';
+    if (out_changed) *out_changed = 1;
+    return 1;
 }
 
 static void jobs_dump(void) {
@@ -333,6 +416,50 @@ static int tokenize_line(const char *line, char *out, int out_max) {
     return w;
 }
 
+static int expand_vars_line(const char *in, char *out, int out_max) {
+    if (!in || !out || out_max <= 0) return 0;
+    int w = 0;
+    for (int i = 0; in[i] && w + 1 < out_max; ++i) {
+        if (in[i] != '$') {
+            out[w++] = in[i];
+            continue;
+        }
+        int j = i + 1;
+        if (in[j] == '{') {
+            j++;
+            char key[32];
+            int k = 0;
+            while (in[j] && in[j] != '}' && k + 1 < (int)sizeof(key)) {
+                key[k++] = in[j++];
+            }
+            key[k] = '\0';
+            if (in[j] == '}') {
+                const char *val = env_get(key);
+                for (int v = 0; val[v] && w + 1 < out_max; ++v) out[w++] = val[v];
+                i = j;
+                continue;
+            }
+        } else if ((in[j] >= 'A' && in[j] <= 'Z') || (in[j] >= 'a' && in[j] <= 'z') || in[j] == '_') {
+            char key[32];
+            int k = 0;
+            while (in[j] && ((in[j] >= 'A' && in[j] <= 'Z') ||
+                             (in[j] >= 'a' && in[j] <= 'z') ||
+                             (in[j] >= '0' && in[j] <= '9') ||
+                             in[j] == '_') && k + 1 < (int)sizeof(key)) {
+                key[k++] = in[j++];
+            }
+            key[k] = '\0';
+            const char *val = env_get(key);
+            for (int v = 0; val[v] && w + 1 < out_max; ++v) out[w++] = val[v];
+            i = j - 1;
+            continue;
+        }
+        out[w++] = '$';
+    }
+    out[w] = '\0';
+    return 1;
+}
+
 static void expand_vars(char **argv, int argc) {
     for (int i = 0; i < argc; ++i) {
         if (argv[i] && argv[i][0] == '$' && argv[i][1]) {
@@ -404,12 +531,19 @@ static char **build_envp(void) {
 }
 
 static int run_command(char *line, int interactive) {
-    char norm[256];
+    char norm[LINE_MAX];
+    char expanded[LINE_MAX];
     strip_comment(line);
     trim_line(line);
     if (!line[0]) return 0;
 
-    tokenize_line(line, norm, (int)sizeof(norm));
+    char job_line[LINE_MAX];
+    int jl = 0;
+    while (line[jl] && jl + 1 < LINE_MAX) { job_line[jl] = line[jl]; jl++; }
+    job_line[jl] = '\0';
+
+    if (!expand_vars_line(line, expanded, (int)sizeof(expanded))) return 0;
+    tokenize_line(expanded, norm, (int)sizeof(norm));
     char *tokens[32];
     int tokc = split_line(norm, tokens, 32);
     if (tokc == 0) return 0;
@@ -535,7 +669,7 @@ static int run_command(char *line, int interactive) {
     for (int j = 0; j < (cmdc - 1) * 2; ++j) sys_close(pipefds[j]);
 
     if (bg) {
-        jobs_add(group_pgid, line, 0);
+        jobs_add(group_pgid, job_line, 0);
         return 0;
     }
     sys_tcsetpgrp(group_pgid);
@@ -543,7 +677,7 @@ static int run_command(char *line, int interactive) {
         int st = 0;
         int rc = (int)sys_waitpid(pids[i], &st);
         if (rc > 0 && st == 128 + SIGSTOP) {
-            jobs_add(group_pgid, line, 1);
+            jobs_add(group_pgid, job_line, 1);
         }
     }
     jobs_remove_pid(group_pgid);
@@ -552,44 +686,368 @@ static int run_command(char *line, int interactive) {
     return 0;
 }
 
+static void shell_print_prompt(void) {
+    uputs(g_prompt);
+}
+
+static int match_exists(char matches[][MATCH_LEN], int count, const char *name) {
+    for (int i = 0; i < count; ++i) {
+        if (ustrcmp(matches[i], name) == 0) return 1;
+    }
+    return 0;
+}
+
+static int collect_dir_matches(const char *dir, const char *prefix,
+                               char matches[][MATCH_LEN], int max) {
+    if (!dir || !matches || max <= 0) return 0;
+    char buf[1024];
+    long n = sys_listdir(dir, buf, sizeof(buf) - 1);
+    if (n < 0) return 0;
+    buf[n] = '\0';
+    int count = 0;
+    char *p = buf;
+    while (*p && count < max) {
+        char *line = p;
+        while (*p && *p != '\n') p++;
+        if (*p == '\n') *p++ = '\0';
+        if (!line[0]) continue;
+        if (prefix && prefix[0] && !starts_with(line, prefix)) continue;
+        int i = 0;
+        while (line[i] && i + 1 < MATCH_LEN) {
+            matches[count][i] = line[i];
+            i++;
+        }
+        matches[count][i] = '\0';
+        count++;
+    }
+    return count;
+}
+
+static int collect_cmd_matches(const char *prefix, char matches[][MATCH_LEN], int max) {
+    int count = 0;
+    for (int i = 0; g_cmds[i] && count < max; ++i) {
+        if (!prefix || !prefix[0] || starts_with(g_cmds[i], prefix)) {
+            if (!match_exists(matches, count, g_cmds[i])) {
+                int j = 0;
+                while (g_cmds[i][j] && j + 1 < MATCH_LEN) {
+                    matches[count][j] = g_cmds[i][j];
+                    j++;
+                }
+                matches[count][j] = '\0';
+                count++;
+            }
+        }
+    }
+    char bin_matches[MATCH_MAX][MATCH_LEN];
+    int bin_count = collect_dir_matches("/bin", prefix, bin_matches, MATCH_MAX);
+    for (int i = 0; i < bin_count && count < max; ++i) {
+        if (!match_exists(matches, count, bin_matches[i])) {
+            int j = 0;
+            while (bin_matches[i][j] && j + 1 < MATCH_LEN) {
+                matches[count][j] = bin_matches[i][j];
+                j++;
+            }
+            matches[count][j] = '\0';
+            count++;
+        }
+    }
+    return count;
+}
+
+static int shell_complete(char *line, int *len, int max) {
+    if (!line || !len || max <= 0) return 0;
+    int l = *len;
+    int start = l;
+    while (start > 0 && !is_space(line[start - 1])) start--;
+    if (start == l) return 0;
+
+    char token[LINE_MAX];
+    int tlen = 0;
+    for (int i = start; i < l && tlen + 1 < LINE_MAX; ++i) token[tlen++] = line[i];
+    token[tlen] = '\0';
+
+    int path_mode = 0;
+    for (int i = 0; token[i]; ++i) {
+        if (token[i] == '/') { path_mode = 1; break; }
+    }
+    if (token[0] == '.') path_mode = 1;
+
+    char matches[MATCH_MAX][MATCH_LEN];
+    int count = 0;
+
+    if (path_mode) {
+        int slash = -1;
+        for (int i = 0; token[i]; ++i) if (token[i] == '/') slash = i;
+        char dir[LINE_MAX];
+        char base[LINE_MAX];
+        if (slash >= 0) {
+            int dlen = 0;
+            for (int i = 0; i < slash && dlen + 1 < LINE_MAX; ++i) dir[dlen++] = token[i];
+            dir[dlen] = '\0';
+            int blen = 0;
+            for (int i = slash + 1; token[i] && blen + 1 < LINE_MAX; ++i) base[blen++] = token[i];
+            base[blen] = '\0';
+            if (dlen == 0) {
+                dir[0] = '/';
+                dir[1] = '\0';
+            }
+        } else {
+            dir[0] = '/';
+            dir[1] = '\0';
+            int blen = 0;
+            for (int i = 0; token[i] && blen + 1 < LINE_MAX; ++i) base[blen++] = token[i];
+            base[blen] = '\0';
+        }
+        count = collect_dir_matches(dir, base, matches, MATCH_MAX);
+        if (count == 0) return 0;
+
+        if (count == 1) {
+            char new_token[LINE_MAX];
+            int w = 0;
+            if (slash >= 0) {
+                for (int i = 0; token[i] && i <= slash && w + 1 < LINE_MAX; ++i) new_token[w++] = token[i];
+            }
+            for (int i = 0; matches[0][i] && w + 1 < LINE_MAX; ++i) new_token[w++] = matches[0][i];
+            new_token[w] = '\0';
+            int new_len = start + w;
+            if (new_len >= max) return 0;
+            for (int i = 0; i < w; ++i) line[start + i] = new_token[i];
+            line[new_len] = '\0';
+            for (int i = tlen; i < w; ++i) uputc(new_token[i]);
+            *len = new_len;
+            return 1;
+        }
+    } else {
+        count = collect_cmd_matches(token, matches, MATCH_MAX);
+        if (count == 0) return 0;
+        if (count == 1) {
+            int w = 0;
+            while (matches[0][w] && w + 1 < LINE_MAX) w++;
+            int new_len = start + w;
+            if (new_len >= max) return 0;
+            for (int i = 0; i < w; ++i) line[start + i] = matches[0][i];
+            line[new_len] = '\0';
+            for (int i = tlen; i < w; ++i) uputc(matches[0][i]);
+            *len = new_len;
+            return 1;
+        }
+    }
+
+    uputc('\n');
+    for (int i = 0; i < count; ++i) {
+        uputs(matches[i]);
+        if (i + 1 < count) uputc(' ');
+    }
+    uputc('\n');
+    shell_print_prompt();
+    sys_write(1, line, (size_t)(*len));
+    return 1;
+}
+
+static int read_line_fd(int fd, char *out, int max) {
+    if (!out || max <= 1) return -1;
+    int len = 0;
+    int got = 0;
+    while (len + 1 < max) {
+        char c = 0;
+        long n = sys_read(fd, &c, 1);
+        if (n <= 0) break;
+        got = 1;
+        if (c == '\r') continue;
+        if (c == '\n') break;
+        out[len++] = c;
+    }
+    out[len] = '\0';
+    if (!got && len == 0) return -1;
+    return len;
+}
+
+enum { FOR_MAX_ITEMS = 16, FOR_BODY_MAX = 32 };
+
+static int run_for_loop(int fd, char *line) {
+    if (!line) return 0;
+    char norm[LINE_MAX];
+    tokenize_line(line, norm, (int)sizeof(norm));
+    char *tokens[32];
+    int tokc = split_line(norm, tokens, 32);
+    if (tokc < 4) return 0;
+    if (ustrcmp(tokens[0], "for") != 0) return 0;
+    if (ustrcmp(tokens[2], "in") != 0) return 0;
+
+    char var[32];
+    int v = 0;
+    while (tokens[1][v] && v + 1 < (int)sizeof(var)) {
+        var[v] = tokens[1][v];
+        v++;
+    }
+    var[v] = '\0';
+
+    char items[FOR_MAX_ITEMS][LINE_MAX];
+    int item_count = 0;
+    int do_idx = -1;
+    for (int i = 3; i < tokc; ++i) {
+        if (ustrcmp(tokens[i], "do") == 0) { do_idx = i; break; }
+        if (item_count < FOR_MAX_ITEMS) {
+            int w = 0;
+            while (tokens[i][w] && w + 1 < LINE_MAX) {
+                items[item_count][w] = tokens[i][w];
+                w++;
+            }
+            items[item_count][w] = '\0';
+            item_count++;
+        }
+    }
+
+    if (do_idx < 0) {
+        char tmp[LINE_MAX];
+        while (read_line_fd(fd, tmp, (int)sizeof(tmp)) >= 0) {
+            strip_comment(tmp);
+            trim_line(tmp);
+            if (!tmp[0]) continue;
+            if (ustrcmp(tmp, "do") == 0) break;
+        }
+    }
+
+    char body[FOR_BODY_MAX][LINE_MAX];
+    int body_count = 0;
+    if (do_idx >= 0 && do_idx + 1 < tokc) {
+        int w = 0;
+        for (int i = do_idx + 1; i < tokc && w + 1 < LINE_MAX; ++i) {
+            if (w > 0) body[0][w++] = ' ';
+            int j = 0;
+            while (tokens[i][j] && w + 1 < LINE_MAX) body[0][w++] = tokens[i][j++];
+        }
+        body[0][w] = '\0';
+        if (body[0][0] != '\0' && body_count < FOR_BODY_MAX) body_count = 1;
+    }
+
+    char tmp[LINE_MAX];
+    while (read_line_fd(fd, tmp, (int)sizeof(tmp)) >= 0) {
+        strip_comment(tmp);
+        trim_line(tmp);
+        if (!tmp[0]) continue;
+        if (ustrcmp(tmp, "done") == 0) break;
+        if (body_count < FOR_BODY_MAX) {
+            int w = 0;
+            while (tmp[w] && w + 1 < LINE_MAX) {
+                body[body_count][w] = tmp[w];
+                w++;
+            }
+            body[body_count][w] = '\0';
+            body_count++;
+        }
+    }
+
+    for (int i = 0; i < item_count; ++i) {
+        const char *val = items[i];
+        if (items[i][0] == '$' && items[i][1]) {
+            val = env_get(items[i] + 1);
+        }
+        env_set_kv(var, val);
+        for (int b = 0; b < body_count; ++b) {
+            char exec_line[LINE_MAX];
+            int w = 0;
+            while (body[b][w] && w + 1 < LINE_MAX) {
+                exec_line[w] = body[b][w];
+                w++;
+            }
+            exec_line[w] = '\0';
+            int rc = run_command(exec_line, 0);
+            if (rc < 0) return -1;
+        }
+    }
+    return 1;
+}
+
+static int read_line_interactive(char *out, int max) {
+    if (!out || max <= 1) return -1;
+    int len = 0;
+    for (;;) {
+        char c = 0;
+        long n = sys_read(0, &c, 1);
+        if (n <= 0) continue;
+        if (c == '\r') continue;
+        if (c == '\n') {
+            out[len] = '\0';
+            uputc('\n');
+            return len;
+        }
+        if (c == 0x03) { /* Ctrl+C */
+            uputs("^C\n");
+            out[0] = '\0';
+            return -1;
+        }
+        if (c == 0x7F || c == 0x08) {
+            if (len > 0) {
+                len--;
+                uputs("\b \b");
+            }
+            continue;
+        }
+        if (c == '\t') {
+            (void)shell_complete(out, &len, max);
+            continue;
+        }
+        if ((unsigned char)c < 0x20) continue;
+        if (len + 1 < max) {
+            out[len++] = c;
+            uputc(c);
+        }
+    }
+}
+
 static int applet_sh(int argc, char **argv) {
     int fd = 0;
+    int script = 0;
     if (argc > 1 && argv && argv[1]) {
         fd = (int)sys_open(argv[1], O_RDONLY);
         if (fd < 0) {
             uputs("sh: cannot open script\n");
             return 1;
         }
+        script = 1;
     }
 
-    char line[256];
-    int line_len = 0;
-    char buf[256];
-    long n;
-    while ((n = sys_read(fd, buf, sizeof(buf))) > 0) {
-        for (long i = 0; i < n; ++i) {
-            char c = buf[i];
-            if (c == '\r') continue;
-            if (c == '\n') {
-                line[line_len] = '\0';
-                int rc = run_command(line, 0);
-                line_len = 0;
-                if (rc < 0) {
-                    if (fd > 0) sys_close(fd);
-                    return 0;
-                }
-                continue;
+    char line[LINE_MAX];
+    if (!script) {
+        int prev_mode = (int)sys_tty_getmode();
+        sys_tty_setmode(TTY_MODE_RAW);
+        for (;;) {
+            shell_print_prompt();
+            int len = read_line_interactive(line, (int)sizeof(line));
+            if (len < 0) continue;
+            int changed = 0;
+            char expanded[LINE_MAX];
+            if (!history_expand(line, expanded, (int)sizeof(expanded), &changed)) continue;
+            if (changed) {
+                uputs(expanded);
+                uputc('\n');
             }
-            if (line_len + 1 < (int)sizeof(line)) {
-                line[line_len++] = c;
-            }
+            history_add(expanded);
+            int rc = run_command(expanded, 1);
+            if (rc < 0) break;
+        }
+        sys_tty_setmode(prev_mode);
+        return 0;
+    }
+
+    while (read_line_fd(fd, line, (int)sizeof(line)) >= 0) {
+        strip_comment(line);
+        trim_line(line);
+        if (!line[0]) continue;
+        int for_rc = run_for_loop(fd, line);
+        if (for_rc == -1) {
+            sys_close(fd);
+            return 0;
+        }
+        if (for_rc == 1) continue;
+        int rc = run_command(line, 0);
+        if (rc < 0) {
+            sys_close(fd);
+            return 0;
         }
     }
-    if (line_len > 0) {
-        line[line_len] = '\0';
-        (void)run_command(line, 0);
-    }
-    if (fd > 0) sys_close(fd);
+    sys_close(fd);
     return 0;
 }
 

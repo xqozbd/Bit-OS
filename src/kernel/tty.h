@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 enum { TTY_MAX = 4 };
+enum { TTY_MODE_RAW = 0, TTY_MODE_COOKED = 1 };
 
 void tty_init(void);
 int tty_active(void);
@@ -13,5 +14,7 @@ void tty_feed_char(int ch);
 size_t tty_read(int tty_id, uint8_t *buf, size_t len);
 size_t tty_write(int tty_id, const uint8_t *buf, size_t len);
 int tty_can_read(int tty_id);
+int tty_set_mode(int tty_id, int mode);
+int tty_get_mode(int tty_id);
 
 #endif /* KERNEL_TTY_H */

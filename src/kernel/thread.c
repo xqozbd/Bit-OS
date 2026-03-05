@@ -84,6 +84,8 @@ struct thread *thread_create(void (*entry)(void *), void *arg, size_t stack_size
     t->mem_current = 0;
     t->mem_peak = 0;
     t->pml4_phys = paging_pml4_phys();
+    t->tls_fs_base = 0;
+    t->tls_gs_base = 0;
     fpu_state_init(t->fpu_state);
     t->fpu_valid = 1;
     t->is_user = 0;

@@ -10,6 +10,10 @@
 #define HALT() do {} while (0)
 #endif
 
+#define MSR_IA32_FS_BASE 0xC0000100u
+#define MSR_IA32_GS_BASE 0xC0000101u
+#define MSR_IA32_KERNEL_GS_BASE 0xC0000102u
+
 static inline void halt_forever(void) {
     for (;;) { HALT(); }
 }

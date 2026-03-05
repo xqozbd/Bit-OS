@@ -79,7 +79,29 @@ enum {
     SYS_CLOCK_GETTIME = 58,
     SYS_TIMER_HZ = 59,
     SYS_UPTIME_TICKS = 60,
-    SYS_POLL = 61
+    SYS_POLL = 61,
+    SYS_FLOCK = 62,
+    SYS_FUTEX = 63,
+    SYS_SEM_CREATE = 64,
+    SYS_SEM_WAIT = 65,
+    SYS_SEM_POST = 66,
+    SYS_SEM_DESTROY = 67,
+    SYS_COND_CREATE = 68,
+    SYS_COND_WAIT = 69,
+    SYS_COND_SIGNAL = 70,
+    SYS_COND_BROADCAST = 71,
+    SYS_COND_DESTROY = 72,
+    SYS_SET_FS_BASE = 73,
+    SYS_GET_FS_BASE = 74,
+    SYS_TTY_SETMODE = 75,
+    SYS_TTY_GETMODE = 76,
+    SYS_FB_INFO = 77,
+    SYS_FB_PUTPIX = 78,
+    SYS_FB_DRAWLINE = 79,
+    SYS_FB_DRAWRECT = 80,
+    SYS_FB_CLEAR = 81,
+    SYS_FB_SWAP = 82,
+    SYS_HID_KBD_REPORT = 83
 };
 
 enum {
@@ -111,6 +133,13 @@ enum {
 };
 
 enum {
+    LOCK_SH = 0x01u,
+    LOCK_EX = 0x02u,
+    LOCK_NB = 0x04u,
+    LOCK_UN = 0x08u
+};
+
+enum {
     PROT_READ  = 1,
     PROT_WRITE = 2,
     PROT_EXEC  = 4
@@ -119,6 +148,24 @@ enum {
 enum {
     MAP_ANON = 1,
     MAP_FILE = 2
+};
+
+enum {
+    AF_UNIX = 1,
+    AF_INET = 2,
+    AF_INET6 = 10
+};
+
+enum {
+    TTY_MODE_RAW = 0,
+    TTY_MODE_COOKED = 1
+};
+
+struct fb_info {
+    uint32_t width;
+    uint32_t height;
+    uint32_t pitch;
+    uint32_t bpp;
 };
 
 enum {
@@ -184,6 +231,99 @@ static inline long sys_uptime_ticks(void) {
 
 static inline long sys_poll(struct pollfd *fds, uint32_t nfds, int timeout_ms) {
     return (long)sys_call6(SYS_POLL, (uint64_t)fds, nfds, (uint64_t)timeout_ms, 0, 0, 0);
+}
+
+static inline long sys_flock(int fd, uint32_t op) {
+    return (long)sys_call6(SYS_FLOCK, (uint64_t)fd, op, 0, 0, 0, 0);
+}
+
+enum {
+    FUTEX_WAIT = 0,
+    FUTEX_WAKE = 1
+};
+
+static inline long sys_futex(uint32_t *uaddr, int op, uint32_t val) {
+    return (long)sys_call6(SYS_FUTEX, (uint64_t)uaddr, (uint64_t)op, (uint64_t)val, 0, 0, 0);
+}
+
+static inline long sys_sem_create(int initial) {
+    return (long)sys_call6(SYS_SEM_CREATE, (uint64_t)initial, 0, 0, 0, 0, 0);
+}
+
+static inline long sys_sem_wait(int sem) {
+    return (long)sys_call6(SYS_SEM_WAIT, (uint64_t)sem, 0, 0, 0, 0, 0);
+}
+
+static inline long sys_sem_post(int sem) {
+    return (long)sys_call6(SYS_SEM_POST, (uint64_t)sem, 0, 0, 0, 0, 0);
+}
+
+static inline long sys_sem_destroy(int sem) {
+    return (long)sys_call6(SYS_SEM_DESTROY, (uint64_t)sem, 0, 0, 0, 0, 0);
+}
+
+static inline long sys_cond_create(void) {
+    return (long)sys_call6(SYS_COND_CREATE, 0, 0, 0, 0, 0, 0);
+}
+
+static inline long sys_cond_wait(int cond, int sem) {
+    return (long)sys_call6(SYS_COND_WAIT, (uint64_t)cond, (uint64_t)sem, 0, 0, 0, 0);
+}
+
+static inline long sys_cond_signal(int cond) {
+    return (long)sys_call6(SYS_COND_SIGNAL, (uint64_t)cond, 0, 0, 0, 0, 0);
+}
+
+static inline long sys_cond_broadcast(int cond) {
+    return (long)sys_call6(SYS_COND_BROADCAST, (uint64_t)cond, 0, 0, 0, 0, 0);
+}
+
+static inline long sys_cond_destroy(int cond) {
+    return (long)sys_call6(SYS_COND_DESTROY, (uint64_t)cond, 0, 0, 0, 0, 0);
+}
+
+static inline long sys_set_fs_base(uint64_t base) {
+    return (long)sys_call6(SYS_SET_FS_BASE, base, 0, 0, 0, 0, 0);
+}
+
+static inline long sys_get_fs_base(void) {
+    return (long)sys_call6(SYS_GET_FS_BASE, 0, 0, 0, 0, 0, 0);
+}
+
+static inline long sys_tty_setmode(int mode) {
+    return (long)sys_call6(SYS_TTY_SETMODE, (uint64_t)mode, 0, 0, 0, 0, 0);
+}
+
+static inline long sys_tty_getmode(void) {
+    return (long)sys_call6(SYS_TTY_GETMODE, 0, 0, 0, 0, 0, 0);
+}
+
+static inline long sys_fb_info(struct fb_info *out) {
+    return (long)sys_call6(SYS_FB_INFO, (uint64_t)out, 0, 0, 0, 0, 0);
+}
+
+static inline long sys_fb_putpix(uint32_t x, uint32_t y, uint32_t rgb24) {
+    return (long)sys_call6(SYS_FB_PUTPIX, x, y, rgb24, 0, 0, 0);
+}
+
+static inline long sys_fb_drawline(uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1, uint32_t rgb24) {
+    return (long)sys_call6(SYS_FB_DRAWLINE, x0, y0, x1, y1, rgb24, 0);
+}
+
+static inline long sys_fb_drawrect(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t rgb24) {
+    return (long)sys_call6(SYS_FB_DRAWRECT, x, y, w, h, rgb24, 0);
+}
+
+static inline long sys_fb_clear(uint32_t rgb24) {
+    return (long)sys_call6(SYS_FB_CLEAR, rgb24, 0, 0, 0, 0, 0);
+}
+
+static inline long sys_fb_swap(void) {
+    return (long)sys_call6(SYS_FB_SWAP, 0, 0, 0, 0, 0, 0);
+}
+
+static inline long sys_hid_kbd_report(const uint8_t *report, size_t len) {
+    return (long)sys_call6(SYS_HID_KBD_REPORT, (uint64_t)report, (uint64_t)len, 0, 0, 0, 0);
 }
 
 static inline long sys_open(const char *path, uint32_t flags) {

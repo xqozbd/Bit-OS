@@ -169,33 +169,33 @@
 - [x] Simple random number generator (RNG) for kernel/userspace.
 - [x] `/dev/random` and `/dev/urandom` devices.
 - [x] Floating point context save/restore on task switch.
+- [x] SSE/AVX context support.
+- [x] Memory leak sanitizer for userspace processes.
+- [x] Kernel profiling counters.
+- [x] Kernel stack overflow detection.
+- [x] ELF core dump generation for crashed processes.
+- [x] Simple disk quota support.
+- [x] Pipes/IPC (kernel-level pipe buffers).
+- [x] File locking support.
+- [x] UNIX domain sockets.
+- [x] Thread-local storage (TLS) support.
+- [x] Atomic operations / spinlocks for SMP.
+- [x] Condition variables / futexes for synchronization.
+- [x] Semaphore support in kernel and userspace.
+- [x] Userland library: `libc` extensions (string, math, stdio).
+- [x] CPU feature detection (CPUID-based).
+- [x] Terminal line discipline: raw / cooked mode.
+- [x] Kernel memory sanitizer hooks.
+- [x] Kernel statistics (/proc/stat-like reporting).
+- [x] Userspace logging API.
+- [x] Userspace shell completion for filenames/commands.
+- [x] Userspace history expansion (`!` command).
+- [x] Basic scripting language in shell (variables, loops).
+- [x] Virtual keyboard input support (HID).
+- [x] Basic graphics API for userspace (pixel set, draw line/rect).
+- [x] Double buffering for framebuffer graphics.
 
 ## Next
-- [ ] SSE/AVX context support.
-- [ ] Memory leak sanitizer for userspace processes.
-- [ ] Kernel profiling counters.
-- [ ] Kernel stack overflow detection.
-- [ ] ELF core dump generation for crashed processes.
-- [ ] Simple disk quota support.
-- [ ] File locking support.
-- [ ] Pipes/IPC (kernel-level pipe buffers).
-- [ ] UNIX domain sockets.
-- [ ] Thread-local storage (TLS) support.
-- [ ] Atomic operations / spinlocks for SMP.
-- [ ] Condition variables / futexes for synchronization.
-- [ ] Semaphore support in kernel and userspace.
-- [ ] Userland library: `libc` extensions (string, math, stdio).
-- [ ] CPU feature detection (CPUID-based).
-- [ ] Terminal line discipline: raw / cooked mode.
-- [ ] Kernel memory sanitizer hooks.
-- [ ] Kernel statistics (/proc/stat-like reporting).
-- [ ] Userspace logging API.
-- [ ] Userspace shell completion for filenames/commands.
-- [ ] Userspace history expansion (`!` command).
-- [ ] Basic scripting language in shell (variables, loops).
-- [ ] Virtual keyboard input support (HID).
-- [ ] Basic graphics API for userspace (pixel set, draw line/rect).
-- [ ] Double buffering for framebuffer graphics.
 - [ ] Color palette / 24-bit color support.
 - [ ] Font rendering in graphics mode.
 - [ ] Kernel video mode setting (VBE/UEFI framebuffer).

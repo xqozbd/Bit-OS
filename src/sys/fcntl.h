@@ -9,4 +9,9 @@
 #define O_TRUNC  0x0200u
 #define O_APPEND 0x0400u
 
+#define LOCK_SH 0x01u
+#define LOCK_EX 0x02u
+#define LOCK_NB 0x04u
+#define LOCK_UN 0x08u
+
 #endif /* SYS_FCNTL_H */

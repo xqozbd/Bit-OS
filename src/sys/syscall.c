@@ -27,16 +27,53 @@
 #include "sys/ext2.h"
 #include "sys/fs_mock.h"
 #include "kernel/pipe.h"
+#include "kernel/ksync.h"
+#include "kernel/flock.h"
+#include "kernel/spinlock.h"
 #include "drivers/ps2/keyboard.h"
 #include "kernel/time.h"
 #include "kernel/rng.h"
 #include "sys/errno.h"
 #include "sys/pseudofs.h"
 #include "kernel/profiler.h"
+#include "drivers/video/fb_printf.h"
+#include "drivers/usb/hid_kbd.h"
 
 #define SYS_ERR(e) ((uint64_t)(-(int)(e)))
+#define FUTEX_WAIT 0
+#define FUTEX_WAKE 1
 
 extern void *memcpy(void *restrict dest, const void *restrict src, size_t n);
+
+#define FUTEX_BUCKETS 64
+struct futex_waiter {
+    uint64_t addr;
+    struct task *task;
+    struct thread *thread;
+    struct futex_waiter *next;
+};
+
+struct futex_bucket {
+    spinlock_t lock;
+    struct futex_waiter *head;
+};
+
+static struct futex_bucket g_futex[FUTEX_BUCKETS];
+static int g_futex_ready = 0;
+
+static void futex_init_once(void) {
+    if (g_futex_ready) return;
+    for (uint32_t i = 0; i < FUTEX_BUCKETS; ++i) {
+        spinlock_init(&g_futex[i].lock);
+        g_futex[i].head = NULL;
+    }
+    g_futex_ready = 1;
+}
+
+static uint32_t futex_hash(const struct task *t, uint64_t addr) {
+    uint64_t key = addr ^ (uint64_t)(uintptr_t)t;
+    return (uint32_t)((key >> 4) & (FUTEX_BUCKETS - 1u));
+}
 
 typedef uint64_t (*syscall_fn)(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 static uint32_t g_fg_pgid = 0;
@@ -465,6 +502,17 @@ static uint64_t sys_read_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4
         if (g_fg_pgid != 0 && t->pgid != g_fg_pgid) {
             task_signal_raise(t, 20);
             return 0;
+        }
+        int mode = tty_get_mode((int)t->tty_id);
+        if (mode == TTY_MODE_RAW) {
+            while (1) {
+                size_t n = tty_read((int)t->tty_id, buf, (size_t)len);
+                if (n == 0) {
+                    sleep_ms(1);
+                    continue;
+                }
+                return (uint64_t)n;
+            }
         }
         uint64_t read = 0;
         while (read < len) {
@@ -989,6 +1037,8 @@ static uint64_t sys_fork_impl(struct syscall_frame *f) {
     }
     child->is_user = 1;
     child->pml4_phys = ctx->pml4_phys;
+    child->tls_fs_base = parent->tls_fs_base;
+    child->tls_gs_base = parent->tls_gs_base;
       if (child->task) {
           task_clone_from(child->task, ptask);
           child->task->pml4_phys = ctx->pml4_phys;
@@ -1127,12 +1177,19 @@ static uint64_t sys_socket_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t 
 }
 
 static uint64_t sys_bind_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
-    (void)a3; (void)a4; (void)a5; (void)a6;
+    (void)a4; (void)a5; (void)a6;
     int fd = (int)a1;
     uint16_t port = (uint16_t)a2;
     struct task *t = task_current();
     int sid = fd_to_socket(t, fd);
     if (sid < 0) return (uint64_t)-1;
+    if (socket_domain(sid) == SOCKET_AF_UNIX) {
+        const char *path = (const char *)a2;
+        uint32_t len = (uint32_t)a3;
+        if (!path || len == 0) return (uint64_t)-1;
+        if (!user_range_ok(t, path, len)) return SYS_ERR(EFAULT);
+        return (uint64_t)socket_bind_path(sid, path, len);
+    }
     return (uint64_t)socket_bind(sid, port);
 }
 
@@ -1142,9 +1199,16 @@ static uint64_t sys_connect_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t
     const uint8_t *ip = (const uint8_t *)a2;
     uint16_t port = (uint16_t)a3;
     struct task *t = task_current();
-    if (ip && !user_range_ok(t, ip, 4)) return SYS_ERR(EFAULT);
     int sid = fd_to_socket(t, fd);
     if (sid < 0) return (uint64_t)-1;
+    if (socket_domain(sid) == SOCKET_AF_UNIX) {
+        const char *path = (const char *)a2;
+        uint32_t len = (uint32_t)a3;
+        if (!path || len == 0) return (uint64_t)-1;
+        if (!user_range_ok(t, path, len)) return SYS_ERR(EFAULT);
+        return (uint64_t)socket_connect_path(sid, path, len);
+    }
+    if (ip && !user_range_ok(t, ip, 4)) return SYS_ERR(EFAULT);
     return (uint64_t)socket_connect(sid, ip, port);
 }
 
@@ -1377,6 +1441,299 @@ static uint64_t sys_unshare_net_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint
     return ns_id ? (uint64_t)ns_id : (uint64_t)-1;
 }
 
+static uint64_t sys_flock_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a3; (void)a4; (void)a5; (void)a6;
+    int fd = (int)a1;
+    uint32_t op = (uint32_t)a2;
+    struct task *t = task_current();
+    if (!t) return (uint64_t)-1;
+    struct task_fd *ent = task_fd_get(t, fd);
+    if (!ent || ent->type != FD_TYPE_FILE) return (uint64_t)-1;
+    int nonblock = (op & LOCK_NB) != 0;
+    if (op & LOCK_UN) {
+        if (ent->flock_mode && ent->flock_count) {
+            flock_unlock(ent->node, t->pid, ent->flock_mode, ent->flock_count);
+        }
+        ent->flock_mode = 0;
+        ent->flock_count = 0;
+        return 0;
+    }
+    int mode = (op & (LOCK_SH | LOCK_EX));
+    if (!mode) return (uint64_t)-1;
+    if (ent->flock_mode == mode) {
+        ent->flock_count++;
+        return 0;
+    }
+    if (ent->flock_mode && ent->flock_count) {
+        flock_unlock(ent->node, t->pid, ent->flock_mode, ent->flock_count);
+        ent->flock_mode = 0;
+        ent->flock_count = 0;
+    }
+    int rc = flock_lock(ent->node, t->pid, mode, nonblock);
+    if (rc == -2) return SYS_ERR(EAGAIN);
+    if (rc != 0) return (uint64_t)-1;
+    ent->flock_mode = (uint8_t)mode;
+    ent->flock_count = 1;
+    return 0;
+}
+
+static uint64_t sys_futex_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a4; (void)a5; (void)a6;
+    uint32_t *uaddr = (uint32_t *)a1;
+    int op = (int)a2;
+    uint32_t val = (uint32_t)a3;
+    struct task *t = task_current();
+    struct thread *th = thread_current();
+    if (!t || !th || !t->is_user) return (uint64_t)-1;
+    if (!user_range_ok(t, uaddr, sizeof(uint32_t))) return SYS_ERR(EFAULT);
+    futex_init_once();
+    uint32_t cur = *(volatile uint32_t *)uaddr;
+    uint32_t idx = futex_hash(t, (uint64_t)(uintptr_t)uaddr);
+    struct futex_bucket *b = &g_futex[idx];
+
+    if (op == FUTEX_WAIT) {
+        if (cur != val) return SYS_ERR(EAGAIN);
+        struct futex_waiter *w = (struct futex_waiter *)kmalloc(sizeof(*w));
+        if (!w) return (uint64_t)-1;
+        w->addr = (uint64_t)(uintptr_t)uaddr;
+        w->task = t;
+        w->thread = th;
+        spinlock_lock(&b->lock);
+        w->next = b->head;
+        b->head = w;
+        th->state = THREAD_BLOCKED;
+        spinlock_unlock(&b->lock);
+        sched_yield();
+        return 0;
+    }
+
+    if (op == FUTEX_WAKE) {
+        uint32_t woken = 0;
+        spinlock_lock(&b->lock);
+        struct futex_waiter *prev = NULL;
+        struct futex_waiter *it = b->head;
+        while (it && woken < val) {
+            struct futex_waiter *next = it->next;
+            if (it->addr == (uint64_t)(uintptr_t)uaddr && it->task == t) {
+                if (prev) prev->next = next;
+                else b->head = next;
+                it->thread->state = THREAD_READY;
+                sched_enqueue(it->thread);
+                kfree(it);
+                woken++;
+            } else {
+                prev = it;
+            }
+            it = next;
+        }
+        spinlock_unlock(&b->lock);
+        return (uint64_t)woken;
+    }
+    return (uint64_t)-1;
+}
+
+static uint64_t sys_sem_create_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    int initial = (int)a1;
+    struct task *t = task_current();
+    if (!t) return (uint64_t)-1;
+    struct ksem *sem = ksem_create(initial);
+    if (!sem) return (uint64_t)-1;
+    int fd = task_fd_alloc_obj(t, FD_TYPE_SEM, sem);
+    if (fd < 0) {
+        ksem_unref(sem);
+        return (uint64_t)-1;
+    }
+    return (uint64_t)fd;
+}
+
+static uint64_t sys_sem_wait_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    int fd = (int)a1;
+    struct task *t = task_current();
+    if (!t) return (uint64_t)-1;
+    struct task_fd *ent = task_fd_get(t, fd);
+    if (!ent || ent->type != FD_TYPE_SEM) return (uint64_t)-1;
+    return (uint64_t)ksem_wait((struct ksem *)ent->pipe);
+}
+
+static uint64_t sys_sem_post_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    int fd = (int)a1;
+    struct task *t = task_current();
+    if (!t) return (uint64_t)-1;
+    struct task_fd *ent = task_fd_get(t, fd);
+    if (!ent || ent->type != FD_TYPE_SEM) return (uint64_t)-1;
+    return (uint64_t)ksem_post((struct ksem *)ent->pipe);
+}
+
+static uint64_t sys_sem_destroy_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    int fd = (int)a1;
+    struct task *t = task_current();
+    if (!t) return (uint64_t)-1;
+    return (uint64_t)task_fd_close(t, fd);
+}
+
+static uint64_t sys_cond_create_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a1; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    struct task *t = task_current();
+    if (!t) return (uint64_t)-1;
+    struct kcond *cond = kcond_create();
+    if (!cond) return (uint64_t)-1;
+    int fd = task_fd_alloc_obj(t, FD_TYPE_COND, cond);
+    if (fd < 0) {
+        kcond_unref(cond);
+        return (uint64_t)-1;
+    }
+    return (uint64_t)fd;
+}
+
+static uint64_t sys_cond_wait_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a3; (void)a4; (void)a5; (void)a6;
+    int cond_fd = (int)a1;
+    int sem_fd = (int)a2;
+    struct task *t = task_current();
+    if (!t) return (uint64_t)-1;
+    struct task_fd *cent = task_fd_get(t, cond_fd);
+    if (!cent || cent->type != FD_TYPE_COND) return (uint64_t)-1;
+    struct ksem *sem = NULL;
+    if (sem_fd >= 0) {
+        struct task_fd *sent = task_fd_get(t, sem_fd);
+        if (!sent || sent->type != FD_TYPE_SEM) return (uint64_t)-1;
+        sem = (struct ksem *)sent->pipe;
+    }
+    return (uint64_t)kcond_wait((struct kcond *)cent->pipe, sem);
+}
+
+static uint64_t sys_cond_signal_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    int fd = (int)a1;
+    struct task *t = task_current();
+    if (!t) return (uint64_t)-1;
+    struct task_fd *ent = task_fd_get(t, fd);
+    if (!ent || ent->type != FD_TYPE_COND) return (uint64_t)-1;
+    return (uint64_t)kcond_signal((struct kcond *)ent->pipe);
+}
+
+static uint64_t sys_cond_broadcast_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    int fd = (int)a1;
+    struct task *t = task_current();
+    if (!t) return (uint64_t)-1;
+    struct task_fd *ent = task_fd_get(t, fd);
+    if (!ent || ent->type != FD_TYPE_COND) return (uint64_t)-1;
+    return (uint64_t)kcond_broadcast((struct kcond *)ent->pipe);
+}
+
+static uint64_t sys_cond_destroy_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    int fd = (int)a1;
+    struct task *t = task_current();
+    if (!t) return (uint64_t)-1;
+    return (uint64_t)task_fd_close(t, fd);
+}
+
+static uint64_t sys_set_fs_base_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    struct thread *th = thread_current();
+    if (!th) return (uint64_t)-1;
+    th->tls_fs_base = (uint64_t)a1;
+    cpu_write_msr(MSR_IA32_FS_BASE, th->tls_fs_base);
+    return 0;
+}
+
+static uint64_t sys_get_fs_base_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a1; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    struct thread *th = thread_current();
+    if (!th) return (uint64_t)-1;
+    return (uint64_t)th->tls_fs_base;
+}
+
+static uint64_t sys_tty_setmode_impl(uint64_t a1, uint64_t a2, uint64_t a3,
+                                     uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    struct task *t = task_current();
+    if (!t) return (uint64_t)-1;
+    int mode = (int)a1;
+    return tty_set_mode((int)t->tty_id, mode) ? 0 : (uint64_t)-1;
+}
+
+static uint64_t sys_tty_getmode_impl(uint64_t a1, uint64_t a2, uint64_t a3,
+                                     uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a1; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    struct task *t = task_current();
+    if (!t) return (uint64_t)-1;
+    return (uint64_t)tty_get_mode((int)t->tty_id);
+}
+
+static int ensure_backbuffer(void) {
+    if (fb_backbuffer_ready()) return 1;
+    return fb_backbuffer_init();
+}
+
+static uint64_t sys_fb_info_impl(uint64_t a1, uint64_t a2, uint64_t a3,
+                                 uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    struct fb_info *out = (struct fb_info *)a1;
+    if (!out) return SYS_ERR(EINVAL);
+    struct task *t = task_current();
+    if (!user_range_ok(t, out, sizeof(*out))) return SYS_ERR(EFAULT);
+    if (!fb_get_info(out)) return SYS_ERR(EINVAL);
+    return 0;
+}
+
+static uint64_t sys_fb_putpix_impl(uint64_t a1, uint64_t a2, uint64_t a3,
+                                   uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a4; (void)a5; (void)a6;
+    if (!ensure_backbuffer()) return SYS_ERR(ENOMEM);
+    fb_backbuffer_write_pixel((uint32_t)a1, (uint32_t)a2, (uint32_t)a3);
+    return 0;
+}
+
+static uint64_t sys_fb_drawline_impl(uint64_t a1, uint64_t a2, uint64_t a3,
+                                     uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a6;
+    if (!ensure_backbuffer()) return SYS_ERR(ENOMEM);
+    fb_backbuffer_draw_line((uint32_t)a1, (uint32_t)a2, (uint32_t)a3, (uint32_t)a4, (uint32_t)a5);
+    return 0;
+}
+
+static uint64_t sys_fb_drawrect_impl(uint64_t a1, uint64_t a2, uint64_t a3,
+                                     uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a6;
+    if (!ensure_backbuffer()) return SYS_ERR(ENOMEM);
+    fb_backbuffer_draw_rect((uint32_t)a1, (uint32_t)a2, (uint32_t)a3, (uint32_t)a4, (uint32_t)a5);
+    return 0;
+}
+
+static uint64_t sys_fb_clear_impl(uint64_t a1, uint64_t a2, uint64_t a3,
+                                  uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    if (!ensure_backbuffer()) return SYS_ERR(ENOMEM);
+    fb_backbuffer_clear((uint32_t)a1);
+    return 0;
+}
+
+static uint64_t sys_fb_swap_impl(uint64_t a1, uint64_t a2, uint64_t a3,
+                                 uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a1; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    if (!ensure_backbuffer()) return SYS_ERR(ENOMEM);
+    fb_backbuffer_swap();
+    return 0;
+}
+
+static uint64_t sys_hid_kbd_report_impl(uint64_t a1, uint64_t a2, uint64_t a3,
+                                        uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a3; (void)a4; (void)a5; (void)a6;
+    const uint8_t *rep = (const uint8_t *)a1;
+    size_t len = (size_t)a2;
+    struct task *t = task_current();
+    if (!user_range_ok(t, rep, len)) return SYS_ERR(EFAULT);
+    if (!hid_kbd_inject_report(rep, len)) return SYS_ERR(EINVAL);
+    return 0;
+}
+
 static syscall_fn g_syscalls[SYS_MAX] = {
     0,
     sys_write_impl,
@@ -1439,7 +1796,29 @@ static syscall_fn g_syscalls[SYS_MAX] = {
     sys_clock_gettime_impl,
     sys_timer_hz_impl,
     sys_uptime_ticks_impl,
-    sys_poll_impl
+    sys_poll_impl,
+    sys_flock_impl,
+    sys_futex_impl,
+    sys_sem_create_impl,
+    sys_sem_wait_impl,
+    sys_sem_post_impl,
+    sys_sem_destroy_impl,
+    sys_cond_create_impl,
+    sys_cond_wait_impl,
+    sys_cond_signal_impl,
+    sys_cond_broadcast_impl,
+    sys_cond_destroy_impl,
+    sys_set_fs_base_impl,
+    sys_get_fs_base_impl,
+    sys_tty_setmode_impl,
+    sys_tty_getmode_impl,
+    sys_fb_info_impl,
+    sys_fb_putpix_impl,
+    sys_fb_drawline_impl,
+    sys_fb_drawrect_impl,
+    sys_fb_clear_impl,
+    sys_fb_swap_impl,
+    sys_hid_kbd_report_impl
 };
 
 uint64_t syscall_dispatch(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3,

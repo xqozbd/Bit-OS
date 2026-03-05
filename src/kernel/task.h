@@ -23,6 +23,8 @@ enum task_state {
 #define FD_TYPE_PIPE 4
 #define FD_TYPE_PTY_MASTER 5
 #define FD_TYPE_PTY_SLAVE 6
+#define FD_TYPE_SEM 7
+#define FD_TYPE_COND 8
 
 struct task {
     uint32_t pid;
@@ -88,6 +90,8 @@ struct task_fd {
     uint8_t pipe_end;
     uint64_t offset;
     uint32_t flags;
+    uint8_t flock_mode;
+    uint8_t flock_count;
 };
 
 struct task_page {
@@ -116,6 +120,7 @@ void task_fd_init(struct task *t);
 struct task_fd *task_fd_get(struct task *t, int fd);
 int task_fd_alloc(struct task *t, int node, uint32_t flags);
 int task_fd_alloc_socket(struct task *t, int sock_id);
+int task_fd_alloc_obj(struct task *t, int type, void *obj);
 int task_fd_close(struct task *t, int fd);
 void task_set_user_layout(struct task *t, uint64_t brk_base, uint64_t brk_limit,
                           uint64_t stack_top, uint64_t stack_size,
@@ -154,5 +159,7 @@ uint32_t task_unshare_netns(struct task *t);
 uint32_t task_unshare_resgroup(struct task *t);
 void task_dump_list(void);
 size_t task_format_list(struct task *viewer, char *buf, size_t buf_len);
+void task_get_counts(uint32_t *total, uint32_t *running, uint32_t *blocked, uint32_t *dead);
+uint32_t task_total_created(void);
 
 #endif /* KERNEL_TASK_H */

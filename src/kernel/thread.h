@@ -48,6 +48,8 @@ struct thread {
     uint64_t mem_current;
     uint64_t mem_peak;
     uint64_t pml4_phys;
+    uint64_t tls_fs_base;
+    uint64_t tls_gs_base;
     uint8_t fpu_state[FPU_STATE_SIZE] __attribute__((aligned(FPU_STATE_ALIGN)));
     uint8_t fpu_valid;
     struct thread *sleep_next;

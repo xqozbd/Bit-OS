@@ -1,4 +1,5 @@
 #include "arch/x86_64/fpu.h"
+#include "lib/compat.h"
 
 #include <stddef.h>
 
@@ -71,40 +72,51 @@ static inline void do_xrstor(const uint8_t *state) {
 }
 
 void fpu_init(void) {
-    if (g_fpu_ready) return;
 #if defined(__GNUC__) || defined(__clang__)
     uint32_t a, b, c, d;
-    cpuid(1, 0, &a, &b, &c, &d);
-    int has_xsave = (c & (1u << 26)) != 0;
-    int has_osxsave = (c & (1u << 27)) != 0;
-    int has_avx = (c & (1u << 28)) != 0;
-    g_use_xsave = 0;
-    g_xsave_mask = 0x3u; /* x87 + SSE */
-    g_xsave_size = 512;
-    if (has_xsave && has_osxsave) {
+    if (!g_fpu_ready) {
+        cpuid(1, 0, &a, &b, &c, &d);
+        int has_xsave = (c & (1u << 26)) != 0;
+        int has_osxsave = (c & (1u << 27)) != 0;
+        int has_avx = (c & (1u << 28)) != 0;
+        g_use_xsave = 0;
+        g_xsave_mask = 0x3u; /* x87 + SSE */
+        g_xsave_size = 512;
+        if (has_xsave && has_osxsave) {
+            if (has_avx) {
+                g_xsave_mask |= (1u << 2); /* AVX */
+            }
+            enable_osxsave();
+            xsetbv(0, g_xsave_mask);
+            cpuid(0xD, 0, &a, &b, &c, &d);
+            if (b >= 512 && b <= FPU_STATE_SIZE) {
+                g_xsave_size = b;
+            } else if (b > FPU_STATE_SIZE) {
+                g_xsave_size = FPU_STATE_SIZE;
+            }
+            g_use_xsave = 1;
+        }
+    }
+
+    if (g_use_xsave) {
         enable_osxsave();
-        if (has_avx) {
-            g_xsave_mask |= (1u << 2); /* AVX */
-        }
         xsetbv(0, g_xsave_mask);
-        cpuid(0xD, 0, &a, &b, &c, &d);
-        if (b >= 512 && b <= FPU_STATE_SIZE) {
-            g_xsave_size = b;
-        } else if (b > FPU_STATE_SIZE) {
-            g_xsave_size = FPU_STATE_SIZE;
-        }
-        g_use_xsave = 1;
     }
     __asm__ volatile("fninit");
     if (g_use_xsave) {
-        do_xsave(g_fpu_default);
+        if (!g_fpu_ready) {
+            do_xsave(g_fpu_default);
+            g_fpu_ready = 1;
+        }
         do_xrstor(g_fpu_default);
     } else {
-        __asm__ volatile("fxsave (%0)" :: "r"(g_fpu_default) : "memory");
+        if (!g_fpu_ready) {
+            __asm__ volatile("fxsave (%0)" :: "r"(g_fpu_default) : "memory");
+            g_fpu_ready = 1;
+        }
         __asm__ volatile("fxrstor (%0)" :: "r"(g_fpu_default) : "memory");
     }
 #endif
-    g_fpu_ready = 1;
 }
 
 void fpu_save(uint8_t *state) {

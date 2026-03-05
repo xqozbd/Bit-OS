@@ -127,6 +127,12 @@ RNG & Devices: simple kernel RNG with `/dev/random` and `/dev/urandom`.
 
 Kernel: FPU state save/restore on task switch.
 
+Kernel: SSE/AVX XSAVE/XRSTOR context with per-CPU init, kernel stack guard overflow detection, kernel profiling counters, ELF core dump generation on task crash, userspace leak sanitizer on task exit, disk quota accounting, and kernel pipe buffers.
+
+Sync & IPC: spinlocks/atomic helpers for SMP, futex wait/wake, kernel semaphores and condition variables exposed to userspace, advisory file locking (flock), UNIX domain sockets (AF_UNIX stream), and per-thread TLS FS base support with save/restore on context switch.
+
+Userland & Diagnostics: libc extensions (string/memory/math/stdio), userspace logging API, /proc/cpuinfo + /proc/stat reporting (CPUID flags, kernel counters), TTY raw/cooked mode switches, and kernel memory sanitizer hooks (poison on alloc/free).
+
 
 ## Features Changed:
 Build warnings cleaned up (log/acpi prototypes).
