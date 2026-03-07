@@ -21,10 +21,9 @@ struct init_payload {
     char arg1[32];
 };
 
-static int vfs_path_exists(const char *path) {
-    if (!path || !path[0]) return 0;
-    int node = vfs_resolve(0, path);
-    return node >= 0;
+static int vfs_path_node(const char *path) {
+    if (!path || !path[0]) return -1;
+    return vfs_resolve(0, path);
 }
 
 static void init_thread(void *arg) {
@@ -60,6 +59,12 @@ static void init_thread(void *arg) {
         task->pml4_phys = pml4;
     }
 
+    if (entry >= 0x0000800000000000ull || rsp >= 0x0000800000000000ull) {
+        log_printf("init: bad user entry/rsp entry=%p rsp=%p\n",
+                   (void *)(uintptr_t)entry, (void *)(uintptr_t)rsp);
+        kfree(p);
+        thread_exit();
+    }
     paging_switch_to(pml4);
     kfree(p);
     user_enter_iret(entry, rsp, 0x202);
@@ -74,7 +79,8 @@ int init_spawn(void) {
     }
     const char *init_param = boot_param_get("init");
     const char *candidates[] = {
-        init_param,
+        "/bin/login",
+        "/initramfs/bin/login",
         "/bin/init",
         "/sbin/init",
         "/init",
@@ -89,19 +95,38 @@ int init_spawn(void) {
     };
 
     const char *chosen = NULL;
+    int chosen_node = -1;
     int use_busybox = 0;
-    for (int i = 0; candidates[i]; ++i) {
-        if (candidates[i] && vfs_path_exists(candidates[i])) {
-            chosen = candidates[i];
-            if (candidates[i][0] == '/' &&
-                candidates[i][1] == 'b' &&
-                candidates[i][2] == 'i' &&
-                candidates[i][3] == 'n' &&
-                candidates[i][4] == '/' &&
-                candidates[i][5] == 'b') {
-                use_busybox = 1;
+    if (init_param) {
+        int node = vfs_path_node(init_param);
+        if (node >= 0 && !vfs_is_dir(node)) {
+            chosen = init_param;
+            chosen_node = node;
+        }
+    }
+    if (!chosen) {
+        for (int i = 0; candidates[i]; ++i) {
+            int node = vfs_path_node(candidates[i]);
+            if (node >= 0 && !vfs_is_dir(node)) {
+                chosen = candidates[i];
+                chosen_node = node;
+                break;
             }
-            break;
+        }
+    }
+
+    if (chosen) {
+        size_t nlen = 0;
+        while (chosen[nlen]) nlen++;
+        const char *suffix = "busybox";
+        size_t slen = 7;
+        if (nlen >= slen) {
+            size_t off = nlen - slen;
+            int match = 1;
+            for (size_t i = 0; i < slen; ++i) {
+                if (chosen[off + i] != suffix[i]) { match = 0; break; }
+            }
+            if (match) use_busybox = 1;
         }
     }
 
@@ -149,7 +174,7 @@ int init_spawn(void) {
         p->arg1[n] = '\0';
     }
 
-    log_printf("init: spawning %s\n", p->path);
+    log_printf("init: spawning %s (node=%d)\n", p->path, chosen_node);
     struct thread *t = thread_create(init_thread, p, 8192, "init");
     if (!t) {
         kfree(p);

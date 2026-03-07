@@ -60,6 +60,8 @@ struct thread {
 };
 
 struct thread *thread_current(void);
+struct thread *thread_alloc_struct(void);
+void thread_free_struct(struct thread *t);
 struct thread *thread_create(void (*entry)(void *), void *arg, size_t stack_size, const char *name);
 void thread_exit(void) __attribute__((noreturn));
 int thread_join(struct thread *t);

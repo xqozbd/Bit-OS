@@ -194,25 +194,228 @@
 - [x] Virtual keyboard input support (HID).
 - [x] Basic graphics API for userspace (pixel set, draw line/rect).
 - [x] Double buffering for framebuffer graphics.
+- [x] Color palette / 24-bit color support.
+- [x] Font rendering in graphics mode.
+- [x] Kernel video mode setting (VBE/UEFI framebuffer).
+- [x] Audio subsystem skeleton (sound output).
+- [x] Timer-based audio playback.
+- [x] Kernel threads for device polling.
+- [x] Userspace process isolation with page tables.
+- [x] Swap-backed anonymous memory.
+- [x] Userland dynamic memory debugging.
+- [x] Kernel-level mutexes.
+- [x] Multi-CPU preemption testing.
+- [x] Kernel crash recovery routines.
+- [x] Basic sandboxing of user programs.
+- [x] Desktop stack: `/dev/fb0` mmap + IOCTLs (size/pitch/format).
+- [x] Desktop stack: `/dev/input` event stream (keyboard/mouse).
+- [x] Desktop stack: userspace window server/compositor (basic).
+- [x] Desktop stack: window protocol + shared memory buffers.
+- [x] Desktop stack: font rendering + text drawing in userspace.
+- [x] Desktop stack: basic UI toolkit (buttons/menus/panels).
+- [x] Desktop stack: desktop shell (taskbar + launcher).
 
 ## Next
-- [ ] Color palette / 24-bit color support.
-- [ ] Font rendering in graphics mode.
-- [ ] Kernel video mode setting (VBE/UEFI framebuffer).
-- [ ] Audio subsystem skeleton (sound output).
-- [ ] Timer-based audio playback.
-- [ ] Kernel threads for device polling.
-- [ ] Userspace process isolation with page tables.
-- [ ] Swap-backed anonymous memory.
-- [ ] Userland dynamic memory debugging.
-- [ ] Kernel-level mutexes.
-- [ ] Multi-CPU preemption testing.
-- [ ] Kernel crash recovery routines.
-- [ ] Basic sandboxing of user programs.
-- [ ] Desktop stack: `/dev/fb0` mmap + IOCTLs (size/pitch/format).
-- [ ] Desktop stack: `/dev/input` event stream (keyboard/mouse).
-- [ ] Desktop stack: userspace window server/compositor (basic).
-- [ ] Desktop stack: window protocol + shared memory buffers.
-- [ ] Desktop stack: font rendering + text drawing in userspace.
-- [ ] Desktop stack: basic UI toolkit (buttons/menus/panels).
-- [ ] Desktop stack: desktop shell (taskbar + launcher).
+
+### P0 - Boot To Usable Desktop (MVP)
+- [ ] Boot target: start desktop session by default after `/bin/init`.
+- [ ] Keep kernel console available for fatal desktop startup failures.
+- [ ] Add boot flag to force text mode (`boot.mode=console`).
+- [ ] Add boot flag to force desktop mode (`boot.mode=desktop`).
+- [ ] Add service manager ordering for `input -> fb -> compositor -> shell`.
+- [ ] Implement compositor auto-restart with crash counter backoff.
+- [ ] Fallback to login shell if compositor fails N times.
+- [ ] Persist last desktop boot result in `/var/log/boot-desktop.log`.
+- [ ] Add startup timeout watchdog for desktop components.
+- [ ] Add panic-safe framebuffer flush before halt.
+- [ ] Add explicit user-facing startup status line for each desktop service.
+- [ ] Add safe mode that disables optional services and effects.
+
+### P0 - Kernel Display Interfaces (`/dev/fb0`)
+- [ ] Finalize `FB_GET_INFO` ioctl (width/height/pitch/bpp/format).
+- [ ] Add `FB_SET_MODE` ioctl for supported framebuffer mode switches.
+- [ ] Add `FB_GET_MODES` ioctl to enumerate available modes.
+- [ ] Add `FB_MAP`/`mmap` validation and per-process mapping tracking.
+- [ ] Add strict bounds checks for framebuffer writes.
+- [ ] Add support for `XRGB8888` and `RGB565` conversion helpers.
+- [ ] Add software backbuffer allocation path in kernel.
+- [ ] Add `FB_PAGE_FLIP` ioctl for double-buffer presentation.
+- [ ] Add `FB_WAIT_VSYNC` ioctl stub with timer-based fallback.
+- [ ] Add clip-rectangle ioctl path for partial updates.
+- [ ] Add display rotation metadata (`0/90/180/270`).
+- [ ] Add DPI reporting fields for userspace scaling.
+
+### P0 - Kernel Input Interfaces (`/dev/input`)
+- [ ] Finalize keyboard event struct (scancode/keycode/modifiers/repeat).
+- [ ] Finalize mouse event struct (dx/dy/buttons/wheel/timestamp).
+- [ ] Add monotonic timestamps to all input events.
+- [ ] Add ring-buffer overflow counters and dropped-event metrics.
+- [ ] Add multi-reader fanout (independent read cursors per client).
+- [ ] Add nonblocking read + poll/select readiness semantics.
+- [ ] Add secure input mode for password prompts.
+- [ ] Add runtime keymap switching API.
+- [ ] Add pointer acceleration profiles.
+- [ ] Add pointer confinement API for fullscreen apps.
+- [ ] Add device hotplug events for future USB input.
+- [ ] Add global shortcut reservation API.
+
+### P0 - Compositor And Window Server
+- [ ] Implement userspace compositor main loop with epoll-like event wait.
+- [ ] Implement shared-memory window buffers.
+- [ ] Implement window create/destroy/map/unmap protocol.
+- [ ] Implement z-order and click-to-focus behavior.
+- [ ] Implement keyboard focus tracking and dispatch.
+- [ ] Implement pointer focus and enter/leave events.
+- [ ] Implement damage tracking and partial redraw.
+- [ ] Implement software compositing of multiple windows.
+- [ ] Implement cursor composition layer independent of clients.
+- [ ] Implement resize negotiation and configure-ack flow.
+- [ ] Implement fullscreen/maximize/minimize window states.
+- [ ] Implement protocol version negotiation and capability flags.
+- [ ] Add compositor-side rate limiting for noisy clients.
+- [ ] Add client heartbeat timeout and hung-client detection.
+
+### P0 - Desktop Shell (Taskbar + Launcher)
+- [ ] Implement panel/taskbar process with fixed bottom layout.
+- [ ] Add launcher button opening app list.
+- [ ] Add running-app task buttons.
+- [ ] Add active-window highlight state.
+- [ ] Add shell clock widget with realtime updates.
+- [ ] Add shell session menu (logout/reboot/shutdown).
+- [ ] Add workspace switch buttons (1..4).
+- [ ] Add quick-launch pinned apps config file.
+- [ ] Add shell keyboard shortcuts (`Alt+Tab`, `Alt+F2`).
+- [ ] Add run dialog process launcher.
+- [ ] Add basic notification area container.
+- [ ] Add desktop background renderer.
+
+### P0 - Core Desktop Apps
+- [ ] Add terminal emulator app using PTY backend.
+- [ ] Add login app usable in windowed and fallback text mode.
+- [ ] Add file browser MVP (list/open/copy/delete).
+- [ ] Add settings app MVP (display/input/theme).
+- [ ] Add text editor MVP for plain UTF-8 files.
+- [ ] Add app launcher index from `/usr/share/applications`-style entries.
+- [ ] Add MIME association table and default app resolution.
+- [ ] Add clipboard manager process.
+- [ ] Add screenshot utility for whole screen/window.
+- [ ] Add process monitor app (CPU/memory/tasks).
+- [ ] Add crash reporter app showing recent fault logs.
+- [ ] Add software update notifier stub.
+
+### P1 - UI Toolkit For Desktop Apps
+- [ ] Add retained-mode widget tree core.
+- [ ] Add layout containers: row/column/grid.
+- [ ] Add button widget with hover/pressed/disabled states.
+- [ ] Add label widget with wrapping and ellipsis.
+- [ ] Add single-line and multiline text input widgets.
+- [ ] Add scrollview with keyboard and wheel support.
+- [ ] Add list and table widgets with selection model.
+- [ ] Add menu bar/context menu primitives.
+- [ ] Add dialog and modal stacking support.
+- [ ] Add theme variables (spacing, radius, color, font).
+- [ ] Add icon atlas loading and rendering.
+- [ ] Add focus navigation and tab order.
+- [ ] Add accessibility metadata skeleton (role/name/state).
+- [ ] Add UI toolkit test harness with snapshot tests.
+
+### P1 - Text, Fonts, And Rendering Quality
+- [ ] Add font manager with fallback chain.
+- [ ] Add glyph cache/atlas with LRU eviction.
+- [ ] Add UTF-8 decode/encode helpers for all apps.
+- [ ] Add basic shaping hooks for complex scripts.
+- [ ] Add bidirectional text handling skeleton.
+- [ ] Add subpixel AA toggle and grayscale fallback.
+- [ ] Add font hinting quality options.
+- [ ] Add locale-aware date/time formatting helpers.
+- [ ] Add emoji fallback rendering path.
+- [ ] Add text selection, copy, and caret movement semantics.
+- [ ] Add clipboard text MIME normalization.
+- [ ] Add benchmark for text render throughput.
+
+### P1 - Process Isolation And Sandboxing
+- [ ] Enforce per-process page-table isolation for all desktop apps.
+- [ ] Add W^X policy checks for user mappings.
+- [ ] Add per-app capability manifest (`net`, `fs`, `input`, `audio`).
+- [ ] Add sandbox profile parser loaded at exec.
+- [ ] Add path-based allow/deny policies.
+- [ ] Add syscall filter enforcement per process class.
+- [ ] Add denied-operation audit logging.
+- [ ] Add sandbox escape regression tests.
+- [ ] Add isolated temp directories per app.
+- [ ] Add broker process for privileged operations.
+- [ ] Add secure IPC channels between broker and apps.
+- [ ] Add user consent prompt flow for privileged actions.
+
+### P1 - Memory, Scheduling, And IPC Robustness
+- [ ] Add swap-backed anonymous memory pressure path hardening.
+- [ ] Add OOM killer policy tuned for desktop responsiveness.
+- [ ] Add userspace allocator debug mode with leak reporting.
+- [ ] Add allocator guard pages in debug builds.
+- [ ] Add kernel mutex contention diagnostics.
+- [ ] Add priority inheritance for mutexes.
+- [ ] Add condition variable primitives in kernel/user sync APIs.
+- [ ] Add futex-like fast userspace wait/wake primitive.
+- [ ] Add compositor/input/audio thread priorities.
+- [ ] Add scheduler latency metrics per CPU.
+- [ ] Add long-run multi-CPU preemption stress tests.
+- [ ] Add desktop-focused IPC latency benchmarks.
+
+### P1 - Filesystem, Sessions, And User Data
+- [ ] Add per-user home creation on first login.
+- [ ] Add desktop session state save/restore.
+- [ ] Add autostart entries from user config directory.
+- [ ] Add recent-files index service.
+- [ ] Add trash/recycle-bin semantics.
+- [ ] Add file permission editor in settings app.
+- [ ] Add mount manager UI with safe unmount flow.
+- [ ] Add removable media automount policy.
+- [ ] Add keyring stub for saved credentials.
+- [ ] Add user profile picture and account settings.
+- [ ] Add backup/export settings profile feature.
+- [ ] Add disk-usage analyzer utility.
+
+### P1 - Audio Stack For Desktop UX
+- [ ] Finalize kernel audio subsystem interface (`/dev/audio`).
+- [ ] Add timer-based PCM playback pipeline.
+- [ ] Add userspace audio server mixer.
+- [ ] Add per-app volume controls.
+- [ ] Add shell volume widget integration.
+- [ ] Add default output device selection.
+- [ ] Add audio format conversion helper (`s16`, `f32`).
+- [ ] Add underrun/overrun telemetry counters.
+- [ ] Add startup/shutdown UI sounds (optional).
+- [ ] Add media key handling for volume/mute.
+- [ ] Add loopback capture device for testing.
+- [ ] Add basic WAV playback utility.
+
+### P2 - Hardware Expansion And Performance
+- [ ] Add virtio-gpu/2D acceleration exploration path.
+- [ ] Add EDID parsing and preferred mode selection.
+- [ ] Add multi-monitor layout management.
+- [ ] Add hotplug display detection handling.
+- [ ] Add USB HID parity path with PS/2 behavior.
+- [ ] Add GPU/CPU copy path benchmarks for compositing.
+- [ ] Add frame pacing profiler and jank counters.
+- [ ] Add adaptive quality mode under CPU pressure.
+- [ ] Add tiled backing-store strategy for large windows.
+- [ ] Add mmap cache hints for large UI buffers.
+- [ ] Add compositor memory budget enforcement.
+- [ ] Add boot-time service parallelization where safe.
+
+### P2 - Reliability, Recovery, And Developer Tooling
+- [ ] Add kernel crash recovery routines for nonfatal subsystem failures.
+- [ ] Add staged desktop recovery: restart component before full reboot.
+- [ ] Add persistent crash dumps with userspace symbolization tool.
+- [ ] Add compositor protocol trace capture and replay.
+- [ ] Add deterministic desktop boot smoke tests in CI.
+- [ ] Add fuzzing for window protocol messages.
+- [ ] Add fuzzing for `/dev/input` and `/dev/fb0` ioctl parsing.
+- [ ] Add integration tests for login -> desktop -> app launch -> logout.
+- [ ] Add long soak test for idle desktop stability.
+- [ ] Add synthetic input replay for GUI testing.
+- [ ] Add screenshot diff tool for visual regression tests.
+- [ ] Add kernel/userspace structured logging format.
+- [ ] Add desktop diagnostics bundle command for bug reports.
+- [ ] Add release checklist for "desktop ready" milestone.
+

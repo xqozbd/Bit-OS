@@ -14,6 +14,7 @@
 #include "kernel/time.h"
 #include "kernel/profiler.h"
 #include "kernel/task.h"
+#include "kernel/crash.h"
 
 enum { SYSCTL_MAX = 32 };
 
@@ -131,6 +132,25 @@ static int sysctl_get_watchdog(char *out, size_t max, void *ctx) {
 static int sysctl_set_watchdog(const char *val, void *ctx) {
     (void)ctx;
     watchdog_set_mode(val);
+    return 1;
+}
+
+static int sysctl_get_crash_mode(char *out, size_t max, void *ctx) {
+    (void)ctx;
+    const char *s = crash_mode_name();
+    size_t i = 0;
+    while (s[i] && i + 1 < max) {
+        out[i] = s[i];
+        i++;
+    }
+    if (max) out[i] = '\0';
+    return 1;
+}
+
+static int sysctl_set_crash_mode(const char *val, void *ctx) {
+    (void)ctx;
+    if (!val) return 0;
+    crash_set_mode(val);
     return 1;
 }
 
@@ -407,6 +427,7 @@ void sysctl_init(void) {
     g_sysctl_count = 0;
     sysctl_register("log.level", sysctl_get_log_level, sysctl_set_log_level, NULL);
     sysctl_register("watchdog.mode", sysctl_get_watchdog, sysctl_set_watchdog, NULL);
+    sysctl_register("crash.mode", sysctl_get_crash_mode, sysctl_set_crash_mode, NULL);
     sysctl_register("net.ipv6.forwarding", sysctl_get_ipv6_forward, sysctl_set_ipv6_forward, NULL);
     sysctl_register("vm.swap.enabled", sysctl_get_swap_enabled, NULL, NULL);
     sysctl_register("vm.swap.slots", sysctl_get_swap_slots, NULL, NULL);

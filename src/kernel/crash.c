@@ -6,19 +6,38 @@
 #include "kernel/watchdog.h"
 #include "lib/log.h"
 #include "kernel/crash_dump.h"
+#include "kernel/power.h"
 
-static int g_restart_attempts = 0;
+static int g_crash_mode = 0; /* 0=halt, 1=reboot */
 
-static void crash_try_restart(void) {
-    /* Try keyboard controller reset first. */
-    outb(0x64, 0xFE);
+static int crash_mode_from_str(const char *mode) {
+    if (!mode) return 0;
+    if (mode[0] == 'r' && mode[1] == 'e' && mode[2] == 'b' && mode[3] == 'o' &&
+        mode[4] == 'o' && mode[5] == 't' && mode[6] == '\0') return 1;
+    if (mode[0] == 'h' && mode[1] == 'a' && mode[2] == 'l' && mode[3] == 't' &&
+        mode[4] == '\0') return 0;
+    return 0;
+}
 
-    /* If it didn't reset quickly, try ACPI/QEMU reset ports. */
-    outw(0x604, 0x2000);
-    outw(0xB004, 0x2000);
-    outw(0x4004, 0x3400);
-    outw(0x4004, 0x2000);
+const char *crash_mode_name(void) {
+    return g_crash_mode ? "reboot" : "halt";
+}
 
+void crash_set_mode(const char *mode) {
+    g_crash_mode = crash_mode_from_str(mode);
+}
+
+int crash_get_mode(void) {
+    return g_crash_mode;
+}
+
+static void crash_halt_or_recover(void) {
+    if (g_crash_mode == 1) {
+        log_printf("CRASH: attempting recovery reboot...\n");
+        power_restart();
+        log_printf("CRASH: reboot did not complete, halting\n");
+    }
+    log_printf("CRASH: system halted. Power off or reset to recover.\n");
     halt_forever();
 }
 
@@ -56,42 +75,22 @@ enum crash_action crash_handle_exception(uint8_t vec,
         return CRASH_CONTINUE;
     }
 
-    if (g_restart_attempts == 0) {
-        g_restart_attempts = 1;
-        log_ring_freeze(1);
-        log_ring_dump();
-        crash_dump_capture_exception(vec, err, has_err);
-        crash_dump_flush_ring();
-        log_printf("CRASH: fatal exception, restarting...\n");
-        crash_try_restart();
-        return CRASH_RESTART;
-    }
-
     log_ring_freeze(1);
     log_ring_dump();
     crash_dump_capture_exception(vec, err, has_err);
     crash_dump_flush_ring();
-    log_printf("CRASH: fatal exception, shutdown\n");
-    crash_try_restart();
+    log_printf("CRASH: fatal exception\n");
+    crash_halt_or_recover();
     return CRASH_HALT;
 }
 
 void crash_panic(uint32_t code, const char *msg) {
     log_printf("PANIC: code=0x%x stage=%s\n", (unsigned)code, watchdog_last_stage());
     if (msg) log_printf("PANIC: %s\n", msg);
-    if (g_restart_attempts == 0) {
-        g_restart_attempts = 1;
-        log_ring_freeze(1);
-        log_ring_dump();
-        crash_dump_capture(code, msg);
-        crash_dump_flush_ring();
-        log_printf("PANIC: restarting...\n");
-        crash_try_restart();
-    }
     log_ring_freeze(1);
     log_ring_dump();
     crash_dump_capture(code, msg);
     crash_dump_flush_ring();
-    log_printf("PANIC: shutdown\n");
-    crash_try_restart();
+    log_printf("PANIC: fatal\n");
+    crash_halt_or_recover();
 }

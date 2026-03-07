@@ -2,6 +2,7 @@
 #include "drivers/video/fb_printf.h"
 #include "drivers/video/font8x8_basic.h"
 #include "drivers/ps2/mouse.h"
+#include "arch/x86_64/paging.h"
 #include "kernel/heap.h"
 #include <stddef.h>
 #include <stdint.h>
@@ -646,6 +647,26 @@ int fb_get_info(struct fb_info *out) {
     return 1;
 }
 
+int fb_get_mode_info(struct fb_mode_info *out) {
+    if (!out || !g_fb) return 0;
+    uint64_t addr = (uint64_t)(uintptr_t)g_fb->address;
+    uint64_t hhdm = paging_hhdm_offset();
+    if (hhdm && addr >= hhdm) addr -= hhdm;
+    out->phys_addr = addr;
+    out->size_bytes = fb_pitch * fb_height;
+    out->width = (uint32_t)fb_width;
+    out->height = (uint32_t)fb_height;
+    out->pitch = (uint32_t)fb_pitch;
+    out->bpp = (uint32_t)fb_bpp;
+    out->red_mask_size = fb_rm_size;
+    out->red_mask_shift = fb_rm_shift;
+    out->green_mask_size = fb_gm_size;
+    out->green_mask_shift = fb_gm_shift;
+    out->blue_mask_size = fb_bm_size;
+    out->blue_mask_shift = fb_bm_shift;
+    return 1;
+}
+
 uint32_t fb_line_height(void) {
     return line_step();
 }
@@ -766,8 +787,10 @@ void fb_vprintf(const char *fmt, va_list ap) {
                 case 'p': { void *ptr = va_arg(ap,void*); utoa_unsigned((uintptr_t)ptr,16,numbuf); fb_puts("0x"); fb_puts(numbuf); } break;
                 default: fb_putc('%'); fb_putc(*p); break;
             }
-        } else if (*p == '\n') new_line();
-        else fb_putc(*p);
+        } else {
+            /* Route every character through fb_putc so scrollback records newlines. */
+            fb_putc(*p);
+        }
         ++p;
     }
 }

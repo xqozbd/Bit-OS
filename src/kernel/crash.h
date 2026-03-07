@@ -24,5 +24,8 @@ enum crash_action crash_handle_exception(uint8_t vec,
                                          const struct interrupt_frame *frame);
 
 void crash_panic(uint32_t code, const char *msg);
+void crash_set_mode(const char *mode);
+int crash_get_mode(void);
+const char *crash_mode_name(void);
 
 #endif /* KERNEL_CRASH_H */

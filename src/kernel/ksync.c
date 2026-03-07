@@ -1,6 +1,7 @@
 #include "kernel/ksync.h"
 
 #include "kernel/heap.h"
+#include "kernel/thread.h"
 
 struct ksem *ksem_create(int initial) {
     if (initial < 0) initial = 0;
@@ -89,5 +90,92 @@ int kcond_broadcast(struct kcond *cond) {
     spinlock_lock(&cond->lock);
     waitq_wake_all(&cond->wait);
     spinlock_unlock(&cond->lock);
+    return 0;
+}
+
+struct kmutex *kmutex_create(void) {
+    struct kmutex *m = (struct kmutex *)kmalloc(sizeof(*m));
+    if (!m) return NULL;
+    m->refcount = 1;
+    spinlock_init(&m->lock);
+    waitq_init(&m->wait);
+    m->locked = 0;
+    m->owner_tid = 0;
+    m->recursion = 0;
+    return m;
+}
+
+void kmutex_ref(struct kmutex *m) {
+    if (!m) return;
+    __atomic_fetch_add(&m->refcount, 1u, __ATOMIC_SEQ_CST);
+}
+
+void kmutex_unref(struct kmutex *m) {
+    if (!m) return;
+    if (__atomic_fetch_sub(&m->refcount, 1u, __ATOMIC_SEQ_CST) == 1u) {
+        kfree(m);
+    }
+}
+
+int kmutex_lock(struct kmutex *m) {
+    if (!m) return -1;
+    struct thread *cur = thread_current();
+    uint32_t tid = cur ? cur->id : 0;
+
+    spinlock_lock(&m->lock);
+    if (m->locked && m->owner_tid == tid && tid != 0) {
+        m->recursion++;
+        spinlock_unlock(&m->lock);
+        return 0;
+    }
+    while (m->locked) {
+        waitq_sleep(&m->wait, &m->lock);
+    }
+    m->locked = 1;
+    m->owner_tid = tid;
+    m->recursion = 1;
+    spinlock_unlock(&m->lock);
+    return 0;
+}
+
+int kmutex_trylock(struct kmutex *m) {
+    if (!m) return -1;
+    struct thread *cur = thread_current();
+    uint32_t tid = cur ? cur->id : 0;
+    int ok = 0;
+
+    spinlock_lock(&m->lock);
+    if (m->locked) {
+        if (m->owner_tid == tid && tid != 0) {
+            m->recursion++;
+            ok = 1;
+        }
+    } else {
+        m->locked = 1;
+        m->owner_tid = tid;
+        m->recursion = 1;
+        ok = 1;
+    }
+    spinlock_unlock(&m->lock);
+    return ok ? 0 : -1;
+}
+
+int kmutex_unlock(struct kmutex *m) {
+    if (!m) return -1;
+    struct thread *cur = thread_current();
+    uint32_t tid = cur ? cur->id : 0;
+
+    spinlock_lock(&m->lock);
+    if (!m->locked || m->owner_tid != tid || m->recursion == 0) {
+        spinlock_unlock(&m->lock);
+        return -1;
+    }
+    m->recursion--;
+    if (m->recursion == 0) {
+        m->locked = 0;
+        m->owner_tid = 0;
+        waitq_wake_one(&m->wait);
+    }
+    spinlock_unlock(&m->lock);
     return 0;
 }

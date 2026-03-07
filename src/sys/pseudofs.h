@@ -11,6 +11,8 @@
 #define PSEUDOFS_DEV_TTY0 2
 #define PSEUDOFS_DEV_RANDOM 3
 #define PSEUDOFS_DEV_URANDOM 4
+#define PSEUDOFS_DEV_FB0 5
+#define PSEUDOFS_DEV_INPUT 6
 
 int pseudofs_is_ready(int fs_id);
 int pseudofs_root(int fs_id);

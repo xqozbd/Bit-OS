@@ -29,7 +29,7 @@ static int g_job_next = 1;
 static int g_shell_pgid = 0;
 static const char *g_cmds[] = {
     "ls", "ps", "top", "mount", "umount", "dd", "sh", "help",
-    "set", "export", "unset", "env", "jobs", "fg", "bg",
+    "sandbox", "set", "export", "unset", "env", "jobs", "fg", "bg",
     "sleep", "echo", "exit", 0
 };
 
@@ -90,6 +90,48 @@ static int split_line(char *s, char **argv, int max) {
 
 static int dispatch(const char *name, int argc, char **argv);
 static int run_command(char *line, int interactive);
+static char **build_envp(void);
+
+static int contains_slash(const char *s) {
+    if (!s) return 0;
+    for (int i = 0; s[i]; ++i) {
+        if (s[i] == '/') return 1;
+    }
+    return 0;
+}
+
+static uint32_t parse_sandbox_flags(const char *s) {
+    if (!s || !s[0]) return 0;
+    if (ustrcmp(s, "all") == 0) {
+        return SANDBOX_FS_WRITE | SANDBOX_NET | SANDBOX_MOUNT | SANDBOX_DEV;
+    }
+    if (ustrcmp(s, "none") == 0 || ustrcmp(s, "0") == 0) {
+        return 0;
+    }
+    uint32_t flags = 0;
+    int i = 0;
+    while (s[i]) {
+        char tok[16];
+        int t = 0;
+        while (s[i] && s[i] != ',' && t + 1 < (int)sizeof(tok)) {
+            tok[t++] = s[i++];
+        }
+        tok[t] = '\0';
+        if (s[i] == ',') i++;
+        if (ustrcmp(tok, "write") == 0 || ustrcmp(tok, "fs") == 0) {
+            flags |= SANDBOX_FS_WRITE;
+        } else if (ustrcmp(tok, "net") == 0) {
+            flags |= SANDBOX_NET;
+        } else if (ustrcmp(tok, "mount") == 0) {
+            flags |= SANDBOX_MOUNT;
+        } else if (ustrcmp(tok, "dev") == 0) {
+            flags |= SANDBOX_DEV;
+        } else {
+            return 0xFFFFFFFFu;
+        }
+    }
+    return flags;
+}
 
 static int env_find(const char *key) {
     if (!key) return -1;
@@ -394,6 +436,58 @@ static int applet_dd(int argc, char **argv) {
     sys_close(fd_out);
     uputs("dd: copy complete\n");
     return 0;
+}
+
+static int applet_sandbox(int argc, char **argv) {
+    if (argc < 3 || !argv || !argv[1] || !argv[2]) {
+        uputs("usage: sandbox <flags> <command> [args...]\n");
+        uputs("flags: none|all|write,net,mount,dev\n");
+        return 1;
+    }
+    uint32_t flags = parse_sandbox_flags(argv[1]);
+    if (flags == 0xFFFFFFFFu) {
+        uputs("sandbox: invalid flags\n");
+        return 1;
+    }
+
+    long pid = sys_fork();
+    if (pid < 0) {
+        uputs("sandbox: fork failed\n");
+        return 1;
+    }
+    if (pid == 0) {
+        if (sys_sandbox(flags) < 0) {
+            uputs("sandbox: syscall failed\n");
+            sys_exit(1);
+        }
+        char **cmd_argv = &argv[2];
+        int cmd_argc = argc - 2;
+        long rc = sys_execve(cmd_argv[0], cmd_argc, cmd_argv, build_envp());
+        if (rc < 0 && !contains_slash(cmd_argv[0])) {
+            char path[96];
+            int p = 0;
+            const char *prefix = "/bin/";
+            while (prefix[p] && p + 1 < (int)sizeof(path)) {
+                path[p] = prefix[p];
+                p++;
+            }
+            int q = 0;
+            while (cmd_argv[0][q] && p + 1 < (int)sizeof(path)) {
+                path[p++] = cmd_argv[0][q++];
+            }
+            path[p] = '\0';
+            cmd_argv[0] = path;
+            rc = sys_execve(cmd_argv[0], cmd_argc, cmd_argv, build_envp());
+        }
+        if (rc < 0) {
+            uputs("sandbox: exec failed\n");
+            sys_exit(1);
+        }
+        sys_exit(0);
+    }
+    int st = 0;
+    sys_waitpid((int)pid, &st);
+    return (st == 0) ? 0 : 1;
 }
 
 static int tokenize_line(const char *line, char *out, int out_max) {
@@ -1052,7 +1146,7 @@ static int applet_sh(int argc, char **argv) {
 }
 
 static void applet_help(void) {
-    uputs("busybox applets: ls ps top mount umount dd sh help\n");
+    uputs("busybox applets: ls ps top mount umount dd sandbox sh help\n");
 }
 
 static int dispatch(const char *name, int argc, char **argv) {
@@ -1063,6 +1157,7 @@ static int dispatch(const char *name, int argc, char **argv) {
     if (ustrcmp(name, "mount") == 0) return applet_mount(argc, argv);
     if (ustrcmp(name, "umount") == 0) return applet_umount(argc, argv);
     if (ustrcmp(name, "dd") == 0) return applet_dd(argc, argv);
+    if (ustrcmp(name, "sandbox") == 0) return applet_sandbox(argc, argv);
     if (ustrcmp(name, "sh") == 0) return applet_sh(argc, argv);
     if (ustrcmp(name, "help") == 0) {
         applet_help();

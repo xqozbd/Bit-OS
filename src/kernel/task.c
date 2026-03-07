@@ -89,6 +89,15 @@ struct task *task_current(void) {
     return t->task;
 }
 
+void task_sandbox_enable(struct task *t, uint32_t flags) {
+    if (!t) return;
+    t->sandbox_flags |= flags;
+}
+
+uint32_t task_sandbox_flags(const struct task *t) {
+    return t ? t->sandbox_flags : 0u;
+}
+
 int task_charge_mem(struct task *t, uint64_t bytes) {
     if (!t || bytes == 0) return 1;
     if (!t->res_grp) return 0;
@@ -323,6 +332,7 @@ void task_init_bootstrap(struct thread *t) {
     g_boot_task.disk_quota_bytes = 0;
     g_boot_task.disk_used_bytes = 0;
     g_boot_task.pending_signals = 0;
+    g_boot_task.sandbox_flags = 0;
     g_boot_task.exit_code = 0;
     g_boot_task.stopped = 0;
     g_boot_task.core_pending = 0;
@@ -430,6 +440,7 @@ struct task *task_create_for_thread(struct thread *t, const char *name) {
       task->nice = 0;
       task->cpu_mask = 0;
     task->pending_signals = 0;
+    task->sandbox_flags = 0;
     task->exit_code = 0;
     task->stopped = 0;
     task->core_pending = 0;
@@ -547,6 +558,7 @@ void task_clone_from(struct task *dst, const struct task *src) {
         resgroup_charge_mem(dst->res_grp, dst->res_mem_bytes);
     }
     dst->pending_signals = 0;
+    dst->sandbox_flags = src->sandbox_flags;
     dst->exit_code = 0;
     dst->stopped = 0;
     dst->core_pending = 0;
@@ -590,6 +602,12 @@ void task_clone_from(struct task *dst, const struct task *src) {
                 if (!np) break;
                 *np = *pcur;
                 np->next = NULL;
+                if (m->map_type == MAP_DEV) {
+                    np->present = 0;
+                    np->phys = 0;
+                    np->swapped = 0;
+                    np->swap_slot = 0;
+                }
                 if (np->swapped) {
                     uint32_t new_slot = 0;
                     uint8_t *buf = (uint8_t *)kmalloc(0x1000u);
@@ -695,6 +713,10 @@ static int evict_one_page(void) {
             struct task_page *p = m->pages;
             while (p) {
                 if (p->present) {
+                    if (m->map_type == MAP_DEV) {
+                        p = p->next;
+                        continue;
+                    }
                     uint64_t phys = p->phys;
                     if (m->map_type == MAP_FILE && !p->swapped) {
                         paging_unmap_user_4k(t->pml4_phys, p->vaddr);
@@ -766,8 +788,10 @@ static void task_release_maps(struct task *t) {
             struct task_page *next = p->next;
             if (p->present) {
                 paging_unmap_user_4k(t->pml4_phys, p->vaddr);
-                pmm_dec_ref(p->phys);
-                task_uncharge_mem(t, 0x1000ull);
+                if (m->map_type != MAP_DEV) {
+                    pmm_dec_ref(p->phys);
+                    task_uncharge_mem(t, 0x1000ull);
+                }
             }
             if (p->swapped) {
                 swap_free(p->swap_slot);
@@ -789,6 +813,16 @@ int task_reclaim_pages(uint32_t max_pages) {
         freed++;
     }
     return (int)freed;
+}
+
+int task_has_device_maps(const struct task *t) {
+    if (!t) return 0;
+    const struct task_map *m = t->maps;
+    while (m) {
+        if (m->map_type == MAP_DEV) return 1;
+        m = m->next;
+    }
+    return 0;
 }
 
 uint64_t task_mmap_anonymous(struct task *t, uint64_t addr, uint64_t len, uint32_t prot, uint32_t flags) {
@@ -818,6 +852,8 @@ uint64_t task_mmap_anonymous(struct task *t, uint64_t addr, uint64_t len, uint32
     m->file_node = -1;
     m->file_off = 0;
     m->file_size = 0;
+    m->dev_phys_base = 0;
+    m->dev_size = 0;
     m->pages = NULL;
     m->next = NULL;
     insert_map_sorted(t, m);
@@ -851,6 +887,45 @@ uint64_t task_mmap_file(struct task *t, uint64_t addr, uint64_t len, uint32_t pr
     m->file_node = node;
     m->file_off = off;
     m->file_size = vfs_get_size(node);
+    m->dev_phys_base = 0;
+    m->dev_size = 0;
+    m->pages = NULL;
+    m->next = NULL;
+    insert_map_sorted(t, m);
+    return base;
+}
+
+uint64_t task_mmap_device(struct task *t, uint64_t addr, uint64_t len, uint32_t prot, uint32_t flags,
+                          uint64_t phys_base, uint64_t dev_size) {
+    if (!t || !t->is_user) return 0;
+    if (len == 0 || phys_base == 0 || dev_size == 0) return 0;
+
+    uint64_t size = (len + 0xFFFull) & ~0xFFFull;
+    uint64_t base = addr & ~0xFFFull;
+
+    if (base != 0) {
+        if (!range_free(t, base, size)) return 0;
+    } else {
+        base = t->mmap_base;
+        while (base + size <= t->mmap_limit) {
+            if (range_free(t, base, size)) break;
+            base += 0x1000ull;
+        }
+        if (base + size > t->mmap_limit) return 0;
+    }
+
+    struct task_map *m = (struct task_map *)kmalloc(sizeof(*m));
+    if (!m) return 0;
+    m->base = base;
+    m->size = size;
+    m->prot = prot;
+    m->flags = flags;
+    m->map_type = MAP_DEV;
+    m->file_node = -1;
+    m->file_off = 0;
+    m->file_size = 0;
+    m->dev_phys_base = phys_base;
+    m->dev_size = dev_size;
     m->pages = NULL;
     m->next = NULL;
     insert_map_sorted(t, m);
@@ -883,8 +958,10 @@ int task_munmap(struct task *t, uint64_t addr, uint64_t len) {
                 vfs_write_file(cur->file_node, src, 0x1000u, off);
             }
             paging_unmap_user_4k(t->pml4_phys, p->vaddr);
-            pmm_dec_ref(p->phys);
-            task_uncharge_mem(t, 0x1000ull);
+            if (cur->map_type != MAP_DEV) {
+                pmm_dec_ref(p->phys);
+                task_uncharge_mem(t, 0x1000ull);
+            }
         }
         if (p->swapped) {
             swap_free(p->swap_slot);
@@ -910,6 +987,18 @@ int task_handle_page_fault(struct task *t, uint64_t addr, uint64_t error_code) {
     if (!p) return 0;
     if (p->present) return 1;
 
+    uint64_t map_flags = (m->prot & PROT_EXEC) ? 0 : PTE_NX;
+
+    if (m->map_type == MAP_DEV) {
+        uint64_t dev_off = vaddr - m->base;
+        if (dev_off >= m->dev_size) return 0;
+        uint64_t phys = (m->dev_phys_base + dev_off) & ~0xFFFull;
+        if (paging_map_user_4k(t->pml4_phys, vaddr, phys, map_flags) != 0) return 0;
+        p->present = 1;
+        p->phys = phys;
+        return 1;
+    }
+
     uint64_t phys = pmm_alloc_frame();
     if (phys == 0) {
         if (evict_one_page()) {
@@ -918,7 +1007,6 @@ int task_handle_page_fault(struct task *t, uint64_t addr, uint64_t error_code) {
     }
     if (phys == 0) return 0;
 
-    uint64_t map_flags = (m->prot & PROT_EXEC) ? 0 : PTE_NX;
     if (paging_map_user_4k(t->pml4_phys, vaddr, phys, map_flags) != 0) {
         pmm_dec_ref(phys);
         return 0;
@@ -953,8 +1041,7 @@ int task_handle_page_fault(struct task *t, uint64_t addr, uint64_t error_code) {
     p->present = 1;
     p->phys = phys;
     task_charge_mem(t, 0x1000ull);
-                    profiler_inc(PROF_TASK_EVICTS);
-                    return 1;
+    return 1;
 }
 
 void task_on_thread_exit(struct thread *t) {
@@ -1252,6 +1339,42 @@ void task_dump_list(void) {
                    cur->name ? cur->name : "-");
         cur = cur->next;
     }
+}
+
+int task_get_mem_stats(uint32_t pid, struct task_mem_stats *out) {
+    if (!out) return 0;
+    memset(out, 0, sizeof(*out));
+
+    struct task *viewer = task_current();
+    struct task *t = NULL;
+    if (pid == 0) {
+        t = viewer;
+    } else {
+        t = task_find_pid(pid);
+    }
+    if (!t || !t->is_user) return 0;
+    if (viewer && viewer->pid_ns && t->pid_ns != viewer->pid_ns) return 0;
+
+    out->pid = t->pid;
+    out->pid_ns_pid = t->pid_ns_pid ? t->pid_ns_pid : t->pid;
+    out->pml4_phys = t->pml4_phys;
+
+    struct task_map *m = t->maps;
+    while (m) {
+        out->maps++;
+        out->mapped_bytes += m->size;
+        if (m->map_type == MAP_FILE) out->file_maps++;
+        else out->anon_maps++;
+
+        struct task_page *p = m->pages;
+        while (p) {
+            if (p->present) out->resident_pages++;
+            if (p->swapped) out->swapped_pages++;
+            p = p->next;
+        }
+        m = m->next;
+    }
+    return 1;
 }
 
 void task_get_counts(uint32_t *total, uint32_t *running, uint32_t *blocked, uint32_t *dead) {

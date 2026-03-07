@@ -133,6 +133,30 @@ Sync & IPC: spinlocks/atomic helpers for SMP, futex wait/wake, kernel semaphores
 
 Userland & Diagnostics: libc extensions (string/memory/math/stdio), userspace logging API, /proc/cpuinfo + /proc/stat reporting (CPUID flags, kernel counters), TTY raw/cooked mode switches, and kernel memory sanitizer hooks (poison on alloc/free).
 
+Graphics & Boot Video: framebuffer path supports packed-mask true-color formats (including 24-bit), kernel font rendering remains framebuffer-native, and boot video comes from Limine-provided UEFI/VBE framebuffer mode.
+
+Audio: added a kernel audio skeleton with a PC speaker backend, queued tone events, and timer-sliced playback driven by a dedicated kernel worker thread; added `beep [freq_hz] [duration_ms]` console command.
+
+Kernel Threads: device polling workers are active for PCI/USB hotplug and memory-pressure monitoring.
+
+Process Isolation & VM: userspace tasks now run with per-task page tables (CR3/PML4 switching on schedule), and anonymous `mmap` pages are swap-backed with reclaim/eviction and swap-in on fault.
+
+Memory Debugging: added `umem [pid]` console command to inspect live userspace memory maps, mapped bytes, resident pages, and swapped pages.
+
+Synchronization: added kernel-level mutex primitive (`kmutex`) with ownership checks and recursive lock support for in-kernel coordination.
+
+Scheduler Testing: added `preempttest [seconds] [threads]` command to spawn CPU-pinned workers and report context-switch/preemption activity across multiple CPUs.
+
+Crash Recovery: added configurable kernel crash handling policy (`crash.mode` via sysctl, `crash=` boot param) with halt (default) or recovery reboot path after fatal exceptions/panics.
+
+Sandboxing: added a userspace sandbox policy syscall (`sys_sandbox`) with per-task restrictions for device access, network sockets, mount/umount, and filesystem writes outside `/tmp`; added a `sandbox` busybox applet to launch commands under selected restrictions.
+
+Desktop Stack: added `/dev/fb0` and `/dev/input` pseudo-devices, framebuffer mode IOCTL (`FB_IOCTL_GET_MODE`), framebuffer mmap support, input event queue (`struct input_event`) with poll/read integration, and a userspace window manager/compositor demo (`/bin/wm`) using a simple shared-memory window protocol and userspace font/text rendering.
+
+Desktop UI Toolkit: added basic userspace widget primitives (panels, buttons, menus) in the WM path, including hit-testing, hover/pressed states, and menu item selection.
+
+Desktop Shell: added a taskbar + Start launcher in userspace WM, with a launch menu that can spawn user programs (e.g. `/bin/sh`, `/bin/top`, `/bin/ps`, `/bin/hello`).
+
 
 ## Features Changed:
 Build warnings cleaned up (log/acpi prototypes).
@@ -140,6 +164,8 @@ Build warnings cleaned up (log/acpi prototypes).
 Driver registry output: show "not found" directly for skipped devices.
 
 Watchdog behavior now configurable via cmdline (watchdog=off/log/reboot/halt) and verbose logging toggle (log=verbose).
+
+Crash behavior is now policy-driven (halt or reboot) instead of hard-coded halt-only handling.
 
 Kernel console scrollback made line-based and robustly restores prompt when returning to bottom.
 

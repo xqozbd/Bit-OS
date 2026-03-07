@@ -36,10 +36,15 @@
 #include "kernel/module.h"
 #include "kernel/firewall.h"
 #include "kernel/resgroup.h"
+#include "kernel/audio.h"
+#include "kernel/thread.h"
+#include "kernel/sleep.h"
+#include "kernel/sched.h"
+#include "kernel/profiler.h"
 
 static const char *const g_commands[] = {
-    "help", "clear", "time", "mem", "leaks", "memtest", "cputest", "ps",
-    "ls", "cd", "pwd", "cat", "run", "echo", "ver", "debug", "ping",
+    "help", "clear", "time", "mem", "leaks", "umem", "memtest", "cputest", "preempttest", "ps",
+    "ls", "cd", "pwd", "cat", "run", "echo", "ver", "debug", "beep", "ping",
     "ping6", "ip6",
     "mount", "umount", "dd",
     "shutdown", "restart", "s3", "s4", "thermal", "acpi", "sysctl", "alarm", "dmesg", "drivers",
@@ -63,6 +68,8 @@ static void cmd_help(void) {
         log_printf("%s%s", g_commands[i], (i + 1 < commands_count()) ? ", " : "\n");
     }
     log_printf("  memtest [--size N] [--time T] [--pages N]\n");
+    log_printf("  umem [pid] (userspace memory stats)\n");
+    log_printf("  preempttest [seconds] [threads]\n");
     log_printf("  run <path> (ELF64, higher-half)\n");
     log_printf("  ping <ip>\n");
     log_printf("  ping6 <ipv6>\n");
@@ -72,6 +79,7 @@ static void cmd_help(void) {
     log_printf("  ip6 forward <on|off>\n");
     log_printf("  ps\n");
     log_printf("  debug\n");
+    log_printf("  beep [freq_hz] [duration_ms]\n");
     log_printf("  shutdown\n");
     log_printf("  restart\n");
     log_printf("  s3 (suspend to RAM)\n");
@@ -153,13 +161,39 @@ static void cmd_debug(void) {
     log_printf("\n");
 }
 
+static void cmd_beep(int argc, char **argv) {
+    uint64_t freq = 880;
+    uint64_t duration = 120;
+    if (argc > 1) {
+        if (!str_to_u64(argv[1], &freq) || freq == 0 || freq > 20000) {
+            log_printf("beep: freq must be 1..20000 Hz\n");
+            return;
+        }
+    }
+    if (argc > 2) {
+        if (!str_to_u64(argv[2], &duration) || duration == 0 || duration > 10000) {
+            log_printf("beep: duration must be 1..10000 ms\n");
+            return;
+        }
+    }
+    if (!audio_is_running()) {
+        log_printf("beep: audio backend not running\n");
+        return;
+    }
+    if (!audio_enqueue_tone((uint32_t)freq, (uint32_t)duration, 255)) {
+        log_printf("beep: queue full\n");
+        return;
+    }
+    log_printf("beep: queued %u Hz for %u ms\n", (unsigned)freq, (unsigned)duration);
+}
+
 static void cmd_shutdown(void) {
     log_printf("Shutting down Bit-OS...\n");
     log_printf("Goodbye\n");
     power_shutdown();
 }
 
-
+ // ya mama
 
 static void cmd_mem(void) {
     uint64_t total = pmm_total_frames();
@@ -182,6 +216,33 @@ static void cmd_leaks(void) {
                (unsigned)ss.active_allocs, (unsigned)ss.active_bytes,
                (unsigned)ss.peak_bytes, (unsigned)ss.allocs,
                (unsigned)ss.frees);
+}
+
+static void cmd_umem(int argc, char **argv) {
+    uint32_t pid = 0;
+    if (argc > 1) {
+        uint64_t v = 0;
+        if (!str_to_u64(argv[1], &v) || v > 0xFFFFFFFFu) {
+            log_printf("umem: invalid pid\n");
+            return;
+        }
+        pid = (uint32_t)v;
+    }
+
+    struct task_mem_stats st;
+    if (!task_get_mem_stats(pid, &st)) {
+        log_printf("umem: task not found or not userspace\n");
+        return;
+    }
+
+    log_printf("umem: pid=%u pml4=0x%08x\n",
+               (unsigned)st.pid_ns_pid, (unsigned)st.pml4_phys);
+    log_printf("  maps=%u anon=%u file=%u mapped=%u KB\n",
+               (unsigned)st.maps, (unsigned)st.anon_maps, (unsigned)st.file_maps,
+               (unsigned)(st.mapped_bytes / 1024u));
+    log_printf("  resident=%u pages (%u KB) swapped=%u pages (%u KB)\n",
+               (unsigned)st.resident_pages, (unsigned)(st.resident_pages * 4u),
+               (unsigned)st.swapped_pages, (unsigned)(st.swapped_pages * 4u));
 }
 
 static void cmd_clear(void) {
@@ -829,6 +890,90 @@ static void cmd_cputest(void) {
     log_printf("\n");
 }
 
+#define PREEMPTTEST_MAX_THREADS 16
+
+static volatile uint32_t g_preempt_stop = 0;
+static volatile uint64_t g_preempt_loops[PREEMPTTEST_MAX_THREADS];
+
+static void preempttest_worker(void *arg) {
+    uint32_t idx = (uint32_t)(uintptr_t)arg;
+    if (idx >= PREEMPTTEST_MAX_THREADS) return;
+    while (!g_preempt_stop) {
+        g_preempt_loops[idx]++;
+        if ((g_preempt_loops[idx] & 0x7FFu) == 0) {
+            sched_yield();
+        }
+    }
+}
+
+static void cmd_preempttest(int argc, char **argv) {
+    uint64_t seconds = 3;
+    uint64_t threads_req = 0;
+    if (argc > 1) {
+        if (!str_to_u64(argv[1], &seconds) || seconds == 0 || seconds > 30) {
+            log_printf("preempttest: seconds must be 1..30\n");
+            return;
+        }
+    }
+    if (argc > 2) {
+        if (!str_to_u64(argv[2], &threads_req) || threads_req == 0 || threads_req > PREEMPTTEST_MAX_THREADS) {
+            log_printf("preempttest: threads must be 1..%u\n", (unsigned)PREEMPTTEST_MAX_THREADS);
+            return;
+        }
+    }
+
+    uint32_t cpus = smp_online_count();
+    if (cpus == 0) cpus = smp_cpu_count();
+    if (cpus == 0) cpus = 1;
+    uint32_t workers = threads_req ? (uint32_t)threads_req : (cpus * 2u);
+    if (workers < cpus) workers = cpus;
+    if (workers > PREEMPTTEST_MAX_THREADS) workers = PREEMPTTEST_MAX_THREADS;
+
+    struct thread *threads[PREEMPTTEST_MAX_THREADS];
+    for (uint32_t i = 0; i < PREEMPTTEST_MAX_THREADS; ++i) {
+        threads[i] = NULL;
+        g_preempt_loops[i] = 0;
+    }
+
+    g_preempt_stop = 0;
+    uint64_t ctx_before = profiler_get(PROF_CTX_SWITCHES);
+    uint32_t started = 0;
+    for (uint32_t i = 0; i < workers; ++i) {
+        struct thread *t = thread_create(preempttest_worker, (void *)(uintptr_t)i, 4096, "preempttest");
+        if (!t) break;
+        uint32_t target_cpu = cpus ? (i % cpus) : 0u;
+        uint32_t mask = (target_cpu < 32u) ? (1u << target_cpu) : 0xFFFFFFFFu;
+        sched_set_affinity(t, mask);
+        if (t->task) t->task->cpu_mask = sched_get_affinity(t);
+        threads[started++] = t;
+    }
+
+    if (started == 0) {
+        log_printf("preempttest: failed to start workers\n");
+        return;
+    }
+
+    log_printf("preempttest: running %u workers on %u CPUs for %u s...\n",
+               (unsigned)started, (unsigned)cpus, (unsigned)seconds);
+    sleep_ms(seconds * 1000ull);
+    g_preempt_stop = 1;
+
+    uint64_t total_loops = 0;
+    uint32_t active_workers = 0;
+    for (uint32_t i = 0; i < started; ++i) {
+        thread_join(threads[i]);
+        uint64_t loops = g_preempt_loops[i];
+        total_loops += loops;
+        if (loops > 0) active_workers++;
+    }
+
+    uint64_t ctx_after = profiler_get(PROF_CTX_SWITCHES);
+    uint64_t delta = (ctx_after >= ctx_before) ? (ctx_after - ctx_before) : 0;
+    log_printf("preempttest: ctx_switches +%llu total_loops=%llu active_workers=%u/%u\n",
+               (unsigned long long)delta, (unsigned long long)total_loops,
+               (unsigned)active_workers, (unsigned)started);
+}
+
 static int copy_file(const char *src_path, const char *dst_path, int cwd) {
     int src = vfs_resolve(cwd, src_path);
     if (src < 0 || vfs_is_dir(src)) return -1;
@@ -863,6 +1008,8 @@ int commands_exec(int argc, char **argv, struct command_ctx *ctx) {
         cmd_mem();
     } else if (str_eq(argv[0], "leaks")) {
         cmd_leaks();
+    } else if (str_eq(argv[0], "umem")) {
+        cmd_umem(argc, argv);
     } else if (str_eq(argv[0], "memtest")) {
         int pages = 0;
         uint64_t bytes = 0;
@@ -885,6 +1032,8 @@ int commands_exec(int argc, char **argv, struct command_ctx *ctx) {
         cmd_memtest(pages, bytes, seconds);
     } else if (str_eq(argv[0], "cputest")) {
         cmd_cputest();
+    } else if (str_eq(argv[0], "preempttest")) {
+        cmd_preempttest(argc, argv);
     } else if (str_eq(argv[0], "ps")) {
         cmd_ps();
     } else if (str_eq(argv[0], "pwd")) {
@@ -956,6 +1105,8 @@ int commands_exec(int argc, char **argv, struct command_ctx *ctx) {
         cmd_ver();
     } else if (str_eq(argv[0], "debug")) {
         cmd_debug();
+    } else if (str_eq(argv[0], "beep")) {
+        cmd_beep(argc, argv);
     } else if (str_eq(argv[0], "ping")) {
         if (argc < 2) {
             log_printf("ping: missing ip\n");

@@ -297,16 +297,16 @@ void sched_init(void) {
 
     /* Create idle threads per CPU */
     for (uint32_t i = 0; i < g_cpu_count; ++i) {
-        struct thread *idle = (struct thread *)kmalloc(sizeof(*idle));
+        struct thread *idle = thread_alloc_struct();
         if (!idle) continue;
         uint8_t *stack = (uint8_t *)kmalloc(4096);
         if (!stack) {
-            kfree(idle);
+            thread_free_struct(idle);
             continue;
         }
         uintptr_t sp = (uintptr_t)stack + 4096;
-        sp &= ~0xFULL;
         sp -= 8;
+        sp &= ~0xFULL;
         *(uint64_t *)sp = (uint64_t)idle_thread;
         idle->ctx.rsp = sp;
         idle->ctx.rbx = 0;

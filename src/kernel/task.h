@@ -25,6 +25,8 @@ enum task_state {
 #define FD_TYPE_PTY_SLAVE 6
 #define FD_TYPE_SEM 7
 #define FD_TYPE_COND 8
+#define FD_TYPE_FB 9
+#define FD_TYPE_INPUT 10
 
 struct task {
     uint32_t pid;
@@ -60,6 +62,7 @@ struct task {
     uint64_t disk_quota_bytes;
     uint64_t disk_used_bytes;
     uint32_t pending_signals;
+    uint32_t sandbox_flags;
     uint64_t sig_handlers[32];
     uint32_t exit_code;
     uint8_t stopped;
@@ -112,8 +115,22 @@ struct task_map {
     int file_node;
     uint64_t file_off;
     uint64_t file_size;
+    uint64_t dev_phys_base;
+    uint64_t dev_size;
     struct task_page *pages;
     struct task_map *next;
+};
+
+struct task_mem_stats {
+    uint32_t pid;
+    uint32_t pid_ns_pid;
+    uint64_t pml4_phys;
+    uint32_t maps;
+    uint32_t anon_maps;
+    uint32_t file_maps;
+    uint64_t mapped_bytes;
+    uint32_t resident_pages;
+    uint32_t swapped_pages;
 };
 
 void task_fd_init(struct task *t);
@@ -134,6 +151,8 @@ struct task *task_find_child_dead(struct task *parent, int pid);
 struct task *task_find_child_stopped(struct task *parent, int pid);
 uint64_t task_mmap_anonymous(struct task *t, uint64_t addr, uint64_t len, uint32_t prot, uint32_t flags);
 uint64_t task_mmap_file(struct task *t, uint64_t addr, uint64_t len, uint32_t prot, uint32_t flags, int node, uint64_t off);
+uint64_t task_mmap_device(struct task *t, uint64_t addr, uint64_t len, uint32_t prot, uint32_t flags,
+                          uint64_t phys_base, uint64_t dev_size);
 int task_munmap(struct task *t, uint64_t addr, uint64_t len);
 int task_handle_page_fault(struct task *t, uint64_t addr, uint64_t error_code);
 int task_reclaim_pages(uint32_t max_pages);
@@ -157,6 +176,10 @@ uint32_t task_unshare_pidns(struct task *t);
 uint32_t task_unshare_mntns(struct task *t);
 uint32_t task_unshare_netns(struct task *t);
 uint32_t task_unshare_resgroup(struct task *t);
+int task_get_mem_stats(uint32_t pid, struct task_mem_stats *out);
+void task_sandbox_enable(struct task *t, uint32_t flags);
+uint32_t task_sandbox_flags(const struct task *t);
+int task_has_device_maps(const struct task *t);
 void task_dump_list(void);
 size_t task_format_list(struct task *viewer, char *buf, size_t buf_len);
 void task_get_counts(uint32_t *total, uint32_t *running, uint32_t *blocked, uint32_t *dead);

@@ -101,7 +101,9 @@ enum {
     SYS_FB_DRAWRECT = 80,
     SYS_FB_CLEAR = 81,
     SYS_FB_SWAP = 82,
-    SYS_HID_KBD_REPORT = 83
+    SYS_HID_KBD_REPORT = 83,
+    SYS_IOCTL = 84,
+    SYS_SANDBOX = 85
 };
 
 enum {
@@ -166,6 +168,48 @@ struct fb_info {
     uint32_t height;
     uint32_t pitch;
     uint32_t bpp;
+};
+
+struct fb_mode_info {
+    uint64_t phys_addr;
+    uint64_t size_bytes;
+    uint32_t width;
+    uint32_t height;
+    uint32_t pitch;
+    uint32_t bpp;
+    uint8_t red_mask_size;
+    uint8_t red_mask_shift;
+    uint8_t green_mask_size;
+    uint8_t green_mask_shift;
+    uint8_t blue_mask_size;
+    uint8_t blue_mask_shift;
+};
+
+enum {
+    FB_IOCTL_GET_MODE = 0x4601u
+};
+
+enum {
+    INPUT_EVENT_KEY = 1,
+    INPUT_EVENT_MOUSE = 2
+};
+
+struct input_event {
+    uint16_t type;
+    uint16_t code;
+    int32_t value;
+    int32_t x;
+    int32_t y;
+    int32_t dx;
+    int32_t dy;
+    uint32_t buttons;
+};
+
+enum {
+    SANDBOX_FS_WRITE = 1u << 0,
+    SANDBOX_NET = 1u << 1,
+    SANDBOX_MOUNT = 1u << 2,
+    SANDBOX_DEV = 1u << 3
 };
 
 enum {
@@ -324,6 +368,14 @@ static inline long sys_fb_swap(void) {
 
 static inline long sys_hid_kbd_report(const uint8_t *report, size_t len) {
     return (long)sys_call6(SYS_HID_KBD_REPORT, (uint64_t)report, (uint64_t)len, 0, 0, 0, 0);
+}
+
+static inline long sys_ioctl(int fd, uint64_t req, void *arg) {
+    return (long)sys_call6(SYS_IOCTL, (uint64_t)fd, req, (uint64_t)arg, 0, 0, 0);
+}
+
+static inline long sys_sandbox(uint32_t flags) {
+    return (long)sys_call6(SYS_SANDBOX, (uint64_t)flags, 0, 0, 0, 0, 0);
 }
 
 static inline long sys_open(const char *path, uint32_t flags) {

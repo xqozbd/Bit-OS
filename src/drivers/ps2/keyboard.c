@@ -7,6 +7,7 @@
 #include "arch/x86_64/timer.h"
 #include "arch/x86_64/pic.h"
 #include "kernel/tty.h"
+#include "kernel/input.h"
 
 #define KBD_DATA 0x60
 #define KBD_STATUS 0x64
@@ -308,6 +309,7 @@ void kb_irq_handler(void) {
         }
 
         if (break_prefix) {
+            uint16_t keycode = e0_prefix ? (uint16_t)(0x100u | sc) : (uint16_t)sc;
             if (sc == 0x12 || sc == 0x59) shift_down = 0;
             if (sc == 0x14) ctrl_down = 0;
             if (sc == 0x11) alt_down = 0;
@@ -317,6 +319,7 @@ void kb_irq_handler(void) {
                 g_repeat_next_tick = 0;
             }
             if (!shift_down || !alt_down) layout_toggle_latched = 0;
+            input_push_key(keycode, 0, 0);
             break_prefix = 0;
             e0_prefix = 0;
             continue;
@@ -347,16 +350,24 @@ void kb_irq_handler(void) {
         if (e0_prefix) {
             if (sc == 0x6B) { /* left */
                 kb_buf_push(KB_KEY_LEFT);
+                input_push_key((uint16_t)(0x100u | sc), 1, KB_KEY_LEFT);
             } else if (sc == 0x74) { /* right */
                 kb_buf_push(KB_KEY_RIGHT);
+                input_push_key((uint16_t)(0x100u | sc), 1, KB_KEY_RIGHT);
             } else if (sc == 0x75) { /* up */
                 kb_buf_push(KB_KEY_UP);
+                input_push_key((uint16_t)(0x100u | sc), 1, KB_KEY_UP);
             } else if (sc == 0x72) { /* down */
                 kb_buf_push(KB_KEY_DOWN);
+                input_push_key((uint16_t)(0x100u | sc), 1, KB_KEY_DOWN);
             } else if (sc == 0x7D) { /* page up */
                 kb_buf_push(KB_KEY_PGUP);
+                input_push_key((uint16_t)(0x100u | sc), 1, KB_KEY_PGUP);
             } else if (sc == 0x7A) { /* page down */
                 kb_buf_push(KB_KEY_PGDN);
+                input_push_key((uint16_t)(0x100u | sc), 1, KB_KEY_PGDN);
+            } else {
+                input_push_key((uint16_t)(0x100u | sc), 1, 0);
             }
             e0_prefix = 0;
             continue;
@@ -374,14 +385,17 @@ void kb_irq_handler(void) {
         if (ctrl_down) {
             if (ch == 'c' || ch == 'C') {
                 kb_buf_push(0x03);
+                input_push_key((uint16_t)sc, 1, 0x03);
                 continue;
             }
             if (ch == 'v' || ch == 'V') {
                 kb_buf_push(0x16);
+                input_push_key((uint16_t)sc, 1, 0x16);
                 continue;
             }
         }
         kb_buf_push((uint8_t)ch);
+        input_push_key((uint16_t)sc, 1, ch);
         tty_feed_char(ch);
         if (allow_repeat_char(ch) && g_repeat_enabled) {
             g_repeat_sc = sc;

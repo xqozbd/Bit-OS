@@ -4,6 +4,7 @@
 #include "drivers/video/fb_printf.h"
 #include "arch/x86_64/pic.h"
 #include "arch/x86_64/timer.h"
+#include "kernel/input.h"
 
 #define PS2_STATUS 0x64
 #define PS2_DATA   0x60
@@ -221,6 +222,7 @@ void ms_irq_handler(void) {
 			g_y += -(int32_t)dy; /* invert Y to screen coords */
 			g_pending_dx += (int32_t)dx;
 			g_pending_dy += -(int32_t)dy;
+			input_push_mouse(g_x, g_y, (int32_t)dx, -(int32_t)dy, g_buttons);
 			uint64_t now = timer_uptime_ticks();
 			if (now - g_last_event_tick >= g_min_event_ticks) {
 				g_last_event_tick = now;

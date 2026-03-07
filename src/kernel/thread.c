@@ -9,6 +9,7 @@
 #include "kernel/pmm.h"
 #include "kernel/sched.h"
 #include "kernel/task.h"
+#include "lib/log.h"
 
 static void thread_trampoline(void) {
     struct thread *t = thread_current();
@@ -22,6 +23,23 @@ static uint64_t g_stack_top = 0xffffb00000000000ull;
 
 static inline uint64_t align_up_u64(uint64_t v, uint64_t a) {
     return (v + a - 1) & ~(a - 1);
+}
+
+struct thread *thread_alloc_struct(void) {
+    /* XSAVE/XRSTOR require a 64-byte aligned save area; thread contains that buffer. */
+    size_t extra = FPU_STATE_ALIGN - 1 + sizeof(void *);
+    uint8_t *raw = (uint8_t *)kmalloc(sizeof(struct thread) + extra);
+    if (!raw) return NULL;
+    uintptr_t p = (uintptr_t)(raw + sizeof(void *));
+    uintptr_t aligned = (p + (FPU_STATE_ALIGN - 1)) & ~(uintptr_t)(FPU_STATE_ALIGN - 1);
+    ((void **)aligned)[-1] = raw;
+    return (struct thread *)aligned;
+}
+
+void thread_free_struct(struct thread *t) {
+    if (!t) return;
+    void *raw = ((void **)t)[-1];
+    kfree(raw);
 }
 
 static uint8_t *alloc_stack_guarded(size_t size, uint8_t **guard_out, size_t *guard_size_out) {
@@ -42,19 +60,19 @@ static uint8_t *alloc_stack_guarded(size_t size, uint8_t **guard_out, size_t *gu
 
 struct thread *thread_create(void (*entry)(void *), void *arg, size_t stack_size, const char *name) {
     if (stack_size < 4096) stack_size = 4096;
-    struct thread *t = (struct thread *)kmalloc(sizeof(*t));
+    struct thread *t = thread_alloc_struct();
     if (!t) return NULL;
     uint8_t *guard = NULL;
     size_t guard_size = 0;
     uint8_t *stack = alloc_stack_guarded(stack_size, &guard, &guard_size);
     if (!stack) {
-        kfree(t);
+        thread_free_struct(t);
         return NULL;
     }
 
     uintptr_t sp = (uintptr_t)stack + stack_size;
-    sp &= ~0xFULL;
     sp -= 8;
+    sp &= ~0xFULL;
     *(uint64_t *)sp = (uint64_t)thread_trampoline;
 
     t->ctx.rsp = sp;

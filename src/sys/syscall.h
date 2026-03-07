@@ -87,6 +87,8 @@ enum {
     SYS_FB_CLEAR = 81,
     SYS_FB_SWAP = 82,
     SYS_HID_KBD_REPORT = 83,
+    SYS_IOCTL = 84,
+    SYS_SANDBOX = 85,
     SYS_MAX
 };
 

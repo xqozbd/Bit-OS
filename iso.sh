@@ -3,6 +3,7 @@ set -e
 
 KERNEL=bitos
 ISO=BitOS.iso
+ISO_FALLBACK=0
 INITRAMFS_DIR=initramfs
 INITRAMFS_IMG=initramfs.cpio
 
@@ -11,6 +12,7 @@ if [ -e "$ISO" ]; then
   if ! rm -f "$ISO" 2>/dev/null; then
     ts=$(date +%Y%m%d-%H%M%S)
     ISO="BitOS-$ts.iso"
+    ISO_FALLBACK=1
     echo "Warning: BitOS.iso is in use. Writing to $ISO instead."
   fi
 fi
@@ -39,7 +41,7 @@ if [ -d "$INITRAMFS_DIR" ]; then
       -Wl,-T,user/user_so.lds -Wl,-soname,libu.so \
       -o "$INITRAMFS_DIR/lib/libu.so" user/libu.c
   fi
-  for src in user/init.c user/busybox.c user/cron.c user/login.c; do
+  for src in user/init.c user/busybox.c user/cron.c user/login.c user/wm.c; do
     [ -f "$src" ] || continue
     base=$(basename "$src" .c)
     x86_64-linux-gnu-gcc -nostdlib -static -ffreestanding -fno-pie -no-pie -Iuser \
@@ -53,9 +55,8 @@ if [ -d "$INITRAMFS_DIR" ]; then
       -o "$INITRAMFS_DIR/bin/hello" user/hello.c
   fi
   if [ -f "$INITRAMFS_DIR/bin/busybox" ]; then
-    for app in ls ps top mount umount dd sh; do
-      ln -sf busybox "$INITRAMFS_DIR/bin/$app" 2>/dev/null || \
-        cp -f "$INITRAMFS_DIR/bin/busybox" "$INITRAMFS_DIR/bin/$app"
+    for app in ls ps top mount umount dd sh sandbox; do
+      cp -f "$INITRAMFS_DIR/bin/busybox" "$INITRAMFS_DIR/bin/$app"
     done
   fi
   mkdir -p "$INITRAMFS_DIR/etc"
@@ -114,4 +115,9 @@ else
 fi
 
 echo "ISO built: $ISO"
-printf '%s\n' "$ISO" > .last_iso
+if [ "$ISO_FALLBACK" -eq 1 ]; then
+  printf '%s\n' "$ISO" > .last_iso
+else
+  rm -f .last_iso
+  rm -f BitOS-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9].iso
+fi

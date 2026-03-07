@@ -52,6 +52,23 @@ struct fb_info {
 
 int fb_get_info(struct fb_info *out);
 
+struct fb_mode_info {
+    uint64_t phys_addr;
+    uint64_t size_bytes;
+    uint32_t width;
+    uint32_t height;
+    uint32_t pitch;
+    uint32_t bpp;
+    uint8_t red_mask_size;
+    uint8_t red_mask_shift;
+    uint8_t green_mask_size;
+    uint8_t green_mask_shift;
+    uint8_t blue_mask_size;
+    uint8_t blue_mask_shift;
+};
+
+int fb_get_mode_info(struct fb_mode_info *out);
+
 /* Double buffer helpers */
 int fb_backbuffer_init(void);
 int fb_backbuffer_ready(void);

@@ -82,6 +82,7 @@
 #include "kernel/init.h"
 #include "kernel/hotplug.h"
 #include "kernel/memwatch.h"
+#include "kernel/audio.h"
 #include "kernel/dhcp.h"
 #include "kernel/firewall.h"
 #include "sys/boot_params.h"
@@ -91,6 +92,8 @@
 #include "sys/tmpfs.h"
 #include "kernel/swap.h"
 #include "kernel/rng.h"
+#include "kernel/crash.h"
+#include "kernel/input.h"
 
 static void ensure_dir(const char *path) {
     if (!path || !path[0]) return;
@@ -198,6 +201,7 @@ static void kmain_stage2(void) {
     int drv_sched = driver_register("sched", drv_order++);
     int drv_console = driver_register("console", drv_order++);
     int drv_mouse = driver_register("mouse", drv_order++);
+    int drv_audio = driver_register("audio", drv_order++);
     module_register("pci", pci_init, pci_shutdown);
     module_register("xhci", xhci_init, xhci_shutdown);
     module_register("usbmgr", usbmgr_init, usbmgr_shutdown);
@@ -275,7 +279,9 @@ static void kmain_stage2(void) {
         }
     }
     watchdog_set_mode(boot_param_get("watchdog"));
+    crash_set_mode(boot_param_get("crash"));
     log_printf_verbose("Boot: watchdog mode=%s\n", boot_param_get("watchdog"));
+    log_printf_verbose("Boot: crash mode=%s\n", crash_mode_name());
     sysctl_init();
 
     log_printf("Boot: checking framebuffer availability...\n");
@@ -465,6 +471,11 @@ static void kmain_stage2(void) {
     boot_screen_set_status("initramfs");
     log_printf("Boot: initializing initramfs...\n");
     initramfs_init_from_limine();
+    log_printf("Boot: initramfs available=%d\n", initramfs_available());
+    if (initramfs_available()) {
+        int probe = initramfs_resolve(0, "/bin/init");
+        log_printf("Boot: initramfs probe /bin/init=%d\n", probe);
+    }
     watchdog_early_stage("initramfs");
     watchdog_log_stage("initramfs");
     log_printf("Boot: initramfs ready\n");
@@ -477,7 +488,8 @@ static void kmain_stage2(void) {
     vfs_mount("/sys", VFS_BACKEND_SYS, pseudofs_root(PSEUDOFS_SYS));
     tmpfs_init();
     vfs_mount("/tmp", VFS_BACKEND_TMPFS, tmpfs_root());
-    log_printf("Boot: mounted /dev, /proc, /sys\n");
+    vfs_mount("/var", VFS_BACKEND_TMPFS, tmpfs_root());
+    log_printf("Boot: mounted /dev, /proc, /sys, /tmp, /var\n");
     if (block_device_count() > 0 && partition_count() > 0) {
         vfs_mount("/block", VFS_BACKEND_BLOCK, blockfs_root());
         log_printf("Boot: mounted block devices at /block\n");
@@ -523,6 +535,7 @@ static void kmain_stage2(void) {
       ensure_dir("/etc");
       ensure_dir("/var");
       ensure_dir("/var/log");
+      ensure_dir("/var/accounts");
       load_timezone_from_etc();
       if (boot_params_load_config("/etc/boot.conf")) {
         log_printf("Boot: loaded config /etc/boot.conf\n");
@@ -586,6 +599,12 @@ static void kmain_stage2(void) {
     watchdog_checkpoint("apic_done");
     time_init();
     rng_init();
+    log_printf("Boot: initializing audio...\n");
+    if (audio_init()) {
+        driver_set_status_idx(drv_audio, DRIVER_STATUS_OK, "pcspk");
+    } else {
+        driver_set_status_idx(drv_audio, DRIVER_STATUS_FAIL, "thread spawn failed");
+    }
     if (!safe_mode) {
         module_load("hotplug");
         module_load("memwatch");
@@ -600,6 +619,7 @@ static void kmain_stage2(void) {
     boot_screen_print_main();
     log_printf("Boot: initializing console...\n");
     tty_init();
+    input_init();
     console_init();
     driver_set_status_idx(drv_console, DRIVER_STATUS_OK, NULL);
     log_printf("Boot: spawning init...\n");
@@ -614,14 +634,12 @@ static void kmain_stage2(void) {
     log_printf("Boot: initializing mouse...\n");
     ms_init();
     driver_set_status_idx(drv_mouse, DRIVER_STATUS_OK, NULL);
-    if (!init_ok) {
-        log_printf("Boot: entering console loop\n");
-        log_printf("\b");
-        console_run();
+    if (init_ok) {
+        log_printf("Boot: userspace init started; kernel console kept active\n");
     }
-    for (;;) {
-        cpu_idle();
-    }
+    log_printf("Boot: entering console loop\n");
+    log_printf("\b");
+    console_run();
 }
 
 static void boot_delay_ms(uint32_t ms) {

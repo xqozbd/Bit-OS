@@ -38,10 +38,18 @@
 #include "kernel/profiler.h"
 #include "drivers/video/fb_printf.h"
 #include "drivers/usb/hid_kbd.h"
+#include "kernel/input.h"
 
 #define SYS_ERR(e) ((uint64_t)(-(int)(e)))
 #define FUTEX_WAIT 0
 #define FUTEX_WAKE 1
+#define FB_IOCTL_GET_MODE 0x4601u
+
+#define SANDBOX_FS_WRITE (1u << 0)
+#define SANDBOX_NET      (1u << 1)
+#define SANDBOX_MOUNT    (1u << 2)
+#define SANDBOX_DEV      (1u << 3)
+#define SANDBOX_ALL (SANDBOX_FS_WRITE | SANDBOX_NET | SANDBOX_MOUNT | SANDBOX_DEV)
 
 extern void *memcpy(void *restrict dest, const void *restrict src, size_t n);
 
@@ -97,12 +105,22 @@ struct pollfd {
 #define POLLIN  0x0001
 #define POLLOUT 0x0004
 
+static uint64_t user_addr_limit(const struct task *t) {
+    uint64_t limit = 0xF0000000ull;
+    if (!t) return limit;
+    if (t->mmap_limit && t->mmap_limit > limit) limit = t->mmap_limit;
+    if (t->brk_limit && t->brk_limit > limit) limit = t->brk_limit;
+    if (t->user_stack_top && t->user_stack_top > limit) limit = t->user_stack_top;
+    if (limit >= 0x0000800000000000ull) limit = 0x00007FFFFFFFF000ull;
+    return limit;
+}
+
 static int user_range_ok(struct task *t, const void *ptr, uint64_t len) {
     if (!t || !t->is_user) return 1;
     if (!ptr) return 0;
     if (len == 0) return 1;
     uint64_t addr = (uint64_t)(uintptr_t)ptr;
-    uint64_t limit = t->mmap_limit ? t->mmap_limit : 0xF0000000ull;
+    uint64_t limit = user_addr_limit(t);
     if (addr < 0x1000ull) return 0;
     if (addr >= limit) return 0;
     if (addr + len < addr) return 0;
@@ -114,13 +132,40 @@ static int user_str_ok(struct task *t, const char *ptr) {
     if (!t || !t->is_user) return 1;
     if (!ptr) return 0;
     uint64_t addr = (uint64_t)(uintptr_t)ptr;
-    uint64_t limit = t->mmap_limit ? t->mmap_limit : 0xF0000000ull;
+    uint64_t limit = user_addr_limit(t);
     if (addr < 0x1000ull || addr >= limit) return 0;
     for (uint64_t i = 0; i < 256; ++i) {
         uint64_t cur = addr + i;
         if (cur >= limit) return 0;
         if (((const char *)ptr)[i] == '\0') return 1;
     }
+    return 0;
+}
+
+static int path_eq(const char *a, const char *b) {
+    if (!a || !b) return 0;
+    while (*a && *b) {
+        if (*a != *b) return 0;
+        a++;
+        b++;
+    }
+    return (*a == '\0' && *b == '\0');
+}
+
+static int path_has_prefix_dir(const char *path, const char *prefix) {
+    if (!path || !prefix) return 0;
+    while (*path && *prefix) {
+        if (*path != *prefix) return 0;
+        path++;
+        prefix++;
+    }
+    if (*prefix != '\0') return 0;
+    return (*path == '\0' || *path == '/');
+}
+
+static int sandbox_write_path_allowed(const char *path) {
+    if (!path) return 0;
+    if (path_eq(path, "/tmp") || path_has_prefix_dir(path, "/tmp")) return 1;
     return 0;
 }
 
@@ -140,6 +185,7 @@ static uint64_t sys_write_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a
     }
     struct task_fd *ent = task_fd_get(t, fd);
     if (!ent) return (uint64_t)-1;
+    if (ent->type == FD_TYPE_FB || ent->type == FD_TYPE_INPUT) return SYS_ERR(EINVAL);
     int backend = vfs_node_backend(ent->node);
     int raw = vfs_node_raw(ent->node);
     if (backend == VFS_BACKEND_DEV &&
@@ -325,6 +371,9 @@ static int poll_fd_ready(struct task *t, struct pollfd *pfd) {
         case FD_TYPE_PTY_SLAVE:
             if (pty_can_read((struct pty *)ent->pipe, 0)) pfd->revents |= POLLIN;
             break;
+        case FD_TYPE_INPUT:
+            if (input_has_event()) pfd->revents |= POLLIN;
+            break;
         default:
             break;
         }
@@ -349,6 +398,9 @@ static int poll_fd_ready(struct task *t, struct pollfd *pfd) {
             break;
         case FD_TYPE_PTY_SLAVE:
             if (pty_can_write((struct pty *)ent->pipe, 0)) pfd->revents |= POLLOUT;
+            break;
+        case FD_TYPE_FB:
+            pfd->revents |= POLLOUT;
             break;
         default:
             break;
@@ -449,6 +501,21 @@ static uint64_t sys_open_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4
     if (!path) return (uint64_t)-1;
     struct task *t = task_current();
     if (!user_str_ok(t, path)) return SYS_ERR(EFAULT);
+
+    if (t && (t->sandbox_flags & SANDBOX_DEV)) {
+        if (path_has_prefix_dir(path, "/dev") && !path_eq(path, "/dev/null")) {
+            return SYS_ERR(EPERM);
+        }
+    }
+    if (t && (t->sandbox_flags & SANDBOX_FS_WRITE)) {
+        uint32_t write_flags = O_WRONLY | O_RDWR | O_CREAT | O_TRUNC | O_APPEND;
+        if ((flags & write_flags) != 0) {
+            if (path[0] != '/' || !sandbox_write_path_allowed(path)) {
+                return SYS_ERR(EPERM);
+            }
+        }
+    }
+
     int node = vfs_resolve(0, path);
     if (node < 0) {
         if (flags & O_CREAT) {
@@ -478,9 +545,26 @@ static uint64_t sys_open_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4
     }
     if (vfs_is_dir(node)) return (uint64_t)-1;
     if (!t) return (uint64_t)-1;
+    int backend = vfs_node_backend(node);
+    int raw = vfs_node_raw(node);
+    if (t && (t->sandbox_flags & SANDBOX_DEV)) {
+        if (backend == VFS_BACKEND_DEV && raw != PSEUDOFS_DEV_NULL) return SYS_ERR(EPERM);
+    }
+    if (backend == VFS_BACKEND_DEV && raw == PSEUDOFS_DEV_INPUT) {
+        uint32_t bad = O_WRONLY | O_RDWR | O_CREAT | O_TRUNC | O_APPEND;
+        if ((flags & bad) != 0) return SYS_ERR(EINVAL);
+    }
+    if (backend == VFS_BACKEND_DEV && raw == PSEUDOFS_DEV_FB0) {
+        uint32_t bad = O_CREAT | O_TRUNC | O_APPEND;
+        if ((flags & bad) != 0) return SYS_ERR(EINVAL);
+    }
     int fd = task_fd_alloc(t, node, flags);
     if (fd < 0) return (uint64_t)-1;
     struct task_fd *ent = task_fd_get(t, fd);
+    if (ent && backend == VFS_BACKEND_DEV) {
+        if (raw == PSEUDOFS_DEV_FB0) ent->type = FD_TYPE_FB;
+        if (raw == PSEUDOFS_DEV_INPUT) ent->type = FD_TYPE_INPUT;
+    }
     if (ent && (flags & O_APPEND)) {
         ent->offset = vfs_get_size(node);
     }
@@ -498,6 +582,23 @@ static uint64_t sys_read_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4
     if (!user_range_ok(t, buf, len)) return SYS_ERR(EFAULT);
     struct task_fd *ent = task_fd_get(t, fd);
     if (!ent) return (uint64_t)-1;
+    if (ent->type == FD_TYPE_FB) return SYS_ERR(EINVAL);
+    if (ent->type == FD_TYPE_INPUT) {
+        if (t->sandbox_flags & SANDBOX_DEV) return SYS_ERR(EPERM);
+        if (len < sizeof(struct input_event)) return SYS_ERR(EINVAL);
+        uint64_t out_bytes = 0;
+        while (out_bytes + sizeof(struct input_event) <= len) {
+            struct input_event ev;
+            while (!input_pop_event(&ev)) {
+                if (out_bytes > 0) return out_bytes;
+                sleep_ms(1);
+            }
+            memcpy(buf + out_bytes, &ev, sizeof(ev));
+            out_bytes += sizeof(ev);
+            if (!input_has_event()) break;
+        }
+        return out_bytes;
+    }
     if (ent->type == FD_TYPE_CONSOLE) {
         if (g_fg_pgid != 0 && t->pgid != g_fg_pgid) {
             task_signal_raise(t, 20);
@@ -1018,6 +1119,7 @@ static uint64_t sys_fork_impl(struct syscall_frame *f) {
     struct thread *parent = thread_current();
     struct task *ptask = task_current();
     if (!parent || !ptask || !parent->is_user) return (uint64_t)-1;
+    if (task_has_device_maps(ptask)) return SYS_ERR(EPERM);
 
     struct fork_ctx *ctx = (struct fork_ctx *)kmalloc(sizeof(*ctx));
     if (!ctx) return (uint64_t)-1;
@@ -1166,6 +1268,7 @@ static uint64_t sys_socket_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t 
     int type = (int)a2;
     struct task *t = task_current();
     if (!t) return (uint64_t)-1;
+    if (t->sandbox_flags & SANDBOX_NET) return SYS_ERR(EPERM);
     int sid = socket_create(domain, type);
     if (sid < 0) return (uint64_t)-1;
     int fd = task_fd_alloc_socket(t, sid);
@@ -1181,6 +1284,7 @@ static uint64_t sys_bind_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4
     int fd = (int)a1;
     uint16_t port = (uint16_t)a2;
     struct task *t = task_current();
+    if (t && (t->sandbox_flags & SANDBOX_NET)) return SYS_ERR(EPERM);
     int sid = fd_to_socket(t, fd);
     if (sid < 0) return (uint64_t)-1;
     if (socket_domain(sid) == SOCKET_AF_UNIX) {
@@ -1199,6 +1303,7 @@ static uint64_t sys_connect_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t
     const uint8_t *ip = (const uint8_t *)a2;
     uint16_t port = (uint16_t)a3;
     struct task *t = task_current();
+    if (t && (t->sandbox_flags & SANDBOX_NET)) return SYS_ERR(EPERM);
     int sid = fd_to_socket(t, fd);
     if (sid < 0) return (uint64_t)-1;
     if (socket_domain(sid) == SOCKET_AF_UNIX) {
@@ -1218,6 +1323,7 @@ static uint64_t sys_connect6_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_
     const uint8_t *ip = (const uint8_t *)a2;
     uint16_t port = (uint16_t)a3;
     struct task *t = task_current();
+    if (t && (t->sandbox_flags & SANDBOX_NET)) return SYS_ERR(EPERM);
     if (ip && !user_range_ok(t, ip, 16)) return SYS_ERR(EFAULT);
     int sid = fd_to_socket(t, fd);
     if (sid < 0) return (uint64_t)-1;
@@ -1232,6 +1338,7 @@ static uint64_t sys_sendto_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t 
     const uint8_t *ip = (const uint8_t *)a4;
     uint16_t port = (uint16_t)a5;
     struct task *t = task_current();
+    if (t && (t->sandbox_flags & SANDBOX_NET)) return SYS_ERR(EPERM);
     if (!user_range_ok(t, buf, len)) return SYS_ERR(EFAULT);
     if (ip && !user_range_ok(t, ip, 4)) return SYS_ERR(EFAULT);
     int sid = fd_to_socket(t, fd);
@@ -1247,6 +1354,7 @@ static uint64_t sys_sendto6_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t
     const uint8_t *ip = (const uint8_t *)a4;
     uint16_t port = (uint16_t)a5;
     struct task *t = task_current();
+    if (t && (t->sandbox_flags & SANDBOX_NET)) return SYS_ERR(EPERM);
     if (!user_range_ok(t, buf, len)) return SYS_ERR(EFAULT);
     if (ip && !user_range_ok(t, ip, 16)) return SYS_ERR(EFAULT);
     int sid = fd_to_socket(t, fd);
@@ -1262,6 +1370,7 @@ static uint64_t sys_recvfrom_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_
     uint8_t *out_ip = (uint8_t *)a4;
     uint16_t *out_port = (uint16_t *)a5;
     struct task *t = task_current();
+    if (t && (t->sandbox_flags & SANDBOX_NET)) return SYS_ERR(EPERM);
     if (!user_range_ok(t, buf, len)) return SYS_ERR(EFAULT);
     if (out_ip && !user_range_ok(t, out_ip, 4)) return SYS_ERR(EFAULT);
     if (out_port && !user_range_ok(t, out_port, sizeof(uint16_t))) return SYS_ERR(EFAULT);
@@ -1278,6 +1387,7 @@ static uint64_t sys_recvfrom6_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64
     uint8_t *out_ip = (uint8_t *)a4;
     uint16_t *out_port = (uint16_t *)a5;
     struct task *t = task_current();
+    if (t && (t->sandbox_flags & SANDBOX_NET)) return SYS_ERR(EPERM);
     if (!user_range_ok(t, buf, len)) return SYS_ERR(EFAULT);
     if (out_ip && !user_range_ok(t, out_ip, 16)) return SYS_ERR(EFAULT);
     if (out_port && !user_range_ok(t, out_port, sizeof(uint16_t))) return SYS_ERR(EFAULT);
@@ -1290,6 +1400,7 @@ static uint64_t sys_listen_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t 
     (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
     int fd = (int)a1;
     struct task *t = task_current();
+    if (t && (t->sandbox_flags & SANDBOX_NET)) return SYS_ERR(EPERM);
     int sid = fd_to_socket(t, fd);
     if (sid < 0) return (uint64_t)-1;
     return (uint64_t)socket_listen(sid);
@@ -1299,6 +1410,7 @@ static uint64_t sys_accept_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t 
     (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
     int fd = (int)a1;
     struct task *t = task_current();
+    if (t && (t->sandbox_flags & SANDBOX_NET)) return SYS_ERR(EPERM);
     int sid = fd_to_socket(t, fd);
     if (sid < 0) return (uint64_t)-1;
     int new_sid = socket_accept(sid);
@@ -1317,6 +1429,7 @@ static uint64_t sys_send_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4
     const uint8_t *buf = (const uint8_t *)a2;
     uint16_t len = (uint16_t)a3;
     struct task *t = task_current();
+    if (t && (t->sandbox_flags & SANDBOX_NET)) return SYS_ERR(EPERM);
     if (!user_range_ok(t, buf, len)) return SYS_ERR(EFAULT);
     int sid = fd_to_socket(t, fd);
     if (sid < 0) return (uint64_t)-1;
@@ -1329,6 +1442,7 @@ static uint64_t sys_recv_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4
     uint8_t *buf = (uint8_t *)a2;
     uint16_t len = (uint16_t)a3;
     struct task *t = task_current();
+    if (t && (t->sandbox_flags & SANDBOX_NET)) return SYS_ERR(EPERM);
     if (!user_range_ok(t, buf, len)) return SYS_ERR(EFAULT);
     int sid = fd_to_socket(t, fd);
     if (sid < 0) return (uint64_t)-1;
@@ -1347,7 +1461,20 @@ static uint64_t sys_mmap_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4
     if (flags & MAP_FILE) {
         if ((offset & 0xFFFull) != 0) return (uint64_t)-1;
         struct task_fd *ent = task_fd_get(t, fd);
-        if (!ent || ent->type != FD_TYPE_FILE) return (uint64_t)-1;
+        if (!ent) return (uint64_t)-1;
+        if (ent->type == FD_TYPE_FB) {
+            if (t->sandbox_flags & SANDBOX_DEV) return SYS_ERR(EPERM);
+            struct fb_mode_info mode;
+            if (!fb_get_mode_info(&mode)) return SYS_ERR(ENODEV);
+            if (offset >= mode.size_bytes) return SYS_ERR(EINVAL);
+            uint64_t max_len = mode.size_bytes - offset;
+            if (len == 0 || len > max_len) len = max_len;
+            uint64_t phys = mode.phys_addr + offset;
+            uint64_t out = task_mmap_device(t, addr, len, prot, flags, phys, max_len);
+            if (out == 0) return (uint64_t)-1;
+            return out;
+        }
+        if (ent->type != FD_TYPE_FILE) return (uint64_t)-1;
         uint64_t out = task_mmap_file(t, addr, len, prot, flags, ent->node, offset);
         if (out == 0) return (uint64_t)-1;
         return out;
@@ -1371,6 +1498,7 @@ static uint64_t sys_getdns_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t 
     uint8_t *out = (uint8_t *)a1;
     if (!out) return (uint64_t)-1;
     struct task *t = task_current();
+    if (t && (t->sandbox_flags & SANDBOX_NET)) return SYS_ERR(EPERM);
     if (!user_range_ok(t, out, 4)) return SYS_ERR(EFAULT);
     if (dhcp_get_dns(out) != 0) return (uint64_t)-1;
     return 0;
@@ -1391,6 +1519,8 @@ static uint64_t sys_listdir_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t
 
 static uint64_t sys_mount_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
     (void)a3; (void)a4; (void)a5; (void)a6;
+    struct task *t = task_current();
+    if (t && (t->sandbox_flags & SANDBOX_MOUNT)) return SYS_ERR(EPERM);
     uint32_t part = (uint32_t)a1;
     uint32_t type = (uint32_t)a2; /* 1=ext2, 2=fat32 */
     if (type == 1) {
@@ -1409,6 +1539,8 @@ static uint64_t sys_mount_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a
 
 static uint64_t sys_umount_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
     (void)a1; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    struct task *t = task_current();
+    if (t && (t->sandbox_flags & SANDBOX_MOUNT)) return SYS_ERR(EPERM);
     if (initramfs_available()) {
         vfs_set_root(VFS_BACKEND_INITRAMFS, initramfs_root());
         return 0;
@@ -1734,6 +1866,43 @@ static uint64_t sys_hid_kbd_report_impl(uint64_t a1, uint64_t a2, uint64_t a3,
     return 0;
 }
 
+static uint64_t sys_ioctl_impl(uint64_t a1, uint64_t a2, uint64_t a3,
+                               uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a4; (void)a5; (void)a6;
+    int fd = (int)a1;
+    uint64_t req = a2;
+    void *arg = (void *)a3;
+    struct task *t = task_current();
+    if (!t) return (uint64_t)-1;
+    struct task_fd *ent = task_fd_get(t, fd);
+    if (!ent) return (uint64_t)-1;
+
+    if (ent->type == FD_TYPE_FB) {
+        if (t->sandbox_flags & SANDBOX_DEV) return SYS_ERR(EPERM);
+        if (req == FB_IOCTL_GET_MODE) {
+            if (!arg) return SYS_ERR(EINVAL);
+            if (!user_range_ok(t, arg, sizeof(struct fb_mode_info))) return SYS_ERR(EFAULT);
+            struct fb_mode_info mode;
+            if (!fb_get_mode_info(&mode)) return SYS_ERR(ENODEV);
+            memcpy(arg, &mode, sizeof(mode));
+            return 0;
+        }
+        return SYS_ERR(ENOTTY);
+    }
+
+    return SYS_ERR(ENOTTY);
+}
+
+static uint64_t sys_sandbox_impl(uint64_t a1, uint64_t a2, uint64_t a3,
+                                 uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    struct task *t = task_current();
+    if (!t || !t->is_user) return SYS_ERR(EPERM);
+    uint32_t flags = (uint32_t)a1 & SANDBOX_ALL;
+    task_sandbox_enable(t, flags);
+    return (uint64_t)task_sandbox_flags(t);
+}
+
 static syscall_fn g_syscalls[SYS_MAX] = {
     0,
     sys_write_impl,
@@ -1818,7 +1987,9 @@ static syscall_fn g_syscalls[SYS_MAX] = {
     sys_fb_drawrect_impl,
     sys_fb_clear_impl,
     sys_fb_swap_impl,
-    sys_hid_kbd_report_impl
+    sys_hid_kbd_report_impl,
+    sys_ioctl_impl,
+    sys_sandbox_impl
 };
 
 uint64_t syscall_dispatch(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3,

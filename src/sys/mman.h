@@ -11,7 +11,8 @@ enum {
 
 enum {
     MAP_ANON = 1,
-    MAP_FILE = 2
+    MAP_FILE = 2,
+    MAP_DEV  = 3
 };
 
 #endif /* SYS_MMAN_H */
