@@ -95,6 +95,13 @@ struct task_fd {
     uint32_t flags;
     uint8_t flock_mode;
     uint8_t flock_count;
+    uint8_t fb_clip_enabled;
+    uint8_t _pad0;
+    uint16_t _pad1;
+    uint32_t fb_clip_x;
+    uint32_t fb_clip_y;
+    uint32_t fb_clip_w;
+    uint32_t fb_clip_h;
 };
 
 struct task_page {
@@ -117,6 +124,8 @@ struct task_map {
     uint64_t file_size;
     uint64_t dev_phys_base;
     uint64_t dev_size;
+    int dev_node;
+    int dev_fd;
     struct task_page *pages;
     struct task_map *next;
 };
@@ -152,7 +161,7 @@ struct task *task_find_child_stopped(struct task *parent, int pid);
 uint64_t task_mmap_anonymous(struct task *t, uint64_t addr, uint64_t len, uint32_t prot, uint32_t flags);
 uint64_t task_mmap_file(struct task *t, uint64_t addr, uint64_t len, uint32_t prot, uint32_t flags, int node, uint64_t off);
 uint64_t task_mmap_device(struct task *t, uint64_t addr, uint64_t len, uint32_t prot, uint32_t flags,
-                          uint64_t phys_base, uint64_t dev_size);
+                          uint64_t phys_base, uint64_t dev_size, int dev_node, int dev_fd);
 int task_munmap(struct task *t, uint64_t addr, uint64_t len);
 int task_handle_page_fault(struct task *t, uint64_t addr, uint64_t error_code);
 int task_reclaim_pages(uint32_t max_pages);
@@ -176,6 +185,7 @@ uint32_t task_unshare_pidns(struct task *t);
 uint32_t task_unshare_mntns(struct task *t);
 uint32_t task_unshare_netns(struct task *t);
 uint32_t task_unshare_resgroup(struct task *t);
+int task_count_device_maps_for_fd(const struct task *t, int fd);
 int task_get_mem_stats(uint32_t pid, struct task_mem_stats *out);
 void task_sandbox_enable(struct task *t, uint32_t flags);
 uint32_t task_sandbox_flags(const struct task *t);

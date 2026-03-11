@@ -153,9 +153,17 @@ Sandboxing: added a userspace sandbox policy syscall (`sys_sandbox`) with per-ta
 
 Desktop Stack: added `/dev/fb0` and `/dev/input` pseudo-devices, framebuffer mode IOCTL (`FB_IOCTL_GET_MODE`), framebuffer mmap support, input event queue (`struct input_event`) with poll/read integration, and a userspace window manager/compositor demo (`/bin/wm`) using a simple shared-memory window protocol and userspace font/text rendering.
 
+Desktop Display Interfaces: expanded `/dev/fb0` IOCTLs with mode/info enumeration (`GET_INFO`, `GET_MODES`, `SET_MODE` validation), clip and partial page-flip paths, vsync-wait fallback timing, display metadata (`rotation`, `dpi`), strict framebuffer bounds validation in draw syscalls, and framebuffer mmap policy checks with per-task map tracking.
+
 Desktop UI Toolkit: added basic userspace widget primitives (panels, buttons, menus) in the WM path, including hit-testing, hover/pressed states, and menu item selection.
 
 Desktop Shell: added a taskbar + Start launcher in userspace WM, with a launch menu that can spawn user programs (e.g. `/bin/sh`, `/bin/top`, `/bin/ps`, `/bin/hello`).
+
+Desktop Boot MVP: default boot target now routes through `/bin/init` in desktop mode, with `boot.mode=desktop|console` support, ordered startup gates (`input -> fb -> compositor -> shell`), compositor readiness watchdog (`/tmp/wm.ready`), auto-restart with backoff, and fallback to console login if compositor is unstable.
+
+Desktop Reliability: desktop boot outcome now persists to `/var/log/boot-desktop.log`; safe mode now propagates to userspace init/WM and disables optional startup services/effects.
+
+Crash Path: added best-effort framebuffer backbuffer flush before fatal halt/recovery transition.
 
 
 ## Features Changed:
@@ -170,6 +178,8 @@ Crash behavior is now policy-driven (halt or reboot) instead of hard-coded halt-
 Kernel console scrollback made line-based and robustly restores prompt when returning to bottom.
 
 Init now starts services from config with simple dependencies; ISO build compiles all userland tools into initramfs using dedicated linker script.
+
+Init spawn preference now chooses `/bin/init` before `/bin/login` to ensure desktop boot supervision runs by default.
 
 
 ## Features Removed:

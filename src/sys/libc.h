@@ -162,6 +162,86 @@ struct fb_info {
     uint32_t height;
     uint32_t pitch;
     uint32_t bpp;
+    uint32_t format;
+    uint32_t rotation;
+    uint32_t dpi_x;
+    uint32_t dpi_y;
+};
+
+enum {
+    FB_FORMAT_UNKNOWN = 0,
+    FB_FORMAT_XRGB8888 = 1,
+    FB_FORMAT_RGB565 = 2
+};
+
+struct fb_mode_info {
+    uint64_t phys_addr;
+    uint64_t size_bytes;
+    uint32_t width;
+    uint32_t height;
+    uint32_t pitch;
+    uint32_t bpp;
+    uint8_t red_mask_size;
+    uint8_t red_mask_shift;
+    uint8_t green_mask_size;
+    uint8_t green_mask_shift;
+    uint8_t blue_mask_size;
+    uint8_t blue_mask_shift;
+    uint32_t format;
+    uint32_t mode_id;
+};
+
+enum {
+    FB_IOCTL_GET_MODE = 0x4601u,
+    FB_IOCTL_GET_INFO = 0x4602u,
+    FB_IOCTL_GET_MODES = 0x4603u,
+    FB_IOCTL_SET_MODE = 0x4604u,
+    FB_IOCTL_PAGE_FLIP = 0x4605u,
+    FB_IOCTL_WAIT_VSYNC = 0x4606u,
+    FB_IOCTL_SET_CLIP = 0x4607u,
+    FB_IOCTL_GET_CLIP = 0x4608u,
+    FB_IOCTL_CLEAR_CLIP = 0x4609u,
+    FB_IOCTL_GET_DISPLAY = 0x460Au,
+    FB_IOCTL_SET_DISPLAY = 0x460Bu
+};
+
+struct fb_mode_set_request {
+    uint32_t mode_id;
+    uint32_t width;
+    uint32_t height;
+    uint32_t bpp;
+    uint32_t format;
+};
+
+#define FB_MAX_ENUM_MODES 8u
+
+struct fb_mode_list {
+    uint32_t capacity;
+    uint32_t count;
+    struct fb_mode_info modes[FB_MAX_ENUM_MODES];
+};
+
+struct fb_clip_rect {
+    uint32_t x;
+    uint32_t y;
+    uint32_t w;
+    uint32_t h;
+};
+
+struct fb_flip_request {
+    uint32_t flags;
+    struct fb_clip_rect rect;
+};
+
+struct fb_vsync_request {
+    uint32_t timeout_ms;
+};
+
+struct fb_display_info {
+    uint32_t rotation;
+    uint32_t dpi_x;
+    uint32_t dpi_y;
+    uint32_t reserved;
 };
 
 static inline long sys_fb_info(struct fb_info *out) {
@@ -190,6 +270,10 @@ static inline long sys_fb_swap(void) {
 
 static inline long sys_hid_kbd_report(const uint8_t *report, size_t len) {
     return __syscall6(83, (long)report, (long)len, 0, 0, 0, 0);
+}
+
+static inline long sys_ioctl(int fd, uint64_t req, void *arg) {
+    return __syscall6(84, (long)fd, (long)req, (long)arg, 0, 0, 0);
 }
 
 static inline long sys_open(const char *path, uint32_t flags) {

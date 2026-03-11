@@ -48,6 +48,13 @@ static void fd_set_console(struct task_fd *fd) {
     fd->pipe_end = 0;
     fd->offset = 0;
     fd->flags = 0;
+    fd->flock_mode = 0;
+    fd->flock_count = 0;
+    fd->fb_clip_enabled = 0;
+    fd->fb_clip_x = 0;
+    fd->fb_clip_y = 0;
+    fd->fb_clip_w = 0;
+    fd->fb_clip_h = 0;
 }
 
 static uint32_t next_pid(void) {
@@ -175,6 +182,11 @@ void task_fd_init(struct task *t) {
         t->fds[i].flags = 0;
         t->fds[i].flock_mode = 0;
         t->fds[i].flock_count = 0;
+        t->fds[i].fb_clip_enabled = 0;
+        t->fds[i].fb_clip_x = 0;
+        t->fds[i].fb_clip_y = 0;
+        t->fds[i].fb_clip_w = 0;
+        t->fds[i].fb_clip_h = 0;
     }
     fd_set_console(&t->fds[0]);
     fd_set_console(&t->fds[1]);
@@ -204,6 +216,11 @@ int task_fd_alloc(struct task *t, int node, uint32_t flags) {
             t->fds[i].flags = flags;
             t->fds[i].flock_mode = 0;
             t->fds[i].flock_count = 0;
+            t->fds[i].fb_clip_enabled = 0;
+            t->fds[i].fb_clip_x = 0;
+            t->fds[i].fb_clip_y = 0;
+            t->fds[i].fb_clip_w = 0;
+            t->fds[i].fb_clip_h = 0;
             return i;
         }
     }
@@ -230,6 +247,11 @@ int task_fd_alloc_socket(struct task *t, int sock_id) {
             t->fds[i].flags = 0;
             t->fds[i].flock_mode = 0;
             t->fds[i].flock_count = 0;
+            t->fds[i].fb_clip_enabled = 0;
+            t->fds[i].fb_clip_x = 0;
+            t->fds[i].fb_clip_y = 0;
+            t->fds[i].fb_clip_w = 0;
+            t->fds[i].fb_clip_h = 0;
             return i;
         }
     }
@@ -253,6 +275,11 @@ int task_fd_alloc_obj(struct task *t, int type, void *obj) {
             t->fds[i].flags = 0;
             t->fds[i].flock_mode = 0;
             t->fds[i].flock_count = 0;
+            t->fds[i].fb_clip_enabled = 0;
+            t->fds[i].fb_clip_x = 0;
+            t->fds[i].fb_clip_y = 0;
+            t->fds[i].fb_clip_w = 0;
+            t->fds[i].fb_clip_h = 0;
             return i;
         }
     }
@@ -294,6 +321,11 @@ int task_fd_close(struct task *t, int fd) {
     t->fds[fd].flags = 0;
     t->fds[fd].flock_mode = 0;
     t->fds[fd].flock_count = 0;
+    t->fds[fd].fb_clip_enabled = 0;
+    t->fds[fd].fb_clip_x = 0;
+    t->fds[fd].fb_clip_y = 0;
+    t->fds[fd].fb_clip_w = 0;
+    t->fds[fd].fb_clip_h = 0;
     if (t->res_fd_count > 0) task_uncharge_fd(t, 1);
     return 0;
 }
@@ -825,6 +857,17 @@ int task_has_device_maps(const struct task *t) {
     return 0;
 }
 
+int task_count_device_maps_for_fd(const struct task *t, int fd) {
+    if (!t || fd < 0) return 0;
+    int count = 0;
+    const struct task_map *m = t->maps;
+    while (m) {
+        if (m->map_type == MAP_DEV && m->dev_fd == fd) count++;
+        m = m->next;
+    }
+    return count;
+}
+
 uint64_t task_mmap_anonymous(struct task *t, uint64_t addr, uint64_t len, uint32_t prot, uint32_t flags) {
     if (!t || !t->is_user) return 0;
     if (len == 0) return 0;
@@ -854,6 +897,8 @@ uint64_t task_mmap_anonymous(struct task *t, uint64_t addr, uint64_t len, uint32
     m->file_size = 0;
     m->dev_phys_base = 0;
     m->dev_size = 0;
+    m->dev_node = -1;
+    m->dev_fd = -1;
     m->pages = NULL;
     m->next = NULL;
     insert_map_sorted(t, m);
@@ -889,6 +934,8 @@ uint64_t task_mmap_file(struct task *t, uint64_t addr, uint64_t len, uint32_t pr
     m->file_size = vfs_get_size(node);
     m->dev_phys_base = 0;
     m->dev_size = 0;
+    m->dev_node = -1;
+    m->dev_fd = -1;
     m->pages = NULL;
     m->next = NULL;
     insert_map_sorted(t, m);
@@ -896,7 +943,7 @@ uint64_t task_mmap_file(struct task *t, uint64_t addr, uint64_t len, uint32_t pr
 }
 
 uint64_t task_mmap_device(struct task *t, uint64_t addr, uint64_t len, uint32_t prot, uint32_t flags,
-                          uint64_t phys_base, uint64_t dev_size) {
+                          uint64_t phys_base, uint64_t dev_size, int dev_node, int dev_fd) {
     if (!t || !t->is_user) return 0;
     if (len == 0 || phys_base == 0 || dev_size == 0) return 0;
 
@@ -926,6 +973,8 @@ uint64_t task_mmap_device(struct task *t, uint64_t addr, uint64_t len, uint32_t 
     m->file_size = 0;
     m->dev_phys_base = phys_base;
     m->dev_size = dev_size;
+    m->dev_node = dev_node;
+    m->dev_fd = dev_fd;
     m->pages = NULL;
     m->next = NULL;
     insert_map_sorted(t, m);

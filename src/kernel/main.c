@@ -103,6 +103,12 @@ static void ensure_dir(const char *path) {
     }
 }
 
+static void desktop_idle_loop(void) {
+    for (;;) {
+        cpu_idle();
+    }
+}
+
 static int parse_tz_offset(const char *buf, uint64_t len, int *out_minutes) {
     if (!buf || !out_minutes || len == 0) return 0;
     uint64_t i = 0;
@@ -255,6 +261,7 @@ static void kmain_stage2(void) {
     if (safe_mode) {
         log_printf("Boot: safe mode enabled (modules disabled)\n");
     }
+    init_set_safe_mode(safe_mode);
     const char *log_mode = boot_param_get("log");
     if (log_mode) {
         if (log_mode[0] == 'd' && log_mode[1] == 'e' && log_mode[2] == 'b' &&
@@ -635,6 +642,13 @@ static void kmain_stage2(void) {
     ms_init();
     driver_set_status_idx(drv_mouse, DRIVER_STATUS_OK, NULL);
     if (init_ok) {
+        const char *boot_mode = boot_param_get("boot.mode");
+        if (!boot_mode || !boot_mode[0]) boot_mode = "desktop";
+        if (str_eq(boot_mode, "desktop")) {
+            log_printf("Boot: userspace init started; desktop mode active\n");
+            log_printf("Boot: kernel console available via logs/serial, loop disabled\n");
+            desktop_idle_loop();
+        }
         log_printf("Boot: userspace init started; kernel console kept active\n");
     }
     log_printf("Boot: entering console loop\n");

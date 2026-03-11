@@ -44,12 +44,12 @@ if [ -d "$INITRAMFS_DIR" ]; then
   for src in user/init.c user/busybox.c user/cron.c user/login.c user/wm.c; do
     [ -f "$src" ] || continue
     base=$(basename "$src" .c)
-    x86_64-linux-gnu-gcc -nostdlib -static -ffreestanding -fno-pie -no-pie -Iuser \
+    x86_64-linux-gnu-gcc -nostdlib -static -ffreestanding -fno-stack-protector -fno-pie -no-pie -Iuser \
       -Wl,-e,_start -Wl,-T,user/user.lds \
       -o "$INITRAMFS_DIR/bin/$base" "$src"
   done
   if [ -f "user/hello.c" ]; then
-    x86_64-linux-gnu-gcc -nostdlib -ffreestanding -fPIE -pie -Iuser \
+    x86_64-linux-gnu-gcc -nostdlib -ffreestanding -fno-stack-protector -fPIE -pie -Iuser \
       -Wl,-e,_start -Wl,--no-as-needed -Wl,-rpath,/lib \
       -L"$INITRAMFS_DIR/lib" -Wl,-l:libu.so \
       -o "$INITRAMFS_DIR/bin/hello" user/hello.c

@@ -19,6 +19,8 @@ static uint8_t fb_rm_size = 0, fb_rm_shift = 0;
 static uint8_t fb_gm_size = 0, fb_gm_shift = 0;
 static uint8_t fb_bm_size = 0, fb_bm_shift = 0;
 static uint32_t fb_bytes_per_pixel = 0;
+static uint32_t fb_format = FB_FORMAT_UNKNOWN;
+static struct fb_display_info fb_display = {0, 96, 96, 0};
 static uint8_t *bb_ptr = 0;
 static uint64_t bb_size = 0;
 static int bb_ready = 0;
@@ -94,8 +96,42 @@ static inline void min_max_uint32(uint32_t *v, uint32_t minv, uint32_t maxv) {
     if (*v > maxv) *v = maxv;
 }
 
+uint32_t fb_rgb24_to_xrgb8888(uint32_t rgb24) {
+    return rgb24 & 0x00FFFFFFu;
+}
+
+uint16_t fb_rgb24_to_rgb565(uint32_t rgb24) {
+    uint16_t r = (uint16_t)((rgb24 >> 19) & 0x1Fu);
+    uint16_t g = (uint16_t)((rgb24 >> 10) & 0x3Fu);
+    uint16_t b = (uint16_t)((rgb24 >> 3) & 0x1Fu);
+    return (uint16_t)((r << 11) | (g << 5) | b);
+}
+
+static uint32_t detect_fb_format(void) {
+    if (fb_bpp == 16 &&
+        fb_rm_size == 5 && fb_rm_shift == 11 &&
+        fb_gm_size == 6 && fb_gm_shift == 5 &&
+        fb_bm_size == 5 && fb_bm_shift == 0) {
+        return FB_FORMAT_RGB565;
+    }
+    if (fb_bpp >= 24 &&
+        fb_rm_size == 8 && fb_rm_shift == 16 &&
+        fb_gm_size == 8 && fb_gm_shift == 8 &&
+        fb_bm_size == 8 && fb_bm_shift == 0) {
+        return FB_FORMAT_XRGB8888;
+    }
+    return FB_FORMAT_UNKNOWN;
+}
+
+uint32_t fb_color_format(void) {
+    return fb_format;
+}
+
 /* map 24-bit RGB to framebuffer pixel value */
 static uint32_t pack_pixel(uint32_t rgb24) {
+    if (fb_format == FB_FORMAT_XRGB8888) return fb_rgb24_to_xrgb8888(rgb24);
+    if (fb_format == FB_FORMAT_RGB565) return (uint32_t)fb_rgb24_to_rgb565(rgb24);
+
     uint32_t r = (rgb24 >> 16) & 0xFF;
     uint32_t g = (rgb24 >> 8) & 0xFF;
     uint32_t b = rgb24 & 0xFF;
@@ -577,6 +613,7 @@ void fb_init(struct limine_framebuffer *fb, uint32_t fg, uint32_t bg) {
     fb_gm_size = fb->green_mask_size; fb_gm_shift = fb->green_mask_shift;
     fb_bm_size = fb->blue_mask_size; fb_bm_shift = fb->blue_mask_shift;
     fb_bytes_per_pixel = (fb_bpp + 7) / 8;
+    fb_format = detect_fb_format();
     cursor_x = margin_x;
     cursor_y = margin_y;
     cur_fg = fg; cur_bg = bg;
@@ -644,6 +681,10 @@ int fb_get_info(struct fb_info *out) {
     out->height = (uint32_t)fb_height;
     out->pitch = (uint32_t)fb_pitch;
     out->bpp = (uint32_t)fb_bpp;
+    out->format = fb_format;
+    out->rotation = fb_display.rotation;
+    out->dpi_x = fb_display.dpi_x;
+    out->dpi_y = fb_display.dpi_y;
     return 1;
 }
 
@@ -664,6 +705,62 @@ int fb_get_mode_info(struct fb_mode_info *out) {
     out->green_mask_shift = fb_gm_shift;
     out->blue_mask_size = fb_bm_size;
     out->blue_mask_shift = fb_bm_shift;
+    out->format = fb_format;
+    out->mode_id = 0;
+    return 1;
+}
+
+int fb_get_modes(struct fb_mode_list *out) {
+    if (!out || !g_fb) return 0;
+    for (uint32_t i = 0; i < FB_MAX_ENUM_MODES; ++i) {
+        out->modes[i].phys_addr = 0;
+        out->modes[i].size_bytes = 0;
+        out->modes[i].width = 0;
+        out->modes[i].height = 0;
+        out->modes[i].pitch = 0;
+        out->modes[i].bpp = 0;
+        out->modes[i].red_mask_size = 0;
+        out->modes[i].red_mask_shift = 0;
+        out->modes[i].green_mask_size = 0;
+        out->modes[i].green_mask_shift = 0;
+        out->modes[i].blue_mask_size = 0;
+        out->modes[i].blue_mask_shift = 0;
+        out->modes[i].format = 0;
+        out->modes[i].mode_id = 0;
+    }
+    uint32_t capacity = out->capacity;
+    if (capacity > FB_MAX_ENUM_MODES) capacity = FB_MAX_ENUM_MODES;
+    out->count = 1;
+    if (capacity > 0) {
+        fb_get_mode_info(&out->modes[0]);
+    }
+    return 1;
+}
+
+int fb_set_mode(const struct fb_mode_set_request *req) {
+    if (!g_fb || !req) return 0;
+    if (req->mode_id != 0) return 0;
+    if (req->width != 0 && req->width != (uint32_t)fb_width) return 0;
+    if (req->height != 0 && req->height != (uint32_t)fb_height) return 0;
+    if (req->bpp != 0 && req->bpp != (uint32_t)fb_bpp) return 0;
+    if (req->format != 0 && req->format != fb_format) return 0;
+    return 1;
+}
+
+void fb_get_display_info(struct fb_display_info *out) {
+    if (!out) return;
+    *out = fb_display;
+}
+
+int fb_set_display_info(const struct fb_display_info *in) {
+    if (!in) return 0;
+    if (!(in->rotation == 0 || in->rotation == 90 || in->rotation == 180 || in->rotation == 270)) {
+        return 0;
+    }
+    if (in->dpi_x < 36 || in->dpi_x > 960 || in->dpi_y < 36 || in->dpi_y > 960) return 0;
+    fb_display.rotation = in->rotation;
+    fb_display.dpi_x = in->dpi_x;
+    fb_display.dpi_y = in->dpi_y;
     return 1;
 }
 
@@ -762,7 +859,20 @@ void fb_backbuffer_draw_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uin
 
 void fb_backbuffer_draw_line(uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1, uint32_t rgb24) {
     if (!backbuffer_ensure()) return;
-    draw_line_buf(bb_ptr, (int)x0, (int)y0, (int)x1, (int)y1, rgb24);
+    draw_line_buf(bb_ptr, (int)x0, (int)y0, (int)x1, (int)y1, rgb24); 
+}
+
+void fb_backbuffer_swap_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h) {
+    if (!backbuffer_ensure()) return;
+    if (w == 0 || h == 0) return;
+    if (x >= fb_width || y >= fb_height) return;
+    if (x + w > fb_width) w = (uint32_t)fb_width - x;
+    if (y + h > fb_height) h = (uint32_t)fb_height - y;
+    size_t row_bytes = (size_t)w * fb_bytes_per_pixel;
+    for (uint32_t row = 0; row < h; ++row) {
+        size_t off = (size_t)(y + row) * fb_pitch + (size_t)x * fb_bytes_per_pixel;
+        memcpy(fb_ptr + off, bb_ptr + off, row_bytes);
+    }
 }
 
 void fb_backbuffer_swap(void) {

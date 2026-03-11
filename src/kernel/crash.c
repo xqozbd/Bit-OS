@@ -7,6 +7,7 @@
 #include "lib/log.h"
 #include "kernel/crash_dump.h"
 #include "kernel/power.h"
+#include "drivers/video/fb_printf.h"
 
 static int g_crash_mode = 0; /* 0=halt, 1=reboot */
 
@@ -32,6 +33,10 @@ int crash_get_mode(void) {
 }
 
 static void crash_halt_or_recover(void) {
+    /* Best-effort present of any pending backbuffer frame before halting/rebooting. */
+    if (fb_backbuffer_ready()) {
+        fb_backbuffer_swap();
+    }
     if (g_crash_mode == 1) {
         log_printf("CRASH: attempting recovery reboot...\n");
         power_restart();

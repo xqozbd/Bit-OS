@@ -43,7 +43,6 @@
 #define SYS_ERR(e) ((uint64_t)(-(int)(e)))
 #define FUTEX_WAIT 0
 #define FUTEX_WAKE 1
-#define FB_IOCTL_GET_MODE 0x4601u
 
 #define SANDBOX_FS_WRITE (1u << 0)
 #define SANDBOX_NET      (1u << 1)
@@ -52,6 +51,7 @@
 #define SANDBOX_ALL (SANDBOX_FS_WRITE | SANDBOX_NET | SANDBOX_MOUNT | SANDBOX_DEV)
 
 extern void *memcpy(void *restrict dest, const void *restrict src, size_t n);
+static int fb_mode_query(struct fb_mode_info *mode);
 
 #define FUTEX_BUCKETS 64
 struct futex_waiter {
@@ -1464,13 +1464,16 @@ static uint64_t sys_mmap_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4
         if (!ent) return (uint64_t)-1;
         if (ent->type == FD_TYPE_FB) {
             if (t->sandbox_flags & SANDBOX_DEV) return SYS_ERR(EPERM);
+            if ((prot & PROT_READ) == 0 || (prot & PROT_EXEC) != 0) return SYS_ERR(EINVAL);
+            if (len == 0) return SYS_ERR(EINVAL);
+            if (task_count_device_maps_for_fd(t, fd) >= 8) return SYS_ERR(EMFILE);
             struct fb_mode_info mode;
-            if (!fb_get_mode_info(&mode)) return SYS_ERR(ENODEV);
+            if (!fb_mode_query(&mode)) return SYS_ERR(ENODEV);
             if (offset >= mode.size_bytes) return SYS_ERR(EINVAL);
             uint64_t max_len = mode.size_bytes - offset;
-            if (len == 0 || len > max_len) len = max_len;
+            if (len > max_len) return SYS_ERR(EINVAL);
             uint64_t phys = mode.phys_addr + offset;
-            uint64_t out = task_mmap_device(t, addr, len, prot, flags, phys, max_len);
+            uint64_t out = task_mmap_device(t, addr, len, prot, flags, phys, max_len, ent->node, fd);
             if (out == 0) return (uint64_t)-1;
             return out;
         }
@@ -1804,6 +1807,25 @@ static int ensure_backbuffer(void) {
     return fb_backbuffer_init();
 }
 
+static int fb_mode_query(struct fb_mode_info *mode) {
+    if (!mode) return 0;
+    return fb_get_mode_info(mode);
+}
+
+static int fb_point_in_range(const struct fb_mode_info *mode, uint32_t x, uint32_t y) {
+    if (!mode) return 0;
+    return (x < mode->width && y < mode->height);
+}
+
+static int fb_rect_in_range(const struct fb_mode_info *mode, uint32_t x, uint32_t y, uint32_t w, uint32_t h) {
+    if (!mode || w == 0 || h == 0) return 0;
+    if (x >= mode->width || y >= mode->height) return 0;
+    if (x + w < x || y + h < y) return 0;
+    if (x + w > mode->width) return 0;
+    if (y + h > mode->height) return 0;
+    return 1;
+}
+
 static uint64_t sys_fb_info_impl(uint64_t a1, uint64_t a2, uint64_t a3,
                                  uint64_t a4, uint64_t a5, uint64_t a6) {
     (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
@@ -1818,6 +1840,9 @@ static uint64_t sys_fb_info_impl(uint64_t a1, uint64_t a2, uint64_t a3,
 static uint64_t sys_fb_putpix_impl(uint64_t a1, uint64_t a2, uint64_t a3,
                                    uint64_t a4, uint64_t a5, uint64_t a6) {
     (void)a4; (void)a5; (void)a6;
+    struct fb_mode_info mode;
+    if (!fb_mode_query(&mode)) return SYS_ERR(ENODEV);
+    if (!fb_point_in_range(&mode, (uint32_t)a1, (uint32_t)a2)) return SYS_ERR(EINVAL);
     if (!ensure_backbuffer()) return SYS_ERR(ENOMEM);
     fb_backbuffer_write_pixel((uint32_t)a1, (uint32_t)a2, (uint32_t)a3);
     return 0;
@@ -1826,6 +1851,12 @@ static uint64_t sys_fb_putpix_impl(uint64_t a1, uint64_t a2, uint64_t a3,
 static uint64_t sys_fb_drawline_impl(uint64_t a1, uint64_t a2, uint64_t a3,
                                      uint64_t a4, uint64_t a5, uint64_t a6) {
     (void)a6;
+    struct fb_mode_info mode;
+    if (!fb_mode_query(&mode)) return SYS_ERR(ENODEV);
+    if (!fb_point_in_range(&mode, (uint32_t)a1, (uint32_t)a2) ||
+        !fb_point_in_range(&mode, (uint32_t)a3, (uint32_t)a4)) {
+        return SYS_ERR(EINVAL);
+    }
     if (!ensure_backbuffer()) return SYS_ERR(ENOMEM);
     fb_backbuffer_draw_line((uint32_t)a1, (uint32_t)a2, (uint32_t)a3, (uint32_t)a4, (uint32_t)a5);
     return 0;
@@ -1834,6 +1865,11 @@ static uint64_t sys_fb_drawline_impl(uint64_t a1, uint64_t a2, uint64_t a3,
 static uint64_t sys_fb_drawrect_impl(uint64_t a1, uint64_t a2, uint64_t a3,
                                      uint64_t a4, uint64_t a5, uint64_t a6) {
     (void)a6;
+    struct fb_mode_info mode;
+    if (!fb_mode_query(&mode)) return SYS_ERR(ENODEV);
+    if (!fb_rect_in_range(&mode, (uint32_t)a1, (uint32_t)a2, (uint32_t)a3, (uint32_t)a4)) {
+        return SYS_ERR(EINVAL);
+    }
     if (!ensure_backbuffer()) return SYS_ERR(ENOMEM);
     fb_backbuffer_draw_rect((uint32_t)a1, (uint32_t)a2, (uint32_t)a3, (uint32_t)a4, (uint32_t)a5);
     return 0;
@@ -1883,8 +1919,124 @@ static uint64_t sys_ioctl_impl(uint64_t a1, uint64_t a2, uint64_t a3,
             if (!arg) return SYS_ERR(EINVAL);
             if (!user_range_ok(t, arg, sizeof(struct fb_mode_info))) return SYS_ERR(EFAULT);
             struct fb_mode_info mode;
-            if (!fb_get_mode_info(&mode)) return SYS_ERR(ENODEV);
+            if (!fb_mode_query(&mode)) return SYS_ERR(ENODEV);
             memcpy(arg, &mode, sizeof(mode));
+            return 0;
+        }
+        if (req == FB_IOCTL_GET_INFO) {
+            if (!arg) return SYS_ERR(EINVAL);
+            if (!user_range_ok(t, arg, sizeof(struct fb_info))) return SYS_ERR(EFAULT);
+            struct fb_info info;
+            if (!fb_get_info(&info)) return SYS_ERR(ENODEV);
+            memcpy(arg, &info, sizeof(info));
+            return 0;
+        }
+        if (req == FB_IOCTL_GET_MODES) {
+            if (!arg) return SYS_ERR(EINVAL);
+            if (!user_range_ok(t, arg, sizeof(struct fb_mode_list))) return SYS_ERR(EFAULT);
+            struct fb_mode_list list = {0};
+            list.capacity = ((struct fb_mode_list *)arg)->capacity;
+            if (!fb_get_modes(&list)) return SYS_ERR(ENODEV);
+            memcpy(arg, &list, sizeof(list));
+            return 0;
+        }
+        if (req == FB_IOCTL_SET_MODE) {
+            if (!arg) return SYS_ERR(EINVAL);
+            if (!user_range_ok(t, arg, sizeof(struct fb_mode_set_request))) return SYS_ERR(EFAULT);
+            struct fb_mode_set_request mode_req = *(struct fb_mode_set_request *)arg;
+            if (!fb_set_mode(&mode_req)) return SYS_ERR(EINVAL);
+            return 0;
+        }
+        if (req == FB_IOCTL_SET_CLIP) {
+            if (!arg) return SYS_ERR(EINVAL);
+            if (!user_range_ok(t, arg, sizeof(struct fb_clip_rect))) return SYS_ERR(EFAULT);
+            struct fb_clip_rect clip = *(struct fb_clip_rect *)arg;
+            struct fb_mode_info mode;
+            if (!fb_mode_query(&mode)) return SYS_ERR(ENODEV);
+            if (!fb_rect_in_range(&mode, clip.x, clip.y, clip.w, clip.h)) return SYS_ERR(EINVAL);
+            ent->fb_clip_enabled = 1;
+            ent->fb_clip_x = clip.x;
+            ent->fb_clip_y = clip.y;
+            ent->fb_clip_w = clip.w;
+            ent->fb_clip_h = clip.h;
+            return 0;
+        }
+        if (req == FB_IOCTL_GET_CLIP) {
+            if (!arg) return SYS_ERR(EINVAL);
+            if (!user_range_ok(t, arg, sizeof(struct fb_clip_rect))) return SYS_ERR(EFAULT);
+            struct fb_clip_rect clip;
+            if (ent->fb_clip_enabled) {
+                clip.x = ent->fb_clip_x;
+                clip.y = ent->fb_clip_y;
+                clip.w = ent->fb_clip_w;
+                clip.h = ent->fb_clip_h;
+            } else {
+                struct fb_mode_info mode;
+                if (!fb_mode_query(&mode)) return SYS_ERR(ENODEV);
+                clip.x = 0;
+                clip.y = 0;
+                clip.w = mode.width;
+                clip.h = mode.height;
+            }
+            memcpy(arg, &clip, sizeof(clip));
+            return 0;
+        }
+        if (req == FB_IOCTL_CLEAR_CLIP) {
+            ent->fb_clip_enabled = 0;
+            ent->fb_clip_x = 0;
+            ent->fb_clip_y = 0;
+            ent->fb_clip_w = 0;
+            ent->fb_clip_h = 0;
+            return 0;
+        }
+        if (req == FB_IOCTL_PAGE_FLIP) {
+            if (!ensure_backbuffer()) return SYS_ERR(ENOMEM);
+            if (arg) {
+                if (!user_range_ok(t, arg, sizeof(struct fb_flip_request))) return SYS_ERR(EFAULT);
+                struct fb_flip_request flip = *(struct fb_flip_request *)arg;
+                if ((flip.flags & 1u) != 0u) {
+                    struct fb_mode_info mode;
+                    if (!fb_mode_query(&mode)) return SYS_ERR(ENODEV);
+                    if (!fb_rect_in_range(&mode, flip.rect.x, flip.rect.y, flip.rect.w, flip.rect.h)) {
+                        return SYS_ERR(EINVAL);
+                    }
+                    fb_backbuffer_swap_rect(flip.rect.x, flip.rect.y, flip.rect.w, flip.rect.h);
+                    return 0;
+                }
+            }
+            if (ent->fb_clip_enabled) {
+                fb_backbuffer_swap_rect(ent->fb_clip_x, ent->fb_clip_y, ent->fb_clip_w, ent->fb_clip_h);
+            } else {
+                fb_backbuffer_swap();
+            }
+            return 0;
+        }
+        if (req == FB_IOCTL_WAIT_VSYNC) {
+            uint32_t wait_ms = 16;
+            if (arg) {
+                if (!user_range_ok(t, arg, sizeof(struct fb_vsync_request))) return SYS_ERR(EFAULT);
+                struct fb_vsync_request vr = *(struct fb_vsync_request *)arg;
+                if (vr.timeout_ms != 0) {
+                    wait_ms = vr.timeout_ms;
+                    if (wait_ms > 1000) wait_ms = 1000;
+                }
+            }
+            sleep_ms(wait_ms);
+            return 0;
+        }
+        if (req == FB_IOCTL_GET_DISPLAY) {
+            if (!arg) return SYS_ERR(EINVAL);
+            if (!user_range_ok(t, arg, sizeof(struct fb_display_info))) return SYS_ERR(EFAULT);
+            struct fb_display_info d;
+            fb_get_display_info(&d);
+            memcpy(arg, &d, sizeof(d));
+            return 0;
+        }
+        if (req == FB_IOCTL_SET_DISPLAY) {
+            if (!arg) return SYS_ERR(EINVAL);
+            if (!user_range_ok(t, arg, sizeof(struct fb_display_info))) return SYS_ERR(EFAULT);
+            struct fb_display_info d = *(struct fb_display_info *)arg;
+            if (!fb_set_display_info(&d)) return SYS_ERR(EINVAL);
             return 0;
         }
         return SYS_ERR(ENOTTY);

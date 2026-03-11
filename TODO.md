@@ -214,36 +214,32 @@
 - [x] Desktop stack: font rendering + text drawing in userspace.
 - [x] Desktop stack: basic UI toolkit (buttons/menus/panels).
 - [x] Desktop stack: desktop shell (taskbar + launcher).
+- [x] Finalize `FB_GET_INFO` ioctl (width/height/pitch/bpp/format).
+- [x] Add `FB_SET_MODE` ioctl for supported framebuffer mode switches.
+- [x] Add `FB_GET_MODES` ioctl to enumerate available modes.
+- [x] Add `FB_MAP`/`mmap` validation and per-process mapping tracking.
+- [x] Add strict bounds checks for framebuffer writes.
+- [x] Add support for `XRGB8888` and `RGB565` conversion helpers.
+- [x] Add software backbuffer allocation path in kernel.
+- [x] Add `FB_PAGE_FLIP` ioctl for double-buffer presentation.
+- [x] Add `FB_WAIT_VSYNC` ioctl stub with timer-based fallback.
+- [x] Add clip-rectangle ioctl path for partial updates.
+- [x] Add display rotation metadata (`0/90/180/270`).
+- [x] Add DPI reporting fields for userspace scaling.
+- [x] Boot target: start desktop session by default after `/bin/init`.
+- [x] Keep kernel console available for fatal desktop startup failures.
+- [x] Add boot flag to force text mode (`boot.mode=console`).
+- [x] Add boot flag to force desktop mode (`boot.mode=desktop`).
+- [x] Add service manager ordering for `input -> fb -> compositor -> shell`.
+- [x] Implement compositor auto-restart with crash counter backoff.
+- [x] Fallback to login shell if compositor fails N times.
+- [x] Persist last desktop boot result in `/var/log/boot-desktop.log`.
+- [x] Add startup timeout watchdog for desktop components.
+- [x] Add panic-safe framebuffer flush before halt.
+- [x] Add explicit user-facing startup status line for each desktop service.
+- [x] Add safe mode that disables optional services and effects.
 
 ## Next
-
-### P0 - Boot To Usable Desktop (MVP)
-- [ ] Boot target: start desktop session by default after `/bin/init`.
-- [ ] Keep kernel console available for fatal desktop startup failures.
-- [ ] Add boot flag to force text mode (`boot.mode=console`).
-- [ ] Add boot flag to force desktop mode (`boot.mode=desktop`).
-- [ ] Add service manager ordering for `input -> fb -> compositor -> shell`.
-- [ ] Implement compositor auto-restart with crash counter backoff.
-- [ ] Fallback to login shell if compositor fails N times.
-- [ ] Persist last desktop boot result in `/var/log/boot-desktop.log`.
-- [ ] Add startup timeout watchdog for desktop components.
-- [ ] Add panic-safe framebuffer flush before halt.
-- [ ] Add explicit user-facing startup status line for each desktop service.
-- [ ] Add safe mode that disables optional services and effects.
-
-### P0 - Kernel Display Interfaces (`/dev/fb0`)
-- [ ] Finalize `FB_GET_INFO` ioctl (width/height/pitch/bpp/format).
-- [ ] Add `FB_SET_MODE` ioctl for supported framebuffer mode switches.
-- [ ] Add `FB_GET_MODES` ioctl to enumerate available modes.
-- [ ] Add `FB_MAP`/`mmap` validation and per-process mapping tracking.
-- [ ] Add strict bounds checks for framebuffer writes.
-- [ ] Add support for `XRGB8888` and `RGB565` conversion helpers.
-- [ ] Add software backbuffer allocation path in kernel.
-- [ ] Add `FB_PAGE_FLIP` ioctl for double-buffer presentation.
-- [ ] Add `FB_WAIT_VSYNC` ioctl stub with timer-based fallback.
-- [ ] Add clip-rectangle ioctl path for partial updates.
-- [ ] Add display rotation metadata (`0/90/180/270`).
-- [ ] Add DPI reporting fields for userspace scaling.
 
 ### P0 - Kernel Input Interfaces (`/dev/input`)
 - [ ] Finalize keyboard event struct (scancode/keycode/modifiers/repeat).

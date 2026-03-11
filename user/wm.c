@@ -2,6 +2,8 @@
 #include "desktop.h"
 #include "../src/drivers/video/font8x8_basic.h"
 
+#define WM_READY_PATH "/tmp/wm.ready"
+
 struct wm_window {
     int32_t x;
     int32_t y;
@@ -57,6 +59,69 @@ struct desktop_shell {
     struct ui_menu launcher;
     uint32_t bar_h;
 };
+
+static int str_eq(const char *a, const char *b) {
+    if (!a || !b) return 0;
+    while (*a && *b) {
+        if (*a != *b) return 0;
+        a++;
+        b++;
+    }
+    return (*a == '\0' && *b == '\0');
+}
+
+static int env_bool(char **envp, const char *key) {
+    if (!envp || !key) return 0;
+    size_t klen = ustrlen(key);
+    for (int i = 0; envp[i]; ++i) {
+        const char *e = envp[i];
+        if (!e) continue;
+        size_t j = 0;
+        while (j < klen && e[j] == key[j]) j++;
+        if (j != klen || e[j] != '=') continue;
+        const char *v = e + j + 1;
+        if (str_eq(v, "1") || str_eq(v, "on") || str_eq(v, "true") || str_eq(v, "yes")) return 1;
+        return 0;
+    }
+    return 0;
+}
+
+static void u32_to_text(uint32_t v, char *out, uint32_t cap) {
+    char tmp[16];
+    uint32_t i = 0;
+    uint32_t j = 0;
+    if (!out || cap == 0) return;
+    if (v == 0) {
+        if (cap > 1) {
+            out[0] = '0';
+            out[1] = '\0';
+        } else {
+            out[0] = '\0';
+        }
+        return;
+    }
+    while (v && i + 1 < (uint32_t)sizeof(tmp)) {
+        tmp[i++] = (char)('0' + (v % 10u));
+        v /= 10u;
+    }
+    while (i > 0 && j + 1 < cap) out[j++] = tmp[--i];
+    out[j] = '\0';
+}
+
+static void write_ready_file(void) {
+    int fd = (int)sys_open(WM_READY_PATH, O_WRONLY | O_CREAT | O_TRUNC);
+    if (fd < 0) return;
+    char buf[24];
+    uint32_t pid = (uint32_t)sys_getpid();
+    uint32_t n = 0;
+    u32_to_text(pid, buf, (uint32_t)sizeof(buf));
+    while (buf[n]) n++;
+    if (n + 1 < (uint32_t)sizeof(buf)) {
+        buf[n++] = '\n';
+    }
+    (void)sys_write(fd, buf, n);
+    sys_close(fd);
+}
 
 static uint32_t clamp_u32(uint32_t v, uint32_t hi) {
     if (v > hi) return hi;
@@ -416,11 +481,15 @@ static void draw_window(void *fb, const struct fb_mode_info *m, const struct wm_
 }
 
 static void compose(void *fb, const struct fb_mode_info *m, struct wm_window *wins, uint32_t win_count,
-                    uint32_t active, struct desktop_shell *shell, int32_t mx, int32_t my) {
+                    uint32_t active, struct desktop_shell *shell, int32_t mx, int32_t my, int safe_mode) {
     if (!fb || !m) return;
-    for (uint32_t y = 0; y < m->height; ++y) {
-        uint32_t shade = 0x111822u + ((y & 0x1Fu) << 8);
-        fb_rect(fb, m, 0, (int32_t)y, m->width, 1, shade);
+    if (safe_mode) {
+        fb_rect(fb, m, 0, 0, m->width, m->height, 0x101820u);
+    } else {
+        for (uint32_t y = 0; y < m->height; ++y) {
+            uint32_t shade = 0x111822u + ((y & 0x1Fu) << 8);
+            fb_rect(fb, m, 0, (int32_t)y, m->width, 1, shade);
+        }
     }
 
     if (active < win_count) {
@@ -437,11 +506,30 @@ static void compose(void *fb, const struct fb_mode_info *m, struct wm_window *wi
 
     shell_draw(fb, m, shell);
 
-    fb_rect(fb, m, mx - 1, my - 6, 3, 13, 0xFFFFFFu);
-    fb_rect(fb, m, mx - 6, my - 1, 13, 3, 0xFFFFFFu);
+    if (safe_mode) {
+        fb_rect(fb, m, mx, my, 2, 2, 0xFFFFFFu);
+    } else {
+        fb_rect(fb, m, mx - 1, my - 6, 3, 13, 0xFFFFFFu);
+        fb_rect(fb, m, mx - 6, my - 1, 13, 3, 0xFFFFFFu);
+    }
 }
 
 void _start(void) {
+    uint64_t *sp = 0;
+    int argc = 0;
+    char **argv = 0;
+    char **envp = 0;
+    int safe_mode = 0;
+#if defined(__GNUC__) || defined(__clang__)
+    __asm__ volatile("mov %%rsp, %0" : "=r"(sp));
+#endif
+    if (sp) {
+        argc = (int)sp[0];
+        argv = (char **)&sp[1];
+        envp = argv + argc + 1;
+    }
+    safe_mode = env_bool(envp, "BITOS_DESKTOP_SAFE");
+
     int fb_fd = (int)sys_open("/dev/fb0", O_RDWR);
     if (fb_fd < 0) {
         uputs("wm: /dev/fb0 not available\n");
@@ -527,6 +615,10 @@ void _start(void) {
     int left_down = 0;
     uint32_t active = 1;
 
+    write_ready_file();
+    if (safe_mode) {
+        uputs("wm: safe mode enabled (reduced effects)\n");
+    }
     uputs("wm: running (q exits, tab cycles window, click Start for launcher)\n");
 
     for (;;) {
@@ -608,6 +700,6 @@ void _start(void) {
         }
 
         shell_layout(&shell, &mode);
-        compose(fb, &mode, wins, 2, active, &shell, mx, my);
+        compose(fb, &mode, wins, 2, active, &shell, mx, my, safe_mode);
     }
 }
