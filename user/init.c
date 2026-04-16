@@ -6,6 +6,7 @@
 #define INPUT_PATH "/dev/input"
 #define FB_PATH "/dev/fb0"
 #define COMPOSITOR_PATH "/bin/wm"
+#define DESKTOP_LOGIN_PATH "/bin/dlogin"
 #define LOGIN_PATH "/bin/login"
 #define CRON_PATH "/bin/cron"
 #define WM_READY_PATH "/tmp/wm.ready"
@@ -239,6 +240,35 @@ static void run_login_recovery(const char *reason) {
     }
 }
 
+static int launch_desktop_login(void) {
+    char *argv[2];
+    const char *path = DESKTOP_LOGIN_PATH;
+    long pid;
+
+    if (!path_exists(path)) {
+        path = LOGIN_PATH;
+    }
+    if (!path_exists(path)) {
+        status_line("session", "no login UI available");
+        return 0;
+    }
+
+    argv[0] = (char *)path;
+    argv[1] = 0;
+    pid = spawn_execve(argv[0], argv, 0);
+    if (pid < 0) {
+        status_line("session", "failed to start login UI");
+        return 0;
+    }
+
+    if (str_eq(path, DESKTOP_LOGIN_PATH)) {
+        status_line("session", "graphical login started");
+    } else {
+        status_line("session", "text login started");
+    }
+    return 1;
+}
+
 static void start_optional_services(int safe_mode) {
     char *cron_argv[2];
     cron_argv[0] = (char *)CRON_PATH;
@@ -264,6 +294,7 @@ static void run_desktop_mode(int safe_mode) {
     char *wm_env_normal[2];
     int unstable = 0;
     int first_ready = 0;
+    int login_started = 0;
 
     wm_argv[0] = (char *)COMPOSITOR_PATH;
     wm_argv[1] = 0;
@@ -308,6 +339,9 @@ static void run_desktop_mode(int safe_mode) {
         } else {
             status_line("compositor", "ready");
             stable_start = uptime_ms();
+            if (!login_started) {
+                login_started = launch_desktop_login();
+            }
             if (!first_ready) {
                 status_line("shell", "desktop shell ready");
                 log_boot("desktop boot result: success");

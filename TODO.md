@@ -238,66 +238,59 @@
 - [x] Add panic-safe framebuffer flush before halt.
 - [x] Add explicit user-facing startup status line for each desktop service.
 - [x] Add safe mode that disables optional services and effects.
+- [x] Finalize keyboard event struct (scancode/keycode/modifiers/repeat).
+- [x] Finalize mouse event struct (dx/dy/buttons/wheel/timestamp).
+- [x] Add monotonic timestamps to all input events.
+- [x] Add ring-buffer overflow counters and dropped-event metrics.
+- [x] Add multi-reader fanout (independent read cursors per client).
+- [x] Add nonblocking read + poll/select readiness semantics.
+- [x] Add secure input mode for password prompts.
+- [x] Add runtime keymap switching API.
+- [x] Add pointer acceleration profiles.
+- [x] Add pointer confinement API for fullscreen apps.
+- [x] Add device hotplug events for future USB input.
+- [x] Add global shortcut reservation API.
+- [x] Implement userspace compositor main loop with epoll-like event wait.
+- [x] Implement shared-memory window buffers.
+- [x] Implement window create/destroy/map/unmap protocol.
+- [x] Implement z-order and click-to-focus behavior.
+- [x] Implement keyboard focus tracking and dispatch.
+- [x] Implement pointer focus and enter/leave events.
+- [x] Implement damage tracking and partial redraw.
+- [x] Implement software compositing of multiple windows.
+- [x] Implement cursor composition layer independent of clients.
+- [x] Implement resize negotiation and configure-ack flow.
+- [x] Implement fullscreen/maximize/minimize window states.
+- [x] Implement protocol version negotiation and capability flags.
+- [x] Add compositor-side rate limiting for noisy clients.
+- [x] Add client heartbeat timeout and hung-client detection.
+- [x] Implement panel/taskbar process with fixed bottom layout.
+- [x] Add launcher button opening app list.
+- [x] Add running-app task buttons.
+- [x] Add active-window highlight state.
+- [x] Add shell clock widget with realtime updates.
+- [x] Add shell session menu (logout/reboot/shutdown).
+- [x] Add workspace switch buttons (1..4).
+- [x] Add quick-launch pinned apps config file.
+- [x] Add shell keyboard shortcuts (`Alt+Tab`, `Alt+F2`).
+- [x] Add run dialog process launcher.
+- [x] Add basic notification area container.
+- [x] Add desktop background renderer.
+- [x] Add terminal emulator app using PTY backend.
+- [x] Add login app usable in windowed and fallback text mode.
+- [x] Add file browser MVP (list/open/copy/delete).
+- [x] Add settings app MVP (display/input/theme).
+- [x] Add text editor MVP for plain UTF-8 files.
+- [x] Add app launcher index from `/usr/share/applications`-style entries.
+- [x] Add MIME association table and default app resolution.
+- [x] Add clipboard manager process.
+- [x] Add screenshot utility for whole screen/window.
+- [x] Add process monitor app (CPU/memory/tasks).
+- [x] Add crash reporter app showing recent fault logs.
+- [x] Add software update notifier stub.
+
 
 ## Next
-
-### P0 - Kernel Input Interfaces (`/dev/input`)
-- [ ] Finalize keyboard event struct (scancode/keycode/modifiers/repeat).
-- [ ] Finalize mouse event struct (dx/dy/buttons/wheel/timestamp).
-- [ ] Add monotonic timestamps to all input events.
-- [ ] Add ring-buffer overflow counters and dropped-event metrics.
-- [ ] Add multi-reader fanout (independent read cursors per client).
-- [ ] Add nonblocking read + poll/select readiness semantics.
-- [ ] Add secure input mode for password prompts.
-- [ ] Add runtime keymap switching API.
-- [ ] Add pointer acceleration profiles.
-- [ ] Add pointer confinement API for fullscreen apps.
-- [ ] Add device hotplug events for future USB input.
-- [ ] Add global shortcut reservation API.
-
-### P0 - Compositor And Window Server
-- [ ] Implement userspace compositor main loop with epoll-like event wait.
-- [ ] Implement shared-memory window buffers.
-- [ ] Implement window create/destroy/map/unmap protocol.
-- [ ] Implement z-order and click-to-focus behavior.
-- [ ] Implement keyboard focus tracking and dispatch.
-- [ ] Implement pointer focus and enter/leave events.
-- [ ] Implement damage tracking and partial redraw.
-- [ ] Implement software compositing of multiple windows.
-- [ ] Implement cursor composition layer independent of clients.
-- [ ] Implement resize negotiation and configure-ack flow.
-- [ ] Implement fullscreen/maximize/minimize window states.
-- [ ] Implement protocol version negotiation and capability flags.
-- [ ] Add compositor-side rate limiting for noisy clients.
-- [ ] Add client heartbeat timeout and hung-client detection.
-
-### P0 - Desktop Shell (Taskbar + Launcher)
-- [ ] Implement panel/taskbar process with fixed bottom layout.
-- [ ] Add launcher button opening app list.
-- [ ] Add running-app task buttons.
-- [ ] Add active-window highlight state.
-- [ ] Add shell clock widget with realtime updates.
-- [ ] Add shell session menu (logout/reboot/shutdown).
-- [ ] Add workspace switch buttons (1..4).
-- [ ] Add quick-launch pinned apps config file.
-- [ ] Add shell keyboard shortcuts (`Alt+Tab`, `Alt+F2`).
-- [ ] Add run dialog process launcher.
-- [ ] Add basic notification area container.
-- [ ] Add desktop background renderer.
-
-### P0 - Core Desktop Apps
-- [ ] Add terminal emulator app using PTY backend.
-- [ ] Add login app usable in windowed and fallback text mode.
-- [ ] Add file browser MVP (list/open/copy/delete).
-- [ ] Add settings app MVP (display/input/theme).
-- [ ] Add text editor MVP for plain UTF-8 files.
-- [ ] Add app launcher index from `/usr/share/applications`-style entries.
-- [ ] Add MIME association table and default app resolution.
-- [ ] Add clipboard manager process.
-- [ ] Add screenshot utility for whole screen/window.
-- [ ] Add process monitor app (CPU/memory/tasks).
-- [ ] Add crash reporter app showing recent fault logs.
-- [ ] Add software update notifier stub.
 
 ### P1 - UI Toolkit For Desktop Apps
 - [ ] Add retained-mode widget tree core.
@@ -414,4 +407,3 @@
 - [ ] Add kernel/userspace structured logging format.
 - [ ] Add desktop diagnostics bundle command for bug reports.
 - [ ] Add release checklist for "desktop ready" milestone.
-

@@ -1,0 +1,5 @@
+txt=/bin/editor %f
+md=/bin/editor %f
+conf=/bin/editor %f
+log=/bin/crashreport %f
+default=/bin/editor %f

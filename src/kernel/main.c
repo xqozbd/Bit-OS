@@ -630,11 +630,25 @@ static void kmain_stage2(void) {
     console_init();
     driver_set_status_idx(drv_console, DRIVER_STATUS_OK, NULL);
     log_printf("Boot: spawning init...\n");
-    int init_ok = (init_spawn() == 0);
+    const char *boot_mode = boot_param_get("boot.mode");
+    int init_ok;
+    int desktop_boot;
+
+    if (!boot_mode || !boot_mode[0]) boot_mode = "desktop";
+    init_ok = (init_spawn() == 0);
     if (init_ok) {
         log_printf("Boot: init started\n");
     } else {
         log_printf("Boot: init not started\n");
+    }
+    desktop_boot = init_ok && str_eq(boot_mode, "desktop");
+    if (desktop_boot) {
+        /*
+         * Userspace owns /dev/fb0 in desktop mode. Stop mirroring kernel log
+         * traffic into the framebuffer before the compositor's first paint so
+         * boot text cannot overwrite the login/desktop surface.
+         */
+        log_set_fb_ready(0);
     }
     watchdog_checkpoint_boot_ok();
     watchdog_checkpoint("mouse_init");
@@ -642,8 +656,6 @@ static void kmain_stage2(void) {
     ms_init();
     driver_set_status_idx(drv_mouse, DRIVER_STATUS_OK, NULL);
     if (init_ok) {
-        const char *boot_mode = boot_param_get("boot.mode");
-        if (!boot_mode || !boot_mode[0]) boot_mode = "desktop";
         if (str_eq(boot_mode, "desktop")) {
             log_printf("Boot: userspace init started; desktop mode active\n");
             log_printf("Boot: kernel console available via logs/serial, loop disabled\n");

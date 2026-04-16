@@ -20,6 +20,7 @@
 #include "kernel/swap.h"
 #include "kernel/profiler.h"
 #include "kernel/core_dump.h"
+#include "kernel/input.h"
 #include "sys/mman.h"
 
 /* From memutils.c */
@@ -51,6 +52,9 @@ static void fd_set_console(struct task_fd *fd) {
     fd->flock_mode = 0;
     fd->flock_count = 0;
     fd->fb_clip_enabled = 0;
+    fd->input_cookie = 0;
+    fd->input_seq = 0;
+    fd->input_dropped = 0;
     fd->fb_clip_x = 0;
     fd->fb_clip_y = 0;
     fd->fb_clip_w = 0;
@@ -183,6 +187,9 @@ void task_fd_init(struct task *t) {
         t->fds[i].flock_mode = 0;
         t->fds[i].flock_count = 0;
         t->fds[i].fb_clip_enabled = 0;
+        t->fds[i].input_cookie = 0;
+        t->fds[i].input_seq = 0;
+        t->fds[i].input_dropped = 0;
         t->fds[i].fb_clip_x = 0;
         t->fds[i].fb_clip_y = 0;
         t->fds[i].fb_clip_w = 0;
@@ -217,6 +224,9 @@ int task_fd_alloc(struct task *t, int node, uint32_t flags) {
             t->fds[i].flock_mode = 0;
             t->fds[i].flock_count = 0;
             t->fds[i].fb_clip_enabled = 0;
+            t->fds[i].input_cookie = 0;
+            t->fds[i].input_seq = 0;
+            t->fds[i].input_dropped = 0;
             t->fds[i].fb_clip_x = 0;
             t->fds[i].fb_clip_y = 0;
             t->fds[i].fb_clip_w = 0;
@@ -248,6 +258,9 @@ int task_fd_alloc_socket(struct task *t, int sock_id) {
             t->fds[i].flock_mode = 0;
             t->fds[i].flock_count = 0;
             t->fds[i].fb_clip_enabled = 0;
+            t->fds[i].input_cookie = 0;
+            t->fds[i].input_seq = 0;
+            t->fds[i].input_dropped = 0;
             t->fds[i].fb_clip_x = 0;
             t->fds[i].fb_clip_y = 0;
             t->fds[i].fb_clip_w = 0;
@@ -276,6 +289,9 @@ int task_fd_alloc_obj(struct task *t, int type, void *obj) {
             t->fds[i].flock_mode = 0;
             t->fds[i].flock_count = 0;
             t->fds[i].fb_clip_enabled = 0;
+            t->fds[i].input_cookie = 0;
+            t->fds[i].input_seq = 0;
+            t->fds[i].input_dropped = 0;
             t->fds[i].fb_clip_x = 0;
             t->fds[i].fb_clip_y = 0;
             t->fds[i].fb_clip_w = 0;
@@ -311,6 +327,9 @@ int task_fd_close(struct task *t, int fd) {
     if (t->fds[fd].type == FD_TYPE_COND && t->fds[fd].pipe) {
         kcond_unref((struct kcond *)t->fds[fd].pipe);
     }
+    if (t->fds[fd].type == FD_TYPE_INPUT && t->fds[fd].input_cookie) {
+        input_reader_close(t->fds[fd].input_cookie);
+    }
     t->fds[fd].used = 0;
     t->fds[fd].type = 0;
     t->fds[fd].node = -1;
@@ -322,6 +341,9 @@ int task_fd_close(struct task *t, int fd) {
     t->fds[fd].flock_mode = 0;
     t->fds[fd].flock_count = 0;
     t->fds[fd].fb_clip_enabled = 0;
+    t->fds[fd].input_cookie = 0;
+    t->fds[fd].input_seq = 0;
+    t->fds[fd].input_dropped = 0;
     t->fds[fd].fb_clip_x = 0;
     t->fds[fd].fb_clip_y = 0;
     t->fds[fd].fb_clip_w = 0;
@@ -613,6 +635,8 @@ void task_clone_from(struct task *dst, const struct task *src) {
                     ksem_ref((struct ksem *)dst->fds[i].pipe);
                 } else if (dst->fds[i].type == FD_TYPE_COND && dst->fds[i].pipe) {
                     kcond_ref((struct kcond *)dst->fds[i].pipe);
+                } else if (dst->fds[i].type == FD_TYPE_INPUT && dst->fds[i].input_cookie) {
+                    input_reader_retain(dst->fds[i].input_cookie);
                 }
             }
         }

@@ -218,11 +218,18 @@ void ms_irq_handler(void) {
 			if (((pkt[0] & 0x10) != 0) != (dx < 0)) continue;
 			if (((pkt[0] & 0x20) != 0) != (dy < 0)) continue;
 			g_buttons = buttons;
-			g_x += (int32_t)dx;
-			g_y += -(int32_t)dy; /* invert Y to screen coords */
-			g_pending_dx += (int32_t)dx;
-			g_pending_dy += -(int32_t)dy;
-			input_push_mouse(g_x, g_y, (int32_t)dx, -(int32_t)dy, g_buttons);
+			{
+				int32_t fx = g_x;
+				int32_t fy = g_y;
+				int32_t fdx = (int32_t)dx;
+				int32_t fdy = -(int32_t)dy; /* invert Y to screen coords */
+				input_filter_mouse_motion(&fx, &fy, &fdx, &fdy);
+				g_x = fx;
+				g_y = fy;
+				g_pending_dx += fdx;
+				g_pending_dy += fdy;
+				input_push_mouse(g_x, g_y, fdx, fdy, 0, 0, g_buttons);
+			}
 			uint64_t now = timer_uptime_ticks();
 			if (now - g_last_event_tick >= g_min_event_ticks) {
 				g_last_event_tick = now;
@@ -279,4 +286,5 @@ void ms_init(void) {
 		g_cursor_drawn = 1;
 		g_cursor_hidden = 0;
 	}
+	input_push_device(INPUT_DEVICE_MOUSE, 1);
 }

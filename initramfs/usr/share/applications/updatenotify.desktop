@@ -1,0 +1,3 @@
+Name=Software Update
+Exec=/bin/updatenotify
+MimeType=

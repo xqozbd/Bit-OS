@@ -1,19 +1,124 @@
 #include "sys.h"
 
 enum { MAX_USERS = 32 };
-enum { SALT_LEN = 16, HASH_LEN = 32, PASS_ITER = 4096 };
+enum { SALT_LEN = 16, HASH_LEN = 32, PASS_ITER = 4096, EMAIL_LEN = 96 };
+
+enum {
+    USER_FLAG_ADMIN = 1u << 0
+};
 
 #define ACCOUNTS_DB "/var/accounts/users.db"
 #define PASSWD_FALLBACK "/etc/passwd"
 
 struct user_entry {
     char name[32];
+    char email[EMAIL_LEN];
     uint32_t uid;
     uint32_t gid;
+    uint32_t flags;
     uint8_t salt[SALT_LEN];
     uint8_t hash[HASH_LEN];
     int has_pass;
 };
+
+static int create_user_flow(char *buf, int buf_len, struct user_entry *users, int max_users);
+static int read_line(char *out, int max);
+
+static void u32_to_text_local(uint32_t v, char *out, uint32_t cap) {
+    char tmp[16];
+    uint32_t i = 0;
+    uint32_t j = 0;
+    if (!out || cap == 0) return;
+    if (v == 0) {
+        if (cap > 1) {
+            out[0] = '0';
+            out[1] = '\0';
+        } else {
+            out[0] = '\0';
+        }
+        return;
+    }
+    while (v && i + 1 < (uint32_t)sizeof(tmp)) {
+        tmp[i++] = (char)('0' + (v % 10u));
+        v /= 10u;
+    }
+    while (i > 0 && j + 1 < cap) out[j++] = tmp[--i];
+    out[j] = '\0';
+}
+
+static int is_digit_local(char c) {
+    return (c >= '0' && c <= '9');
+}
+
+static int secure_accounts_storage(void) {
+    int ok = 1;
+    if (sys_chown("/var/accounts", 0, 0) != 0) ok = 0;
+    if (sys_chmod("/var/accounts", 0700) != 0) ok = 0;
+    if (sys_chown(ACCOUNTS_DB, 0, 0) != 0) ok = 0;
+    if (sys_chmod(ACCOUNTS_DB, 0600) != 0) ok = 0;
+    return ok;
+}
+
+static int validate_username(const char *name) {
+    if (!name || !name[0]) return 0;
+    for (int i = 0; name[i]; ++i) {
+        char c = name[i];
+        if ((c >= 'a' && c <= 'z') ||
+            (c >= 'A' && c <= 'Z') ||
+            (c >= '0' && c <= '9') ||
+            c == '_' || c == '-' || c == '.') {
+            continue;
+        }
+        return 0;
+    }
+    return 1;
+}
+
+static int validate_email(const char *email) {
+    int at = -1;
+    int dot = -1;
+    if (!email || !email[0]) return 0;
+    for (int i = 0; email[i]; ++i) {
+        char c = email[i];
+        if (c == ' ' || c == ':' || c == '\n' || c == '\r' || c == '\t') return 0;
+        if (c == '@') {
+            if (at >= 0) return 0;
+            at = i;
+        } else if (c == '.') {
+            dot = i;
+        }
+    }
+    if (at <= 0) return 0;
+    if (dot <= at + 1) return 0;
+    if (!email[dot + 1]) return 0;
+    return 1;
+}
+
+static void prompt_username(char *name, int name_len, const char *label) {
+    for (;;) {
+        uputs(label ? label : "username");
+        uputs(": ");
+        read_line(name, name_len);
+        if (!validate_username(name)) {
+            uputs("username must use letters, numbers, '.', '_' or '-'\n");
+            continue;
+        }
+        return;
+    }
+}
+
+static void prompt_email(char *email, int email_len, const char *label) {
+    for (;;) {
+        uputs(label ? label : "email");
+        uputs(": ");
+        read_line(email, email_len);
+        if (!validate_email(email)) {
+            uputs("enter a valid email address\n");
+            continue;
+        }
+        return;
+    }
+}
 
 static void ustrncpy_local(char *dst, const char *src, size_t n) {
     if (!dst || n == 0) return;
@@ -256,8 +361,10 @@ static int load_passwd(char *buf, int buf_len, struct user_entry *users, int max
         int i = 0;
         for (; i + 1 < (int)sizeof(e->name) && u[i]; ++i) e->name[i] = u[i];
         e->name[i] = '\0';
+        e->email[0] = '\0';
         e->uid = (uint32_t)uatoi(u_id);
         e->gid = (uint32_t)uatoi(g_id);
+        e->flags = (e->uid == 0) ? USER_FLAG_ADMIN : 0;
         e->has_pass = 0;
     }
     return count;
@@ -290,12 +397,35 @@ static int has_user(struct user_entry *users, int count, const char *name) {
     return 0;
 }
 
+static int has_email(struct user_entry *users, int count, const char *email) {
+    for (int i = 0; i < count; ++i) {
+        if (users[i].email[0] && ustrcmp(users[i].email, email) == 0) return 1;
+    }
+    return 0;
+}
+
+static int find_user_index(struct user_entry *users, int count, const char *name) {
+    if (!users || !name) return -1;
+    for (int i = 0; i < count; ++i) {
+        if (ustrcmp(users[i].name, name) == 0) return i;
+    }
+    return -1;
+}
+
 static int count_users(struct user_entry *users, int max) {
     int c = 0;
     for (int i = 0; i < max; ++i) {
         if (users[i].name[0]) c++;
     }
     return c;
+}
+
+static int configured_password_count(struct user_entry *users, int count) {
+    int configured = 0;
+    for (int i = 0; i < count; ++i) {
+        if (users[i].name[0] && users[i].has_pass) configured++;
+    }
+    return configured;
 }
 
 static int write_passwd(const char *data, int len) {
@@ -324,51 +454,67 @@ static int load_accounts(char *buf, int buf_len, struct user_entry *users, int m
     char *p = buf;
     while (*p && count < max_users) {
         char *line = p;
+        char *fields[7];
+        int field_count = 0;
         while (*p && *p != '\n') p++;
         if (*p == '\n') *p++ = '\0';
         if (!line[0] || line[0] == '#') continue;
-        char *u = line;
-        char *c1 = u;
-        while (*c1 && *c1 != ':') c1++;
-        if (*c1 != ':') continue;
-        *c1++ = '\0';
-        char *u_id = c1;
-        char *c2 = u_id;
-        while (*c2 && *c2 != ':') c2++;
-        if (*c2 != ':') continue;
-        *c2++ = '\0';
-        char *g_id = c2;
-        char *c3 = g_id;
-        while (*c3 && *c3 != ':') c3++;
-        if (*c3 != ':') continue;
-        *c3++ = '\0';
-        char *salt_hex = c3;
-        char *c4 = salt_hex;
-        while (*c4 && *c4 != ':') c4++;
-        if (*c4 != ':') continue;
-        *c4++ = '\0';
-        char *hash_hex = c4;
+        fields[field_count++] = line;
+        for (char *it = line; *it && field_count < 7; ++it) {
+            if (*it == ':') {
+                *it = '\0';
+                fields[field_count++] = it + 1;
+            }
+        }
+        if (field_count != 5 && field_count != 7) continue;
+
         struct user_entry *e = &users[count++];
         int i = 0;
-        for (; i + 1 < (int)sizeof(e->name) && u[i]; ++i) e->name[i] = u[i];
+        for (; i + 1 < (int)sizeof(e->name) && fields[0][i]; ++i) e->name[i] = fields[0][i];
         e->name[i] = '\0';
-        e->uid = (uint32_t)uatoi(u_id);
-        e->gid = (uint32_t)uatoi(g_id);
+        e->uid = (uint32_t)uatoi(fields[1]);
+        e->gid = (uint32_t)uatoi(fields[2]);
+        e->email[0] = '\0';
+        e->flags = (e->uid == 0) ? USER_FLAG_ADMIN : 0;
         e->has_pass = 0;
-        if ((int)ustrlen(salt_hex) == SALT_LEN * 2 &&
-            (int)ustrlen(hash_hex) == HASH_LEN * 2 &&
-            hex_decode(salt_hex, e->salt, SALT_LEN) &&
-            hex_decode(hash_hex, e->hash, HASH_LEN)) {
+
+        if (field_count == 7) {
+            e->flags = (uint32_t)uatoi(fields[3]);
+            ustrncpy_local(e->email, fields[4], sizeof(e->email));
+            if ((int)ustrlen(fields[5]) == SALT_LEN * 2 &&
+                (int)ustrlen(fields[6]) == HASH_LEN * 2 &&
+                hex_decode(fields[5], e->salt, SALT_LEN) &&
+                hex_decode(fields[6], e->hash, HASH_LEN)) {
+                e->has_pass = 1;
+            }
+        } else if ((int)ustrlen(fields[3]) == SALT_LEN * 2 &&
+                   (int)ustrlen(fields[4]) == HASH_LEN * 2 &&
+                   hex_decode(fields[3], e->salt, SALT_LEN) &&
+                   hex_decode(fields[4], e->hash, HASH_LEN)) {
             e->has_pass = 1;
         }
     }
     return count;
 }
 
+static int reload_users(char *buf, int buf_len, struct user_entry *users, int max_users) {
+    for (int i = 0; i < max_users; ++i) {
+        users[i].name[0] = '\0';
+        users[i].email[0] = '\0';
+        users[i].uid = 0;
+        users[i].gid = 0;
+        users[i].flags = 0;
+        users[i].has_pass = 0;
+    }
+    int count = load_accounts(buf, buf_len, users, max_users);
+    if (count == 0) count = load_passwd(buf, buf_len, users, max_users);
+    return count;
+}
+
 static int write_accounts(struct user_entry *users, int count) {
     char buf[2048];
     int len = 0;
-    const char *hdr = "# BitOS accounts v1\n";
+    const char *hdr = "# BitOS accounts v2\n";
     for (int i = 0; hdr[i] && len + 1 < (int)sizeof(buf); ++i) buf[len++] = hdr[i];
     for (int i = 0; i < count && len + 1 < (int)sizeof(buf); ++i) {
         char line[256];
@@ -387,6 +533,13 @@ static int write_accounts(struct user_entry *users, int count) {
         if (v == 0) tmp[t++] = '0';
         while (v && t < (int)sizeof(tmp)) { tmp[t++] = (char)('0' + (v % 10)); v /= 10; }
         for (int j = t - 1; j >= 0 && l + 1 < (int)sizeof(line); --j) line[l++] = tmp[j];
+        line[l++] = ':';
+        v = users[i].flags; t = 0;
+        if (v == 0) tmp[t++] = '0';
+        while (v && t < (int)sizeof(tmp)) { tmp[t++] = (char)('0' + (v % 10)); v /= 10; }
+        for (int j = t - 1; j >= 0 && l + 1 < (int)sizeof(line); --j) line[l++] = tmp[j];
+        line[l++] = ':';
+        for (int j = 0; users[i].email[j] && l + 1 < (int)sizeof(line); ++j) line[l++] = users[i].email[j];
         line[l++] = ':';
         if (users[i].has_pass) {
             char salt_hex[SALT_LEN * 2 + 1];
@@ -414,31 +567,137 @@ static int write_accounts(struct user_entry *users, int count) {
         written += (int)n;
     }
     sys_close(fd);
-    return (written == len);
+    if (written != len) return 0;
+    return secure_accounts_storage();
+}
+
+static int prompt_and_set_password(struct user_entry *e, const char *label) {
+    char pass1[64], pass2[64];
+    if (!e) return 0;
+    for (;;) {
+        uputs(label ? label : "password");
+        uputs(": ");
+        read_line(pass1, (int)sizeof(pass1));
+        uputs("confirm password: ");
+        read_line(pass2, (int)sizeof(pass2));
+        if (pass1[0] == '\0') {
+            uputs("password cannot be empty\n");
+            continue;
+        }
+        if (ustrcmp(pass1, pass2) != 0) {
+            uputs("passwords do not match\n");
+            continue;
+        }
+        break;
+    }
+    if (!read_urandom(e->salt, SALT_LEN)) {
+        uint64_t t = (uint64_t)sys_uptime_ticks();
+        for (int i = 0; i < SALT_LEN; ++i) e->salt[i] = (uint8_t)(t >> (i * 3));
+    }
+    hash_password(e->salt, pass1, e->hash);
+    e->has_pass = 1;
+    return 1;
+}
+
+static int configure_admin_flow(struct user_entry *users, int max_users) {
+    int total = count_users(users, max_users);
+    int idx = -1;
+    struct user_entry *e;
+
+    for (int i = 0; i < total; ++i) {
+        if (users[i].flags & USER_FLAG_ADMIN) {
+            idx = i;
+            break;
+        }
+    }
+
+    if (idx < 0) idx = find_user_index(users, total, "root");
+
+    if (idx < 0) {
+        for (int i = 0; i < max_users; ++i) {
+            if (users[i].name[0] == '\0') {
+                idx = i;
+                ustrncpy_local(users[i].name, "root", sizeof(users[i].name));
+                users[i].uid = 0;
+                users[i].gid = 0;
+                users[i].has_pass = 0;
+                break;
+            }
+        }
+    }
+    if (idx < 0) {
+        uputs("no free slot for admin account\n");
+        return 0;
+    }
+
+    e = &users[idx];
+    if (!e->name[0]) {
+        prompt_username(e->name, (int)sizeof(e->name), "administrator username");
+    } else {
+        char ans[8];
+        uputs("administrator username [");
+        uputs(e->name);
+        uputs("] change? (y/n): ");
+        read_line(ans, (int)sizeof(ans));
+        if (ans[0] == 'y' || ans[0] == 'Y') {
+            char name[32];
+            for (;;) {
+                prompt_username(name, (int)sizeof(name), "administrator username");
+                if (has_user(users, total, name) && ustrcmp(name, e->name) != 0) {
+                    uputs("user already exists\n");
+                    continue;
+                }
+                ustrncpy_local(e->name, name, sizeof(e->name));
+                break;
+            }
+        }
+    }
+    prompt_email(e->email, (int)sizeof(e->email), "administrator email");
+    e->uid = 0;
+    e->gid = 0;
+    e->flags = USER_FLAG_ADMIN;
+    if (!prompt_and_set_password(e, "administrator password")) return 0;
+
+    total = count_users(users, max_users);
+    if (!write_accounts(users, total)) {
+        uputs("failed to write admin account database\n");
+        return 0;
+    }
+    uputs("administrator account configured\n");
+    return 1;
+}
+
+static int run_first_boot_setup(char *buf, int buf_len, struct user_entry *users, int max_users) {
+    char ans[8];
+    uputs("First boot setup\n");
+    uputs("Configure administrator account now? (y/n): ");
+    read_line(ans, (int)sizeof(ans));
+    if (ans[0] == 'y' || ans[0] == 'Y') {
+        if (!configure_admin_flow(users, max_users)) return 0;
+    }
+    uputs("Create a standard desktop user now? (y/n): ");
+    read_line(ans, (int)sizeof(ans));
+    if (ans[0] == 'y' || ans[0] == 'Y') {
+        if (!create_user_flow(buf, buf_len, users, max_users)) return 0;
+    }
+    return 1;
 }
 
 static int create_user_flow(char *buf, int buf_len, struct user_entry *users, int max_users) {
     char name[32];
+    char email[EMAIL_LEN];
     for (;;) {
-        uputs("new username: ");
-        read_line(name, (int)sizeof(name));
-        if (name[0] == '\0') {
-            uputs("name cannot be empty\n");
-            continue;
-        }
-        int bad = 0;
-        for (int i = 0; name[i]; ++i) {
-            if (name[i] == ':' || name[i] == '\n' || name[i] == '\r' || name[i] == ' ') {
-                bad = 1;
-                break;
-            }
-        }
-        if (bad) {
-            uputs("invalid characters in name\n");
-            continue;
-        }
+        prompt_username(name, (int)sizeof(name), "new username");
         if (has_user(users, count_users(users, max_users), name)) {
             uputs("user already exists\n");
+            continue;
+        }
+        break;
+    }
+    for (;;) {
+        prompt_email(email, (int)sizeof(email), "email");
+        if (has_email(users, count_users(users, max_users), email)) {
+            uputs("email already exists\n");
             continue;
         }
         break;
@@ -486,30 +745,11 @@ static int create_user_flow(char *buf, int buf_len, struct user_entry *users, in
     }
     if (!e) e = &users[max_users - 1];
     ustrncpy_local(e->name, name, sizeof(e->name));
+    ustrncpy_local(e->email, email, sizeof(e->email));
     e->uid = uid;
     e->gid = gid;
-    char pass1[64], pass2[64];
-    for (;;) {
-        uputs("new password: ");
-        read_line(pass1, (int)sizeof(pass1));
-        uputs("confirm password: ");
-        read_line(pass2, (int)sizeof(pass2));
-        if (pass1[0] == '\0') {
-            uputs("password cannot be empty\n");
-            continue;
-        }
-        if (ustrcmp(pass1, pass2) != 0) {
-            uputs("passwords do not match\n");
-            continue;
-        }
-        break;
-    }
-    if (!read_urandom(e->salt, SALT_LEN)) {
-        uint64_t t = (uint64_t)sys_uptime_ticks();
-        for (int i = 0; i < SALT_LEN; ++i) e->salt[i] = (uint8_t)(t >> (i * 3));
-    }
-    hash_password(e->salt, pass1, e->hash);
-    e->has_pass = 1;
+    e->flags = 0;
+    if (!prompt_and_set_password(e, "new password")) return 0;
 
     int total = count_users(users, max_users);
     if (!write_accounts(users, total)) {
@@ -524,14 +764,40 @@ static int create_user_flow(char *buf, int buf_len, struct user_entry *users, in
     return 1;
 }
 
+static void print_user_list(struct user_entry *users, int count) {
+    char num[16];
+    for (int i = 0; i < count; ++i) {
+        if (!users[i].name[0]) continue;
+        uputs("  ");
+        u32_to_text_local((uint32_t)(i + 1), num, (uint32_t)sizeof(num));
+        uputs(num);
+        uputs(") ");
+        uputs(users[i].name);
+        if (users[i].email[0]) {
+            uputs(" <");
+            uputs(users[i].email);
+            uputs(">");
+        }
+        if (users[i].flags & USER_FLAG_ADMIN) uputs(" [admin]");
+        uputs("\n");
+    }
+}
+
+static int parse_selection_index(const char *s, int count) {
+    int v = 0;
+    if (!s || !s[0]) return -1;
+    for (int i = 0; s[i]; ++i) {
+        if (!is_digit_local(s[i])) return -1;
+        v = v * 10 + (s[i] - '0');
+    }
+    if (v <= 0 || v > count) return -1;
+    return v - 1;
+}
+
 void _start(void) {
     char passwd[1024];
     struct user_entry users[MAX_USERS];
-    for (int i = 0; i < MAX_USERS; ++i) users[i].name[0] = '\0';
-    int count = load_accounts(passwd, (int)sizeof(passwd), users, MAX_USERS);
-    if (count == 0) {
-        count = load_passwd(passwd, (int)sizeof(passwd), users, MAX_USERS);
-    }
+    int count = reload_users(passwd, (int)sizeof(passwd), users, MAX_USERS);
 
     if (count == 0) {
         uputs("No users found. Create one now? (y/n): ");
@@ -539,31 +805,48 @@ void _start(void) {
         read_line(ans, (int)sizeof(ans));
         if (ans[0] != 'y' && ans[0] != 'Y') sys_exit(1);
         if (!create_user_flow(passwd, (int)sizeof(passwd), users, MAX_USERS)) sys_exit(1);
-        count = load_passwd(passwd, (int)sizeof(passwd), users, MAX_USERS);
+        count = reload_users(passwd, (int)sizeof(passwd), users, MAX_USERS);
+        if (count == 0) sys_exit(1);
+    } else if (configured_password_count(users, count) == 0) {
+        if (!run_first_boot_setup(passwd, (int)sizeof(passwd), users, MAX_USERS)) sys_exit(1);
+        count = reload_users(passwd, (int)sizeof(passwd), users, MAX_USERS);
         if (count == 0) sys_exit(1);
     }
 
     for (;;) {
-        if (count >= 1) {
-            uputs("1) login\n2) add user\nchoice: ");
-            char choice[8];
-            read_line(choice, (int)sizeof(choice));
-            if (choice[0] == '2') {
-                if (create_user_flow(passwd, (int)sizeof(passwd), users, MAX_USERS)) {
-                    count = load_passwd(passwd, (int)sizeof(passwd), users, MAX_USERS);
-                }
-                continue;
-            }
-        }
-
-        uputs("login: ");
+        char choice[32];
         char user[32];
-        read_line(user, (int)sizeof(user));
-
         uint32_t uid = 0, gid = 0;
         int idx = -1;
-        for (int i = 0; i < count; ++i) {
-            if (ustrcmp(users[i].name, user) == 0) { idx = i; break; }
+
+        uputs("\nBitOS Login\n");
+        print_user_list(users, count);
+        uputs("  c) create standard user\n");
+        uputs("  a) configure administrator\n");
+        uputs("Select user number or type username: ");
+        read_line(choice, (int)sizeof(choice));
+
+        if (choice[0] == 'c' || choice[0] == 'C') {
+            if (create_user_flow(passwd, (int)sizeof(passwd), users, MAX_USERS)) {
+                count = reload_users(passwd, (int)sizeof(passwd), users, MAX_USERS);
+            }
+            continue;
+        }
+        if (choice[0] == 'a' || choice[0] == 'A') {
+            if (configure_admin_flow(users, MAX_USERS)) {
+                count = reload_users(passwd, (int)sizeof(passwd), users, MAX_USERS);
+            }
+            continue;
+        }
+
+        idx = parse_selection_index(choice, count);
+        if (idx >= 0) {
+            ustrncpy_local(user, users[idx].name, sizeof(user));
+        } else {
+            ustrncpy_local(user, choice, sizeof(user));
+            for (int i = 0; i < count; ++i) {
+                if (ustrcmp(users[i].name, user) == 0) { idx = i; break; }
+            }
         }
         if (idx < 0 || !parse_user(user, &uid, &gid, users, count)) {
             uputs("login: unknown user\n");

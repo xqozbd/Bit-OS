@@ -248,6 +248,7 @@ void kb_init(void) {
     outb(KBD_STATUS, 0xA8);
 
     pic_clear_mask(1); /* enable IRQ1 keyboard */
+    input_push_device(INPUT_DEVICE_KEYBOARD, 1);
 }
 
 static inline void kb_buf_push(uint8_t ch) {
@@ -279,6 +280,14 @@ static inline int scancode_to_char(uint8_t sc) {
 static inline int allow_repeat_char(int ch) {
     if (ch == '\n' || ch == '\r' || ch == '\b' || ch == '\t') return 0;
     return (ch >= 32);
+}
+
+static inline uint32_t kb_modifiers(void) {
+    uint32_t mods = 0;
+    if (shift_down) mods |= INPUT_MOD_SHIFT;
+    if (ctrl_down) mods |= INPUT_MOD_CTRL;
+    if (alt_down) mods |= INPUT_MOD_ALT;
+    return mods;
 }
 
 void kb_irq_handler(void) {
@@ -319,7 +328,7 @@ void kb_irq_handler(void) {
                 g_repeat_next_tick = 0;
             }
             if (!shift_down || !alt_down) layout_toggle_latched = 0;
-            input_push_key(keycode, 0, 0);
+            input_push_key(keycode, 0, 0, kb_modifiers(), 0);
             break_prefix = 0;
             e0_prefix = 0;
             continue;
@@ -332,10 +341,12 @@ void kb_irq_handler(void) {
                     g_layout = (g_layout == KB_LAYOUT_US) ? KB_LAYOUT_DE : KB_LAYOUT_US;
                     layout_toggle_latched = 1;
                 }
+                input_push_key((uint16_t)sc, 1, 0, kb_modifiers(), 0);
                 continue;
             }
             if (sc == 0x14) {
                 ctrl_down = 1;
+                input_push_key((uint16_t)sc, 1, 0, kb_modifiers(), 0);
                 continue;
             }
             if (sc == 0x11) {
@@ -344,40 +355,45 @@ void kb_irq_handler(void) {
                     g_layout = (g_layout == KB_LAYOUT_US) ? KB_LAYOUT_DE : KB_LAYOUT_US;
                     layout_toggle_latched = 1;
                 }
+                input_push_key((uint16_t)sc, 1, 0, kb_modifiers(), 0);
                 continue;
             }
         }
         if (e0_prefix) {
             if (sc == 0x6B) { /* left */
                 kb_buf_push(KB_KEY_LEFT);
-                input_push_key((uint16_t)(0x100u | sc), 1, KB_KEY_LEFT);
+                input_push_key((uint16_t)(0x100u | sc), 1, KB_KEY_LEFT, kb_modifiers(), 0);
             } else if (sc == 0x74) { /* right */
                 kb_buf_push(KB_KEY_RIGHT);
-                input_push_key((uint16_t)(0x100u | sc), 1, KB_KEY_RIGHT);
+                input_push_key((uint16_t)(0x100u | sc), 1, KB_KEY_RIGHT, kb_modifiers(), 0);
             } else if (sc == 0x75) { /* up */
                 kb_buf_push(KB_KEY_UP);
-                input_push_key((uint16_t)(0x100u | sc), 1, KB_KEY_UP);
+                input_push_key((uint16_t)(0x100u | sc), 1, KB_KEY_UP, kb_modifiers(), 0);
             } else if (sc == 0x72) { /* down */
                 kb_buf_push(KB_KEY_DOWN);
-                input_push_key((uint16_t)(0x100u | sc), 1, KB_KEY_DOWN);
+                input_push_key((uint16_t)(0x100u | sc), 1, KB_KEY_DOWN, kb_modifiers(), 0);
             } else if (sc == 0x7D) { /* page up */
                 kb_buf_push(KB_KEY_PGUP);
-                input_push_key((uint16_t)(0x100u | sc), 1, KB_KEY_PGUP);
+                input_push_key((uint16_t)(0x100u | sc), 1, KB_KEY_PGUP, kb_modifiers(), 0);
             } else if (sc == 0x7A) { /* page down */
                 kb_buf_push(KB_KEY_PGDN);
-                input_push_key((uint16_t)(0x100u | sc), 1, KB_KEY_PGDN);
+                input_push_key((uint16_t)(0x100u | sc), 1, KB_KEY_PGDN, kb_modifiers(), 0);
             } else {
-                input_push_key((uint16_t)(0x100u | sc), 1, 0);
+                input_push_key((uint16_t)(0x100u | sc), 1, 0, kb_modifiers(), 0);
             }
             e0_prefix = 0;
             continue;
         }
 
-        if (alt_down) {
-            if (sc == 0x05) { tty_switch(0); continue; } /* F1 */
-            if (sc == 0x06) { tty_switch(1); continue; } /* F2 */
-            if (sc == 0x04) { tty_switch(2); continue; } /* F3 */
-            if (sc == 0x0C) { tty_switch(3); continue; } /* F4 */
+        if (sc == 0x05 || sc == 0x06 || sc == 0x04 || sc == 0x0C) {
+            if (alt_down && ctrl_down) {
+                if (sc == 0x05) { tty_switch(0); continue; } /* F1 */
+                if (sc == 0x06) { tty_switch(1); continue; } /* F2 */
+                if (sc == 0x04) { tty_switch(2); continue; } /* F3 */
+                if (sc == 0x0C) { tty_switch(3); continue; } /* F4 */
+            }
+            input_push_key((uint16_t)sc, 1, 0, kb_modifiers(), 0);
+            continue;
         }
 
         int ch = scancode_to_char(sc);
@@ -385,17 +401,17 @@ void kb_irq_handler(void) {
         if (ctrl_down) {
             if (ch == 'c' || ch == 'C') {
                 kb_buf_push(0x03);
-                input_push_key((uint16_t)sc, 1, 0x03);
+                input_push_key((uint16_t)sc, 1, 0x03, kb_modifiers(), 0);
                 continue;
             }
             if (ch == 'v' || ch == 'V') {
                 kb_buf_push(0x16);
-                input_push_key((uint16_t)sc, 1, 0x16);
+                input_push_key((uint16_t)sc, 1, 0x16, kb_modifiers(), 0);
                 continue;
             }
         }
         kb_buf_push((uint8_t)ch);
-        input_push_key((uint16_t)sc, 1, ch);
+        input_push_key((uint16_t)sc, 1, ch, kb_modifiers(), 0);
         tty_feed_char(ch);
         if (allow_repeat_char(ch) && g_repeat_enabled) {
             g_repeat_sc = sc;
@@ -417,6 +433,8 @@ void kb_tick(void) {
     uint64_t now = timer_pit_ticks();
     if (now < g_repeat_next_tick) return;
     kb_buf_push((uint8_t)g_repeat_ch);
+    tty_feed_char(g_repeat_ch);
+    input_push_key((uint16_t)g_repeat_sc, 1, g_repeat_ch, kb_modifiers(), 1);
     uint32_t hz = timer_pit_hz();
     uint32_t rate = g_repeat_rate_hz ? g_repeat_rate_hz : 1;
     uint64_t rate_ticks = (uint64_t)hz / (uint64_t)rate;

@@ -1,0 +1,4 @@
+BitOS update feed
+- Core desktop app bundle staged
+- Terminal, file browser, settings, editor, launcher, clipboard, screenshot, process monitor, crash reporter
+- Update install/apply flow remains a stub

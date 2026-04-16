@@ -1,0 +1,3 @@
+Name=Login
+Exec=/bin/dlogin
+MimeType=

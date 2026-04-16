@@ -1,3 +1,22 @@
+## v0.1.2
+
+## Features Added:
+Desktop Runtime: added a shared desktop-app bundle (`deskapp`) with role-based launch aliases for `terminal`, `dlogin`, `files`, `settings`, `editor`, `launcher`, `clipboard`, `screenshot`, `procmon`, `crashreport`, `updatenotify`, and `open`.
+
+Desktop Apps: added a PTY-backed terminal window, windowed/fallback desktop login app, file browser MVP, plain-text editor, settings app MVP, launcher app, clipboard editor, screenshot utility, process monitor, crash reporter, and update notifier stub.
+
+Desktop Integration: added `/usr/share/applications`-style desktop entries, pinned shell app defaults for terminal/files/editor/launcher, MIME association table support via `/etc/mimeapps.list`, and default update feed/config payloads in the initramfs.
+
+Window Manager / Shell Wiring: launcher defaults now expose the desktop app set, and pinned-app defaults now point at the new desktop-oriented binaries instead of the older shell/demo utilities.
+
+Build / Initramfs: initramfs build now stages the desktop app bundle automatically, creates alias binaries from `deskapp`, and falls back to a Python `newc` archive builder when `cpio` is unavailable.
+
+## Features Removed:
+None
+
+## Features Changed:
+Desktop boot images now include a first-pass userspace app stack instead of only shell-centric demo binaries.
+
 ## v0.1.0
 
 ## Features Added: 
@@ -153,11 +172,17 @@ Sandboxing: added a userspace sandbox policy syscall (`sys_sandbox`) with per-ta
 
 Desktop Stack: added `/dev/fb0` and `/dev/input` pseudo-devices, framebuffer mode IOCTL (`FB_IOCTL_GET_MODE`), framebuffer mmap support, input event queue (`struct input_event`) with poll/read integration, and a userspace window manager/compositor demo (`/bin/wm`) using a simple shared-memory window protocol and userspace font/text rendering.
 
+Desktop Input Interfaces: `/dev/input` now exposes expanded keyboard/mouse events (scancode, keycode, modifiers, repeat, wheel, monotonic timestamps), per-reader fanout with dropped-event accounting, nonblocking reads, secure-input ownership, runtime keymap switching, pointer acceleration/confinement controls, hotplug event records, and shortcut reservation IOCTLs.
+
 Desktop Display Interfaces: expanded `/dev/fb0` IOCTLs with mode/info enumeration (`GET_INFO`, `GET_MODES`, `SET_MODE` validation), clip and partial page-flip paths, vsync-wait fallback timing, display metadata (`rotation`, `dpi`), strict framebuffer bounds validation in draw syscalls, and framebuffer mmap policy checks with per-task map tracking.
 
 Desktop UI Toolkit: added basic userspace widget primitives (panels, buttons, menus) in the WM path, including hit-testing, hover/pressed states, and menu item selection.
 
 Desktop Shell: added a taskbar + Start launcher in userspace WM, with a launch menu that can spawn user programs (e.g. `/bin/sh`, `/bin/top`, `/bin/ps`, `/bin/hello`).
+
+Compositor & Window Server: expanded the userspace WM into a protocol-driven compositor with a shared runtime (/tmp/wm.ipc), file-backed shared-memory window buffers, dynamic create/destroy/map/unmap handling, z-order + click-to-focus, keyboard/pointer focus dispatch, enter/leave events, damage-driven redraw scheduling, cursor composition, resize/configure-ack flow, maximize/fullscreen/minimize states, capability/version publication, per-client rate limiting, and heartbeat/hung-client detection.
+
+Desktop Shell: expanded the WM shell layer with a fixed bottom taskbar, launcher menu, running-app task buttons with active highlighting, realtime clock, session menu (logout/reboot/shutdown), four workspace buttons, quick-launch pins loaded from `/etc/wm_pinned.conf`, `Alt+Tab` and `Alt+F2` shortcuts, a run dialog, a notification/status area, and a richer userspace-rendered desktop background.
 
 Desktop Boot MVP: default boot target now routes through `/bin/init` in desktop mode, with `boot.mode=desktop|console` support, ordered startup gates (`input -> fb -> compositor -> shell`), compositor readiness watchdog (`/tmp/wm.ready`), auto-restart with backoff, and fallback to console login if compositor is unstable.
 

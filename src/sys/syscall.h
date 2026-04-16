@@ -89,6 +89,8 @@ enum {
     SYS_HID_KBD_REPORT = 83,
     SYS_IOCTL = 84,
     SYS_SANDBOX = 85,
+    SYS_POWEROFF = 86,
+    SYS_REBOOT = 87,
     SYS_MAX
 };
 

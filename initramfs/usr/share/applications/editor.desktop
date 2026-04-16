@@ -1,0 +1,3 @@
+Name=Editor
+Exec=/bin/editor %f
+MimeType=txt;md;conf;

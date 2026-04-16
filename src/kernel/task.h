@@ -97,7 +97,9 @@ struct task_fd {
     uint8_t flock_count;
     uint8_t fb_clip_enabled;
     uint8_t _pad0;
-    uint16_t _pad1;
+    uint32_t input_cookie;
+    uint64_t input_seq;
+    uint64_t input_dropped;
     uint32_t fb_clip_x;
     uint32_t fb_clip_y;
     uint32_t fb_clip_w;

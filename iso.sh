@@ -6,6 +6,7 @@ ISO=BitOS.iso
 ISO_FALLBACK=0
 INITRAMFS_DIR=initramfs
 INITRAMFS_IMG=initramfs.cpio
+ISO_TOOL=
 
 rm -rf iso_root
 if [ -e "$ISO" ]; then
@@ -37,11 +38,11 @@ if [ -d "$INITRAMFS_DIR" ]; then
   mkdir -p "$INITRAMFS_DIR/bin"
   mkdir -p "$INITRAMFS_DIR/lib"
   if [ -f "user/libu.c" ]; then
-    x86_64-linux-gnu-gcc -nostdlib -shared -fPIC -Iuser \
+    x86_64-linux-gnu-gcc -nostdlib -shared -fPIC -fno-stack-protector -Iuser \
       -Wl,-T,user/user_so.lds -Wl,-soname,libu.so \
       -o "$INITRAMFS_DIR/lib/libu.so" user/libu.c
   fi
-  for src in user/init.c user/busybox.c user/cron.c user/login.c user/wm.c; do
+  for src in user/init.c user/busybox.c user/cron.c user/login.c user/wm.c user/deskapp.c; do
     [ -f "$src" ] || continue
     base=$(basename "$src" .c)
     x86_64-linux-gnu-gcc -nostdlib -static -ffreestanding -fno-stack-protector -fno-pie -no-pie -Iuser \
@@ -59,7 +60,13 @@ if [ -d "$INITRAMFS_DIR" ]; then
       cp -f "$INITRAMFS_DIR/bin/busybox" "$INITRAMFS_DIR/bin/$app"
     done
   fi
+  if [ -f "$INITRAMFS_DIR/bin/deskapp" ]; then
+    for app in terminal dlogin files settings editor launcher clipboard screenshot procmon crashreport updatenotify open; do
+      cp -f "$INITRAMFS_DIR/bin/deskapp" "$INITRAMFS_DIR/bin/$app"
+    done
+  fi
   mkdir -p "$INITRAMFS_DIR/etc"
+  mkdir -p "$INITRAMFS_DIR/usr/share/applications"
   if [ ! -f "$INITRAMFS_DIR/etc/services.conf" ]; then
     cat > "$INITRAMFS_DIR/etc/services.conf" <<'EOF'
 # name path after=<dependency>
@@ -76,7 +83,37 @@ root:0:0
 guest:1000:1000
 EOF
   fi
-  (cd "$INITRAMFS_DIR" && find . -print0 | cpio --null -ov --format=newc) > "$INITRAMFS_IMG"
+  if [ ! -f "$INITRAMFS_DIR/etc/wm_pinned.conf" ]; then
+    cat > "$INITRAMFS_DIR/etc/wm_pinned.conf" <<'EOF'
+Terminal=/bin/terminal
+Files=/bin/files
+Editor=/bin/editor
+Launcher=/bin/launcher
+EOF
+  fi
+  if [ ! -f "$INITRAMFS_DIR/etc/mimeapps.list" ]; then
+    cat > "$INITRAMFS_DIR/etc/mimeapps.list" <<'EOF'
+txt=/bin/editor %f
+md=/bin/editor %f
+conf=/bin/editor %f
+log=/bin/crashreport %f
+default=/bin/editor %f
+EOF
+  fi
+  if [ ! -f "$INITRAMFS_DIR/etc/update-feed.txt" ]; then
+    cat > "$INITRAMFS_DIR/etc/update-feed.txt" <<'EOF'
+BitOS update feed
+- Desktop core app bundle staged
+- Windowed terminal, files, editor, settings, launcher, clipboard, screenshot, procmon, crash reporter
+- Update installer still stubbed
+EOF
+  fi
+  if command -v cpio >/dev/null 2>&1; then
+    (cd "$INITRAMFS_DIR" && find . -print0 | cpio --null -ov --format=newc) > "$INITRAMFS_IMG"
+  else
+    echo "cpio not found; using Python initramfs builder fallback"
+    python3 scripts/mkinitramfs.py "$INITRAMFS_DIR" "$INITRAMFS_IMG"
+  fi
   cp -v "$INITRAMFS_IMG" iso_root/boot/
 fi
 
@@ -94,13 +131,36 @@ cp -v \
 cp -v limine/BOOTX64.EFI iso_root/EFI/BOOT/
 
 # Build ISO
-xorriso -as mkisofs \
+for candidate in xorriso mkisofs genisoimage; do
+  if command -v "$candidate" >/dev/null 2>&1; then
+    ISO_TOOL="$candidate"
+    break
+  fi
+done
+
+if [ -z "$ISO_TOOL" ]; then
+  echo "Missing ISO creation tool: install xorriso, mkisofs, or genisoimage."
+  echo "Kernel and initramfs were built successfully, but the final ISO was not created."
+  exit 1
+fi
+
+if [ "$ISO_TOOL" = "xorriso" ]; then
+  xorriso -as mkisofs \
+    -R -r -J \
+    -b boot/limine/limine-bios-cd.bin \
+    -no-emul-boot -boot-load-size 4 -boot-info-table \
+    --efi-boot boot/limine/limine-uefi-cd.bin \
+    -efi-boot-part --efi-boot-image --protective-msdos-label \
+    iso_root -o "$ISO"
+else
+  "$ISO_TOOL" \
   -R -r -J \
   -b boot/limine/limine-bios-cd.bin \
   -no-emul-boot -boot-load-size 4 -boot-info-table \
   --efi-boot boot/limine/limine-uefi-cd.bin \
   -efi-boot-part --efi-boot-image --protective-msdos-label \
   iso_root -o "$ISO"
+fi
 
 # Install Limine BIOS stage
 if [ ! -x ./limine/limine ]; then

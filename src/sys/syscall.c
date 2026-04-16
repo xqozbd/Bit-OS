@@ -39,6 +39,7 @@
 #include "drivers/video/fb_printf.h"
 #include "drivers/usb/hid_kbd.h"
 #include "kernel/input.h"
+#include "kernel/power.h"
 
 #define SYS_ERR(e) ((uint64_t)(-(int)(e)))
 #define FUTEX_WAIT 0
@@ -372,7 +373,7 @@ static int poll_fd_ready(struct task *t, struct pollfd *pfd) {
             if (pty_can_read((struct pty *)ent->pipe, 0)) pfd->revents |= POLLIN;
             break;
         case FD_TYPE_INPUT:
-            if (input_has_event()) pfd->revents |= POLLIN;
+            if (input_reader_has_event(ent->input_seq, ent->input_cookie)) pfd->revents |= POLLIN;
             break;
         default:
             break;
@@ -563,7 +564,16 @@ static uint64_t sys_open_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4
     struct task_fd *ent = task_fd_get(t, fd);
     if (ent && backend == VFS_BACKEND_DEV) {
         if (raw == PSEUDOFS_DEV_FB0) ent->type = FD_TYPE_FB;
-        if (raw == PSEUDOFS_DEV_INPUT) ent->type = FD_TYPE_INPUT;
+        if (raw == PSEUDOFS_DEV_INPUT) {
+            ent->type = FD_TYPE_INPUT;
+            ent->input_cookie = input_reader_open();
+            ent->input_seq = input_current_seq();
+            ent->input_dropped = 0;
+            if (ent->input_cookie == 0) {
+                task_fd_close(t, fd);
+                return SYS_ERR(ENOMEM);
+            }
+        }
     }
     if (ent && (flags & O_APPEND)) {
         ent->offset = vfs_get_size(node);
@@ -589,13 +599,14 @@ static uint64_t sys_read_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4
         uint64_t out_bytes = 0;
         while (out_bytes + sizeof(struct input_event) <= len) {
             struct input_event ev;
-            while (!input_pop_event(&ev)) {
+            while (!input_reader_pop(&ent->input_seq, &ent->input_dropped, ent->input_cookie, &ev)) {
                 if (out_bytes > 0) return out_bytes;
+                if ((ent->flags & O_NONBLOCK) != 0) return SYS_ERR(EAGAIN);
                 sleep_ms(1);
             }
             memcpy(buf + out_bytes, &ev, sizeof(ev));
             out_bytes += sizeof(ev);
-            if (!input_has_event()) break;
+            if (!input_reader_has_event(ent->input_seq, ent->input_cookie)) break;
         }
         return out_bytes;
     }
@@ -749,6 +760,9 @@ static uint64_t sys_dup2_impl(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4
     t->fds[newfd].used = 1;
     if (t->fds[newfd].type == FD_TYPE_PIPE && t->fds[newfd].pipe) {
         pipe_retain_end((struct pipe *)t->fds[newfd].pipe, t->fds[newfd].pipe_end);
+    }
+    if (t->fds[newfd].type == FD_TYPE_INPUT && t->fds[newfd].input_cookie) {
+        input_reader_retain(t->fds[newfd].input_cookie);
     }
     return (uint64_t)newfd;
 }
@@ -1913,6 +1927,103 @@ static uint64_t sys_ioctl_impl(uint64_t a1, uint64_t a2, uint64_t a3,
     struct task_fd *ent = task_fd_get(t, fd);
     if (!ent) return (uint64_t)-1;
 
+    if (ent->type == FD_TYPE_INPUT) {
+        if (t->sandbox_flags & SANDBOX_DEV) return SYS_ERR(EPERM);
+        if (req == INPUT_IOCTL_GET_STATS) {
+            if (!arg) return SYS_ERR(EINVAL);
+            if (!user_range_ok(t, arg, sizeof(struct input_stats))) return SYS_ERR(EFAULT);
+            struct input_stats stats;
+            input_reader_fill_stats(ent->input_seq, ent->input_dropped, ent->input_cookie, &stats);
+            memcpy(arg, &stats, sizeof(stats));
+            return 0;
+        }
+        if (req == INPUT_IOCTL_SET_SECURE) {
+            if (!arg) return SYS_ERR(EINVAL);
+            if (!user_range_ok(t, arg, sizeof(struct input_secure_request))) return SYS_ERR(EFAULT);
+            struct input_secure_request secure = *(struct input_secure_request *)arg;
+            if (!input_set_secure(ent->input_cookie, secure.enabled != 0)) return SYS_ERR(EBUSY);
+            return 0;
+        }
+        if (req == INPUT_IOCTL_GET_SECURE) {
+            if (!arg) return SYS_ERR(EINVAL);
+            if (!user_range_ok(t, arg, sizeof(struct input_secure_request))) return SYS_ERR(EFAULT);
+            struct input_secure_request secure;
+            secure.enabled = (uint32_t)input_get_secure();
+            secure.reserved = 0;
+            memcpy(arg, &secure, sizeof(secure));
+            return 0;
+        }
+        if (req == INPUT_IOCTL_SET_KEYMAP) {
+            if (!arg) return SYS_ERR(EINVAL);
+            if (!user_range_ok(t, arg, sizeof(struct input_keymap_request))) return SYS_ERR(EFAULT);
+            struct input_keymap_request keymap = *(struct input_keymap_request *)arg;
+            if (!input_set_keymap(&keymap)) return SYS_ERR(EINVAL);
+            return 0;
+        }
+        if (req == INPUT_IOCTL_GET_KEYMAP) {
+            if (!arg) return SYS_ERR(EINVAL);
+            if (!user_range_ok(t, arg, sizeof(struct input_keymap_request))) return SYS_ERR(EFAULT);
+            struct input_keymap_request keymap;
+            input_get_keymap(&keymap);
+            memcpy(arg, &keymap, sizeof(keymap));
+            return 0;
+        }
+        if (req == INPUT_IOCTL_SET_ACCEL) {
+            if (!arg) return SYS_ERR(EINVAL);
+            if (!user_range_ok(t, arg, sizeof(struct input_accel_request))) return SYS_ERR(EFAULT);
+            struct input_accel_request accel = *(struct input_accel_request *)arg;
+            if (!input_set_accel_profile(accel.profile)) return SYS_ERR(EINVAL);
+            return 0;
+        }
+        if (req == INPUT_IOCTL_GET_ACCEL) {
+            if (!arg) return SYS_ERR(EINVAL);
+            if (!user_range_ok(t, arg, sizeof(struct input_accel_request))) return SYS_ERR(EFAULT);
+            struct input_accel_request accel;
+            accel.profile = input_get_accel_profile();
+            accel.reserved = 0;
+            memcpy(arg, &accel, sizeof(accel));
+            return 0;
+        }
+        if (req == INPUT_IOCTL_SET_CONFINEMENT) {
+            if (!arg) return SYS_ERR(EINVAL);
+            if (!user_range_ok(t, arg, sizeof(struct input_confine_rect))) return SYS_ERR(EFAULT);
+            struct input_confine_rect conf = *(struct input_confine_rect *)arg;
+            if (!conf.enabled) {
+                input_clear_confinement(ent->input_cookie);
+                return 0;
+            }
+            if (!input_set_confinement(ent->input_cookie, &conf)) return SYS_ERR(EINVAL);
+            return 0;
+        }
+        if (req == INPUT_IOCTL_GET_CONFINEMENT) {
+            if (!arg) return SYS_ERR(EINVAL);
+            if (!user_range_ok(t, arg, sizeof(struct input_confine_rect))) return SYS_ERR(EFAULT);
+            struct input_confine_rect conf;
+            input_get_confinement(&conf);
+            memcpy(arg, &conf, sizeof(conf));
+            return 0;
+        }
+        if (req == INPUT_IOCTL_CLEAR_CONFINEMENT) {
+            input_clear_confinement(ent->input_cookie);
+            return 0;
+        }
+        if (req == INPUT_IOCTL_REGISTER_SHORTCUT) {
+            if (!arg) return SYS_ERR(EINVAL);
+            if (!user_range_ok(t, arg, sizeof(struct input_shortcut_request))) return SYS_ERR(EFAULT);
+            struct input_shortcut_request shortcut = *(struct input_shortcut_request *)arg;
+            if (!input_register_shortcut(ent->input_cookie, &shortcut)) return SYS_ERR(ENOSPC);
+            return 0;
+        }
+        if (req == INPUT_IOCTL_UNREGISTER_SHORTCUT) {
+            if (!arg) return SYS_ERR(EINVAL);
+            if (!user_range_ok(t, arg, sizeof(struct input_shortcut_request))) return SYS_ERR(EFAULT);
+            struct input_shortcut_request shortcut = *(struct input_shortcut_request *)arg;
+            if (!input_unregister_shortcut(ent->input_cookie, &shortcut)) return SYS_ERR(ENOENT);
+            return 0;
+        }
+        return SYS_ERR(ENOTTY);
+    }
+
     if (ent->type == FD_TYPE_FB) {
         if (t->sandbox_flags & SANDBOX_DEV) return SYS_ERR(EPERM);
         if (req == FB_IOCTL_GET_MODE) {
@@ -2055,6 +2166,20 @@ static uint64_t sys_sandbox_impl(uint64_t a1, uint64_t a2, uint64_t a3,
     return (uint64_t)task_sandbox_flags(t);
 }
 
+static uint64_t sys_poweroff_impl(uint64_t a1, uint64_t a2, uint64_t a3,
+                                  uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a1; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    power_shutdown();
+    return 0;
+}
+
+static uint64_t sys_reboot_impl(uint64_t a1, uint64_t a2, uint64_t a3,
+                                uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a1; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    power_restart();
+    return 0;
+}
+
 static syscall_fn g_syscalls[SYS_MAX] = {
     0,
     sys_write_impl,
@@ -2141,7 +2266,9 @@ static syscall_fn g_syscalls[SYS_MAX] = {
     sys_fb_swap_impl,
     sys_hid_kbd_report_impl,
     sys_ioctl_impl,
-    sys_sandbox_impl
+    sys_sandbox_impl,
+    sys_poweroff_impl,
+    sys_reboot_impl
 };
 
 uint64_t syscall_dispatch(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3,
