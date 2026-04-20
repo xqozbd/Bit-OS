@@ -11,6 +11,12 @@ Window Manager / Shell Wiring: launcher defaults now expose the desktop app set,
 
 Build / Initramfs: initramfs build now stages the desktop app bundle automatically, creates alias binaries from `deskapp`, and falls back to a Python `newc` archive builder when `cpio` is unavailable.
 
+Desktop UI Toolkit: added a shared retained-mode userspace toolkit (`user/uitk.[ch]`) with row/column/grid layout, themed buttons/labels/inputs/textareas, scroll/list/table widgets, menu/context-menu/dialog primitives, icon atlas rendering, focus traversal, and accessibility metadata scaffolding.
+
+Desktop App Integration: the desktop `settings` and `launcher` apps now render through the shared toolkit instead of ad-hoc drawing paths, including toolkit-driven actions, selection state, modal dialogs, and menu handling.
+
+Toolkit Validation / Build: added a snapshot-style toolkit harness (`/bin/uitktest`), linked the toolkit into the desktop app bundle during initramfs staging, and normalized `iso.sh` to LF line endings so the build script runs cleanly under WSL/bash.
+
 ## Features Removed:
 None
 

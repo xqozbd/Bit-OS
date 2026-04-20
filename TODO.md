@@ -288,25 +288,23 @@
 - [x] Add process monitor app (CPU/memory/tasks).
 - [x] Add crash reporter app showing recent fault logs.
 - [x] Add software update notifier stub.
+- [x] Add retained-mode widget tree core.
+- [x] Add layout containers: row/column/grid.
+- [x] Add button widget with hover/pressed/disabled states.
+- [x] Add label widget with wrapping and ellipsis.
+- [x] Add single-line and multiline text input widgets.
+- [x] Add scrollview with keyboard and wheel support.
+- [x] Add list and table widgets with selection model.
+- [x] Add menu bar/context menu primitives.
+- [x] Add dialog and modal stacking support.
+- [x] Add theme variables (spacing, radius, color, font).
+- [x] Add icon atlas loading and rendering.
+- [x] Add focus navigation and tab order.
+- [x] Add accessibility metadata skeleton (role/name/state).
+- [x] Add UI toolkit test harness with snapshot tests.
 
 
 ## Next
-
-### P1 - UI Toolkit For Desktop Apps
-- [ ] Add retained-mode widget tree core.
-- [ ] Add layout containers: row/column/grid.
-- [ ] Add button widget with hover/pressed/disabled states.
-- [ ] Add label widget with wrapping and ellipsis.
-- [ ] Add single-line and multiline text input widgets.
-- [ ] Add scrollview with keyboard and wheel support.
-- [ ] Add list and table widgets with selection model.
-- [ ] Add menu bar/context menu primitives.
-- [ ] Add dialog and modal stacking support.
-- [ ] Add theme variables (spacing, radius, color, font).
-- [ ] Add icon atlas loading and rendering.
-- [ ] Add focus navigation and tab order.
-- [ ] Add accessibility metadata skeleton (role/name/state).
-- [ ] Add UI toolkit test harness with snapshot tests.
 
 ### P1 - Text, Fonts, And Rendering Quality
 - [ ] Add font manager with fallback chain.

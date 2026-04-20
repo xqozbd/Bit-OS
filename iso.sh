@@ -42,12 +42,16 @@ if [ -d "$INITRAMFS_DIR" ]; then
       -Wl,-T,user/user_so.lds -Wl,-soname,libu.so \
       -o "$INITRAMFS_DIR/lib/libu.so" user/libu.c
   fi
-  for src in user/init.c user/busybox.c user/cron.c user/login.c user/wm.c user/deskapp.c; do
+  for src in user/init.c user/busybox.c user/cron.c user/login.c user/wm.c user/deskapp.c user/uitktest.c; do
     [ -f "$src" ] || continue
     base=$(basename "$src" .c)
+    extra_srcs=""
+    if [ "$base" = "deskapp" ] || [ "$base" = "uitktest" ]; then
+      extra_srcs="user/uitk.c"
+    fi
     x86_64-linux-gnu-gcc -nostdlib -static -ffreestanding -fno-stack-protector -fno-pie -no-pie -Iuser \
       -Wl,-e,_start -Wl,-T,user/user.lds \
-      -o "$INITRAMFS_DIR/bin/$base" "$src"
+      -o "$INITRAMFS_DIR/bin/$base" "$src" $extra_srcs
   done
   if [ -f "user/hello.c" ]; then
     x86_64-linux-gnu-gcc -nostdlib -ffreestanding -fno-stack-protector -fPIE -pie -Iuser \

@@ -1,6 +1,8 @@
 #include "sys.h"
 #include "desktop.h"
-#include "../src/drivers/video/font8x8_basic.h"
+#include "uitk.h"
+
+extern char font8x8_basic[128][8];
 
 #define WM_IPC_PATH "/tmp/wm.ipc"
 #define APP_BUF_MAX 8192
@@ -621,71 +623,253 @@ static int run_editor_app(const char *title, const char *path) {
 static int run_clipboard_app(void) { return run_editor_app("Clipboard", "/tmp/clipboard.txt"); }
 static int run_text_editor_main(int argc, char **argv) { return run_editor_app("Editor", (argc > 1 && argv[1]) ? argv[1] : "/tmp/note.txt"); }
 
+static void uitk_present(struct app_window *app, struct uitk_tree *ui) {
+    if (!app || !app->shm || !ui) return;
+    ui->width = app->shm->width;
+    ui->height = app->shm->height;
+    uitk_layout(ui);
+    uitk_render(ui, app->shm);
+    app_damage(app, 0, 0, app->w, app->h);
+}
+
+static void append_line(char *buf, uint32_t cap, const char *line) {
+    str_append(buf, cap, line);
+    str_append(buf, cap, "\n");
+}
+
+static void launcher_entries_text(const struct desktop_entry *entries, uint32_t count, const char *filter, char *out, uint32_t cap, uint32_t *map, uint32_t *mapped) {
+    uint32_t i;
+    uint32_t out_count = 0;
+    out[0] = '\0';
+    for (i = 0; i < count; ++i) {
+        int include = 1;
+        uint32_t j;
+        if (filter && filter[0]) {
+            include = 0;
+            for (j = 0; entries[i].name[j]; ++j) {
+                uint32_t k = 0;
+                while (filter[k] && entries[i].name[j + k] == filter[k]) ++k;
+                if (!filter[k]) { include = 1; break; }
+            }
+        }
+        if (!include) continue;
+        if (out_count < APP_DESKTOP_MAX) map[out_count] = i;
+        ++out_count;
+        append_line(out, cap, entries[i].name);
+    }
+    if (!out[0]) append_line(out, cap, "No matches");
+    *mapped = out_count;
+}
+
 static int run_settings_app(void) {
-    struct app_window app; struct desktop_msg m; struct fb_info fb; struct input_stats st;
-    struct button buttons[3] = { { { 8, 4, 70, 18 }, "Theme 1" }, { { 84, 4, 70, 18 }, "Theme 2" }, { { 160, 4, 70, 18 }, "Theme 3" } };
-    char body[512], num[32], status[96] = "Settings saved to /tmp/bitos-theme.conf";
-    if (app_open(&app, "Settings", 520, 260) < 0) return 1;
+    struct app_window app;
+    struct desktop_msg m;
+    struct fb_info fb;
+    struct input_stats st;
+    struct uitk_tree ui;
+    char metrics[512];
+    char notes[192];
+    char num[32];
+    char saved_theme[24] = "classic";
+    int main_col, bar, body, left_col, right_scroll;
+    int icon_id, title_id, save_id, classic_id, slate_id, amber_id;
+    int theme_label_id, theme_list_id, name_label_id, name_input_id;
+    int table_id, notes_label_id, notes_id, dialog_id, dialog_msg_id, dialog_ok_id;
+    int show_dialog = 0;
+    if (app_open(&app, "Settings", 720, 440) < 0) return 1;
+    uitk_init(&ui, app.w, app.h, 0);
+    main_col = uitk_add_column(&ui, ui.root, "settings.main");
+    uitk_set_padding(&ui, main_col, 8, 8);
+    bar = uitk_add_row(&ui, main_col, "settings.bar");
+    uitk_set_flags(&ui, bar, UITK_FLAG_VISIBLE | UITK_FLAG_HEADER);
+    icon_id = uitk_add_icon(&ui, bar, "gear");
+    title_id = uitk_add_label(&ui, bar, "Desktop Settings");
+    uitk_set_flags(&ui, title_id, UITK_FLAG_VISIBLE | UITK_FLAG_ELLIPSIS);
+    save_id = uitk_add_button(&ui, bar, "Save");
+    classic_id = uitk_add_button(&ui, bar, "Classic");
+    slate_id = uitk_add_button(&ui, bar, "Slate");
+    amber_id = uitk_add_button(&ui, bar, "Amber");
+    body = uitk_add_row(&ui, main_col, "settings.body");
+    left_col = uitk_add_column(&ui, body, "settings.left");
+    theme_label_id = uitk_add_label(&ui, left_col, "Theme presets and desktop identity");
+    uitk_set_flags(&ui, theme_label_id, UITK_FLAG_VISIBLE | UITK_FLAG_WRAP);
+    theme_list_id = uitk_add_list(&ui, left_col, "Classic\nSlate\nAmber");
+    name_label_id = uitk_add_label(&ui, left_col, "Theme name");
+    name_input_id = uitk_add_input(&ui, left_col, "theme name", saved_theme);
+    notes_label_id = uitk_add_label(&ui, left_col, "Session notes");
+    right_scroll = uitk_add_scroll(&ui, body, "settings.scroll");
+    table_id = uitk_add_table(&ui, right_scroll, "Metric|Value");
+    notes_id = uitk_add_textarea(&ui, right_scroll, "notes", "BitOS desktop preferences\n- framebuffer active\n- toolkit wired into desktop apps");
+    dialog_id = uitk_add_dialog(&ui, ui.root, "Saved");
+    dialog_msg_id = uitk_add_label(&ui, dialog_id, "Theme configuration written to /tmp/bitos-theme.conf");
+    dialog_ok_id = uitk_add_button(&ui, dialog_id, "OK");
+    uitk_set_flags(&ui, dialog_id, 0);
+    uitk_set_a11y(&ui, save_id, UITK_ROLE_BUTTON, "Save theme", 0);
+    uitk_set_a11y(&ui, theme_list_id, UITK_ROLE_LIST, "Theme preset list", 0);
     for (;;) {
-        int hot = -1;
+        int action;
+        metrics[0] = '\0';
+        notes[0] = '\0';
         (void)sys_fb_info(&fb);
         {
             int fd = (int)sys_open("/dev/input", O_RDONLY | O_NONBLOCK);
-            if (fd >= 0) { if (sys_ioctl(fd, INPUT_IOCTL_GET_STATS, &st) != 0) st.total_events = 0; sys_close(fd); } else st.total_events = 0;
-        }
-        body[0] = '\0';
-        str_append(body, (uint32_t)sizeof(body), "Display: "); u32_to_text(fb.width, num, (uint32_t)sizeof(num)); str_append(body, (uint32_t)sizeof(body), num); str_append(body, (uint32_t)sizeof(body), "x"); u32_to_text(fb.height, num, (uint32_t)sizeof(num)); str_append(body, (uint32_t)sizeof(body), num); str_append(body, (uint32_t)sizeof(body), "\n");
-        str_append(body, (uint32_t)sizeof(body), "Pitch/BPP: "); u32_to_text(fb.pitch, num, (uint32_t)sizeof(num)); str_append(body, (uint32_t)sizeof(body), num); str_append(body, (uint32_t)sizeof(body), "/"); u32_to_text(fb.bpp, num, (uint32_t)sizeof(num)); str_append(body, (uint32_t)sizeof(body), num); str_append(body, (uint32_t)sizeof(body), "\n");
-        str_append(body, (uint32_t)sizeof(body), "Input events: "); u64_to_text(st.total_events, num, (uint32_t)sizeof(num)); str_append(body, (uint32_t)sizeof(body), num); str_append(body, (uint32_t)sizeof(body), "\n");
-        str_append(body, (uint32_t)sizeof(body), "Dropped: "); u64_to_text(st.reader_dropped_events, num, (uint32_t)sizeof(num)); str_append(body, (uint32_t)sizeof(body), num); str_append(body, (uint32_t)sizeof(body), "\n");
-        render_frame(&app, "Settings", status, buttons, 3, (uint32_t)-1, UI_BG);
-        fill_rect(app.shm, 8, 30, app.shm->width - 16, app.shm->height - 54, UI_PANEL);
-        draw_text(app.shm, 12, 36, body, UI_TEXT, UI_PANEL);
-        app_damage(&app, 0, 0, app.w, app.h);
-        while (queue_pop_local(&app.shm->events, &m)) {
-            int rc = common_event(&app, &m), lx = app_local_x(&app, &m), ly = app_local_y(&app, &m);
-            if (rc < 0) { app_close(&app); sys_exit(0); }
-            if (m.cmd == DESKTOP_EVT_POINTER) {
-                hot = button_hot(buttons, 3, lx, ly);
-                if ((m.arg0 & 1u) && !(app.last_buttons & 1u) && hot >= 0) {
-                    char conf[64];
-                    str_copy(conf, (uint32_t)sizeof(conf), hot == 0 ? "theme=classic\n" : (hot == 1 ? "theme=slate\n" : "theme=amber\n"));
-                    (void)write_file_text("/tmp/bitos-theme.conf", conf);
-                }
-                app.last_buttons = m.arg0;
+            if (fd >= 0) {
+                if (sys_ioctl(fd, INPUT_IOCTL_GET_STATS, &st) != 0) st.total_events = 0;
+                sys_close(fd);
+            } else {
+                st.total_events = 0;
+                st.reader_dropped_events = 0;
+                st.secure_mode = 0;
+                st.accel_profile = 0;
             }
         }
-        sys_sleep_ms(40);
+        str_append(metrics, (uint32_t)sizeof(metrics), "Display|"); u32_to_text(fb.width, num, (uint32_t)sizeof(num)); str_append(metrics, (uint32_t)sizeof(metrics), num); str_append(metrics, (uint32_t)sizeof(metrics), "x"); u32_to_text(fb.height, num, (uint32_t)sizeof(num)); append_line(metrics, (uint32_t)sizeof(metrics), num);
+        str_append(metrics, (uint32_t)sizeof(metrics), "Pitch / BPP|"); u32_to_text(fb.pitch, num, (uint32_t)sizeof(num)); str_append(metrics, (uint32_t)sizeof(metrics), num); str_append(metrics, (uint32_t)sizeof(metrics), " / "); u32_to_text(fb.bpp, num, (uint32_t)sizeof(num)); append_line(metrics, (uint32_t)sizeof(metrics), num);
+        str_append(metrics, (uint32_t)sizeof(metrics), "Input events|"); u64_to_text(st.total_events, num, (uint32_t)sizeof(num)); append_line(metrics, (uint32_t)sizeof(metrics), num);
+        str_append(metrics, (uint32_t)sizeof(metrics), "Dropped|"); u64_to_text(st.reader_dropped_events, num, (uint32_t)sizeof(num)); append_line(metrics, (uint32_t)sizeof(metrics), num);
+        str_append(metrics, (uint32_t)sizeof(metrics), "Secure mode|"); append_line(metrics, (uint32_t)sizeof(metrics), st.secure_mode ? "on" : "off");
+        str_append(notes, (uint32_t)sizeof(notes), "Current preset: "); str_append(notes, (uint32_t)sizeof(notes), saved_theme); str_append(notes, (uint32_t)sizeof(notes), "\nPointer accel profile: "); u32_to_text(st.accel_profile, num, (uint32_t)sizeof(num)); str_append(notes, (uint32_t)sizeof(notes), num);
+        uitk_set_text(&ui, table_id, metrics);
+        uitk_set_value(&ui, notes_id, notes);
+        uitk_set_value(&ui, name_input_id, saved_theme);
+        if (show_dialog) uitk_set_flags(&ui, dialog_id, UITK_FLAG_VISIBLE | UITK_FLAG_MODAL);
+        else uitk_set_flags(&ui, dialog_id, 0);
+        clear_window(&app, UI_BG);
+        uitk_present(&app, &ui);
+        if (show_dialog) {
+            ui.nodes[dialog_id].rect.x = (int32_t)(app.w / 2u) - 180;
+            ui.nodes[dialog_id].rect.y = (int32_t)(app.h / 2u) - 70;
+            ui.nodes[dialog_id].rect.w = 360;
+            ui.nodes[dialog_id].rect.h = 140;
+            ui.nodes[dialog_msg_id].rect.x = ui.nodes[dialog_id].rect.x + 10;
+            ui.nodes[dialog_msg_id].rect.y = ui.nodes[dialog_id].rect.y + 34;
+            ui.nodes[dialog_msg_id].rect.w = ui.nodes[dialog_id].rect.w - 20;
+            ui.nodes[dialog_msg_id].rect.h = 40;
+            ui.nodes[dialog_ok_id].rect.x = ui.nodes[dialog_id].rect.x + (int32_t)(ui.nodes[dialog_id].rect.w / 2u) - 40;
+            ui.nodes[dialog_ok_id].rect.y = ui.nodes[dialog_id].rect.y + 92;
+            ui.nodes[dialog_ok_id].rect.w = 80;
+            ui.nodes[dialog_ok_id].rect.h = 24;
+            clear_window(&app, UI_BG);
+            uitk_render(&ui, app.shm);
+            app_damage(&app, 0, 0, app.w, app.h);
+        }
+        while (queue_pop_local(&app.shm->events, &m)) {
+            int rc = common_event(&app, &m);
+            if (rc < 0) { app_close(&app); sys_exit(0); }
+            if (m.cmd == DESKTOP_EVT_POINTER) {
+                uitk_pointer(&ui, app_local_x(&app, &m), app_local_y(&app, &m), m.arg0, 0);
+            } else if (m.cmd == DESKTOP_EVT_KEY) {
+                uitk_key(&ui, m.arg0, m.arg1, 0);
+            }
+        }
+        while ((action = uitk_take_action(&ui)) >= 0) {
+            if (action == classic_id) str_copy(saved_theme, (uint32_t)sizeof(saved_theme), "classic");
+            else if (action == slate_id) str_copy(saved_theme, (uint32_t)sizeof(saved_theme), "slate");
+            else if (action == amber_id) str_copy(saved_theme, (uint32_t)sizeof(saved_theme), "amber");
+            else if (action == theme_list_id) {
+                int sel = ui.nodes[theme_list_id].selection;
+                if (sel == 0) str_copy(saved_theme, (uint32_t)sizeof(saved_theme), "classic");
+                else if (sel == 1) str_copy(saved_theme, (uint32_t)sizeof(saved_theme), "slate");
+                else if (sel == 2) str_copy(saved_theme, (uint32_t)sizeof(saved_theme), "amber");
+            } else if (action == save_id) {
+                char conf[64];
+                str_copy(conf, (uint32_t)sizeof(conf), "theme=");
+                str_append(conf, (uint32_t)sizeof(conf), saved_theme);
+                str_append(conf, (uint32_t)sizeof(conf), "\n");
+                (void)write_file_text("/tmp/bitos-theme.conf", conf);
+                show_dialog = 1;
+            } else if (action == dialog_ok_id) {
+                show_dialog = 0;
+            }
+        }
+        sys_sleep_ms(16);
     }
 }
 
 static int run_launcher_app(void) {
-    struct app_window app; struct desktop_msg m; struct desktop_entry entries[APP_DESKTOP_MAX];
-    uint32_t count = 0, sel = 0; char status[96] = "Click an entry to launch";
-    if (app_open(&app, "Launcher", 420, 360) < 0) return 1;
+    struct app_window app;
+    struct desktop_msg m;
+    struct desktop_entry entries[APP_DESKTOP_MAX];
+    struct uitk_tree ui;
+    char list_text[APP_BUF_MAX];
+    char detail_text[APP_BUF_MAX];
+    uint32_t map[APP_DESKTOP_MAX];
+    uint32_t count = 0;
+    uint32_t mapped = 0;
+    int main_col, bar, toolbar, title_icon_id, title_id, launch_id, menu_toggle_id;
+    int filter_id, list_id, detail_table_id, hint_id, menu_id;
+    int show_menu = 0;
+    if (app_open(&app, "Launcher", 620, 420) < 0) return 1;
     (void)load_desktop_entries(entries, &count);
+    uitk_init(&ui, app.w, app.h, 0);
+    main_col = uitk_add_column(&ui, ui.root, "launcher.main");
+    uitk_set_padding(&ui, main_col, 8, 8);
+    bar = uitk_add_menubar(&ui, main_col, "launcher.bar");
+    toolbar = uitk_add_row(&ui, bar, "launcher.toolbar");
+    title_icon_id = uitk_add_icon(&ui, toolbar, "app");
+    title_id = uitk_add_label(&ui, toolbar, "Application Launcher");
+    launch_id = uitk_add_button(&ui, toolbar, "Launch");
+    menu_toggle_id = uitk_add_button(&ui, toolbar, "Menu");
+    filter_id = uitk_add_input(&ui, main_col, "filter apps", "");
+    hint_id = uitk_add_label(&ui, main_col, "Use Tab to move focus, type to filter, Enter to launch.");
+    uitk_set_flags(&ui, hint_id, UITK_FLAG_VISIBLE | UITK_FLAG_WRAP | UITK_FLAG_ELLIPSIS);
+    list_id = uitk_add_list(&ui, main_col, "");
+    detail_table_id = uitk_add_table(&ui, main_col, "Field|Value");
+    menu_id = uitk_add_context_menu(&ui, ui.root, "Launch selected\nOpen Terminal\nOpen Files");
+    uitk_set_flags(&ui, menu_id, 0);
+    uitk_set_a11y(&ui, list_id, UITK_ROLE_LIST, "Launcher app list", 0);
     for (;;) {
-        uint32_t i; int hot = -1;
-        render_frame(&app, "Launcher", status, 0, 0, 0, UI_BG);
-        fill_rect(app.shm, 8, 28, app.shm->width - 16, app.shm->height - 44, UI_PANEL);
-        for (i = 0; i < count && i < 24; ++i) {
-            uint32_t bg = (i == sel) ? UI_ACCENT : UI_PANEL;
-            fill_rect(app.shm, 12, 34 + (int32_t)(i * 12), app.shm->width - 24, 10, bg);
-            draw_text(app.shm, 16, 35 + (int32_t)(i * 12), entries[i].name, UI_TEXT, bg);
+        int action;
+        uint32_t sel;
+        launcher_entries_text(entries, count, ui.nodes[filter_id].value, list_text, (uint32_t)sizeof(list_text), map, &mapped);
+        uitk_set_text(&ui, list_id, list_text);
+        sel = (ui.nodes[list_id].selection >= 0) ? (uint32_t)ui.nodes[list_id].selection : 0;
+        if (sel >= mapped && mapped) sel = mapped - 1u;
+        if (mapped && sel < mapped) {
+            uint32_t entry_idx = map[sel];
+            detail_text[0] = '\0';
+            str_append(detail_text, (uint32_t)sizeof(detail_text), "Name|"); append_line(detail_text, (uint32_t)sizeof(detail_text), entries[entry_idx].name);
+            str_append(detail_text, (uint32_t)sizeof(detail_text), "Exec|"); append_line(detail_text, (uint32_t)sizeof(detail_text), entries[entry_idx].exec);
+            str_append(detail_text, (uint32_t)sizeof(detail_text), "Mime|"); append_line(detail_text, (uint32_t)sizeof(detail_text), entries[entry_idx].mime[0] ? entries[entry_idx].mime : "-");
+        } else {
+            str_copy(detail_text, (uint32_t)sizeof(detail_text), "Field|Value\nState|No desktop entries");
         }
-        app_damage(&app, 0, 0, app.w, app.h);
+        uitk_set_text(&ui, detail_table_id, detail_text);
+        if (show_menu) uitk_set_flags(&ui, menu_id, UITK_FLAG_VISIBLE | UITK_FLAG_CONTEXT | UITK_FLAG_FOCUSABLE);
+        else uitk_set_flags(&ui, menu_id, 0);
+        clear_window(&app, UI_BG);
+        uitk_present(&app, &ui);
+        if (show_menu) {
+            ui.nodes[menu_id].rect.x = (int32_t)app.w - 172;
+            ui.nodes[menu_id].rect.y = 34;
+            ui.nodes[menu_id].rect.w = 160;
+            ui.nodes[menu_id].rect.h = 76;
+            clear_window(&app, UI_BG);
+            uitk_render(&ui, app.shm);
+            app_damage(&app, 0, 0, app.w, app.h);
+        }
         while (queue_pop_local(&app.shm->events, &m)) {
-            int rc = common_event(&app, &m), lx = app_local_x(&app, &m), ly = app_local_y(&app, &m);
+            int rc = common_event(&app, &m);
             if (rc < 0) { app_close(&app); sys_exit(0); }
             if (m.cmd == DESKTOP_EVT_POINTER) {
-                hot = (lx >= 12 && lx < (int32_t)app.w - 12 && ly >= 34) ? ((ly - 34) / 12) : -1;
-                if (hot >= 0 && (uint32_t)hot < count) sel = (uint32_t)hot;
-                if ((m.arg0 & 1u) && !(app.last_buttons & 1u) && hot >= 0 && (uint32_t)hot < count) (void)spawn_exec_line(entries[hot].exec, 0);
-                app.last_buttons = m.arg0;
-            } else if (m.cmd == DESKTOP_EVT_KEY && !(m.arg1 & INPUT_FLAG_RELEASE)) {
-                if ((char)m.arg0 == 'j' && sel + 1 < count) ++sel;
-                else if ((char)m.arg0 == 'k' && sel > 0) --sel;
-                else if ((char)m.arg0 == '\n' || (char)m.arg0 == '\r') (void)spawn_exec_line(entries[sel].exec, 0);
+                uitk_pointer(&ui, app_local_x(&app, &m), app_local_y(&app, &m), m.arg0, 0);
+            } else if (m.cmd == DESKTOP_EVT_KEY) {
+                uitk_key(&ui, m.arg0, m.arg1, 0);
+            }
+        }
+        while ((action = uitk_take_action(&ui)) >= 0) {
+            sel = (ui.nodes[list_id].selection >= 0) ? (uint32_t)ui.nodes[list_id].selection : 0u;
+            if (sel >= mapped && mapped) sel = mapped - 1u;
+            if (action == menu_toggle_id) {
+                show_menu = !show_menu;
+            } else if (action == launch_id || action == list_id) {
+                if (mapped && sel < mapped) (void)spawn_exec_line(entries[map[sel]].exec, 0);
+            } else if (action == menu_id) {
+                int menu_sel = ui.nodes[menu_id].selection;
+                if (menu_sel == 0 && mapped && sel < mapped) (void)spawn_exec_line(entries[map[sel]].exec, 0);
+                else if (menu_sel == 1) (void)spawn_exec_line("/bin/terminal", 0);
+                else if (menu_sel == 2) (void)spawn_exec_line("/bin/files", 0);
+                show_menu = 0;
             }
         }
         sys_sleep_ms(16);
