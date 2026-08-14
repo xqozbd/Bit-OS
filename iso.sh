@@ -7,7 +7,7 @@ ISO_FALLBACK=0
 INITRAMFS_DIR=initramfs
 INITRAMFS_IMG=initramfs.cpio
 ISO_TOOL=
-USER_APP_SRCS="user/init.c user/busybox.c user/cron.c user/login.c user/wm.c user/deskapp.c user/uitktest.c user/textbench.c"
+USER_APP_SRCS="user/init.c user/busybox.c user/cron.c user/login.c user/wm.c user/deskapp.c user/uitktest.c user/textbench.c user/sandbox_broker.c user/sandboxtest.c"
 DESKTOP_APP_ALIASES="terminal dlogin files settings editor launcher clipboard screenshot procmon crashreport updatenotify open"
 
 rm -rf iso_root

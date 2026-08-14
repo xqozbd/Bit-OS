@@ -28,6 +28,29 @@ enum task_state {
 #define FD_TYPE_FB 9
 #define FD_TYPE_INPUT 10
 
+#define SANDBOX_FS_WRITE (1u << 0)
+#define SANDBOX_NET      (1u << 1)
+#define SANDBOX_MOUNT    (1u << 2)
+#define SANDBOX_DEV      (1u << 3)
+#define SANDBOX_ALL (SANDBOX_FS_WRITE | SANDBOX_NET | SANDBOX_MOUNT | SANDBOX_DEV)
+
+#define SANDBOX_CAP_NET    (1u << 0)
+#define SANDBOX_CAP_FS     (1u << 1)
+#define SANDBOX_CAP_INPUT  (1u << 2)
+#define SANDBOX_CAP_AUDIO  (1u << 3)
+#define SANDBOX_CAP_BROKER (1u << 4)
+
+#define SANDBOX_MAX_PATH_RULES 8
+#define SANDBOX_PATH_LEN 96
+
+enum sandbox_process_class {
+    SANDBOX_CLASS_SYSTEM = 0,
+    SANDBOX_CLASS_DESKTOP = 1,
+    SANDBOX_CLASS_UTILITY = 2,
+    SANDBOX_CLASS_BROKER = 3,
+    SANDBOX_CLASS_COMPOSITOR = 4
+};
+
 struct task {
     uint32_t pid;
     uint32_t ppid;
@@ -63,6 +86,18 @@ struct task {
     uint64_t disk_used_bytes;
     uint32_t pending_signals;
     uint32_t sandbox_flags;
+    uint32_t sandbox_caps;
+    uint32_t sandbox_class;
+    uint8_t sandbox_loaded;
+    uint8_t sandbox_need_consent;
+    uint8_t sandbox_broker;
+    uint8_t sandbox_reserved;
+    char sandbox_profile[32];
+    char sandbox_temp_root[SANDBOX_PATH_LEN];
+    char sandbox_allow[SANDBOX_MAX_PATH_RULES][SANDBOX_PATH_LEN];
+    char sandbox_deny[SANDBOX_MAX_PATH_RULES][SANDBOX_PATH_LEN];
+    uint8_t sandbox_allow_count;
+    uint8_t sandbox_deny_count;
     uint64_t sig_handlers[32];
     uint32_t exit_code;
     uint8_t stopped;

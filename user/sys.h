@@ -108,7 +108,8 @@ enum {
     SYS_IOCTL = 84,
     SYS_SANDBOX = 85,
     SYS_POWEROFF = 86,
-    SYS_REBOOT = 87
+    SYS_REBOOT = 87,
+    SYS_BROKER = 88
 };
 
 enum {
@@ -155,7 +156,8 @@ enum {
 
 enum {
     MAP_ANON = 1,
-    MAP_FILE = 2
+    MAP_FILE = 2,
+    MAP_DEV = 3
 };
 
 enum {
@@ -376,6 +378,25 @@ enum {
 };
 
 enum {
+    SANDBOX_ACCESS_READ = 1u << 0,
+    SANDBOX_ACCESS_WRITE = 1u << 1,
+    SANDBOX_ACCESS_EXEC = 1u << 2
+};
+
+enum {
+    SANDBOX_BROKER_REGISTER = 1,
+    SANDBOX_BROKER_REQUEST_PATH = 2,
+    SANDBOX_BROKER_CONSENT = 3
+};
+
+struct sandbox_broker_request {
+    uint32_t op;
+    uint32_t access;
+    char target[96];
+    char reason[64];
+};
+
+enum {
     SIG_DFL = 0,
     SIG_IGN = 1,
     SIGINT  = 2,
@@ -547,6 +568,10 @@ static inline long sys_ioctl(int fd, uint64_t req, void *arg) {
 
 static inline long sys_sandbox(uint32_t flags) {
     return (long)sys_call6(SYS_SANDBOX, (uint64_t)flags, 0, 0, 0, 0, 0);
+}
+
+static inline long sys_broker(struct sandbox_broker_request *req) {
+    return (long)sys_call6(SYS_BROKER, (uint64_t)req, 0, 0, 0, 0, 0);
 }
 
 static inline long sys_open(const char *path, uint32_t flags) {

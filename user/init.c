@@ -18,6 +18,7 @@
 #define DESKTOP_LOGIN_PATH "/bin/dlogin"
 #define LOGIN_PATH "/bin/login"
 #define CRON_PATH "/bin/cron"
+#define SANDBOX_BROKER_PATH "/bin/sandbox-broker"
 #define WM_READY_PATH "/tmp/wm.ready"
 #define DESKTOP_LOG_PATH "/var/log/boot-desktop.log"
 
@@ -364,11 +365,23 @@ static int launch_desktop_login(void) {
 
 static void start_optional_services(int safe_mode) {
     char *cron_argv[2];
+    char *broker_argv[2];
     cron_argv[0] = (char *)CRON_PATH;
     cron_argv[1] = 0;
+    broker_argv[0] = (char *)SANDBOX_BROKER_PATH;
+    broker_argv[1] = 0;
     if (safe_mode) {
         status_line("services", "safe mode: optional services disabled");
         return;
+    }
+    if (path_exists(SANDBOX_BROKER_PATH)) {
+        if (spawn_execve(broker_argv[0], broker_argv, 0) < 0) {
+            status_line("sandbox", "broker spawn failed");
+        } else {
+            status_line("sandbox", "broker started");
+        }
+    } else {
+        status_line("sandbox", "broker not found, skipping");
     }
     if (!path_exists(CRON_PATH)) {
         status_line("services", "cron not found, skipping");

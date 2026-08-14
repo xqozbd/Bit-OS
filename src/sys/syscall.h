@@ -91,6 +91,7 @@ enum {
     SYS_SANDBOX = 85,
     SYS_POWEROFF = 86,
     SYS_REBOOT = 87,
+    SYS_BROKER = 88,
     SYS_MAX
 };
 

@@ -21,6 +21,7 @@
 #include "kernel/profiler.h"
 #include "kernel/core_dump.h"
 #include "kernel/input.h"
+#include "kernel/sandbox.h"
 #include "sys/mman.h"
 
 /* From memutils.c */
@@ -101,8 +102,7 @@ struct task *task_current(void) {
 }
 
 void task_sandbox_enable(struct task *t, uint32_t flags) {
-    if (!t) return;
-    t->sandbox_flags |= flags;
+    sandbox_enable_legacy(t, flags);
 }
 
 uint32_t task_sandbox_flags(const struct task *t) {
@@ -386,7 +386,7 @@ void task_init_bootstrap(struct thread *t) {
     g_boot_task.disk_quota_bytes = 0;
     g_boot_task.disk_used_bytes = 0;
     g_boot_task.pending_signals = 0;
-    g_boot_task.sandbox_flags = 0;
+    sandbox_task_init(&g_boot_task);
     g_boot_task.exit_code = 0;
     g_boot_task.stopped = 0;
     g_boot_task.core_pending = 0;
@@ -492,9 +492,9 @@ struct task *task_create_for_thread(struct thread *t, const char *name) {
       task->tty_id = 0;
       task->umask = 0022u;
       task->nice = 0;
-      task->cpu_mask = 0;
+    task->cpu_mask = 0;
     task->pending_signals = 0;
-    task->sandbox_flags = 0;
+    sandbox_task_init(task);
     task->exit_code = 0;
     task->stopped = 0;
     task->core_pending = 0;
@@ -521,6 +521,7 @@ struct task *task_create_for_thread(struct thread *t, const char *name) {
           task->nice = parent ? parent->nice : 0;
           task->cpu_mask = parent ? parent->cpu_mask : 0;
           task->disk_quota_bytes = parent ? parent->disk_quota_bytes : 0;
+          if (parent) sandbox_task_clone(task, parent);
       }
       t->nice = task->nice;
       t->cpu_mask = task->cpu_mask;
@@ -612,7 +613,7 @@ void task_clone_from(struct task *dst, const struct task *src) {
         resgroup_charge_mem(dst->res_grp, dst->res_mem_bytes);
     }
     dst->pending_signals = 0;
-    dst->sandbox_flags = src->sandbox_flags;
+    sandbox_task_clone(dst, src);
     dst->exit_code = 0;
     dst->stopped = 0;
     dst->core_pending = 0;
@@ -895,6 +896,7 @@ int task_count_device_maps_for_fd(const struct task *t, int fd) {
 uint64_t task_mmap_anonymous(struct task *t, uint64_t addr, uint64_t len, uint32_t prot, uint32_t flags) {
     if (!t || !t->is_user) return 0;
     if (len == 0) return 0;
+    if (!sandbox_check_wx(t, "mmap-anon", prot)) return 0;
     uint64_t size = (len + 0xFFFull) & ~0xFFFull;
     uint64_t base = addr & ~0xFFFull;
 
@@ -932,6 +934,7 @@ uint64_t task_mmap_anonymous(struct task *t, uint64_t addr, uint64_t len, uint32
 uint64_t task_mmap_file(struct task *t, uint64_t addr, uint64_t len, uint32_t prot, uint32_t flags, int node, uint64_t off) {
     if (!t || !t->is_user) return 0;
     if (len == 0 || node < 0) return 0;
+    if (!sandbox_check_wx(t, "mmap-file", prot)) return 0;
     uint64_t size = (len + 0xFFFull) & ~0xFFFull;
     uint64_t base = addr & ~0xFFFull;
 
@@ -970,6 +973,7 @@ uint64_t task_mmap_device(struct task *t, uint64_t addr, uint64_t len, uint32_t 
                           uint64_t phys_base, uint64_t dev_size, int dev_node, int dev_fd) {
     if (!t || !t->is_user) return 0;
     if (len == 0 || phys_base == 0 || dev_size == 0) return 0;
+    if (!sandbox_check_wx(t, "mmap-device", prot)) return 0;
 
     uint64_t size = (len + 0xFFFull) & ~0xFFFull;
     uint64_t base = addr & ~0xFFFull;
