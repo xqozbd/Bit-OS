@@ -1,7 +1,6 @@
 #include "uitk.h"
 
 #include "sys.h"
-#include "../src/drivers/video/font8x8_basic.h"
 
 static uint32_t ulen(const char *s) {
     uint32_t n = 0;
@@ -93,61 +92,15 @@ static void stroke_rect(struct desktop_shm_window *shm, int32_t x, int32_t y, ui
     fill_rect(shm, x + (int32_t)w - 1, y, 1, h, rgb);
 }
 
-static void draw_char(struct desktop_shm_window *shm, int32_t x, int32_t y, char c, uint32_t fg, uint32_t bg) {
-    uint32_t row;
-    uint32_t col;
-    uint8_t ch = (uint8_t)c;
-    for (row = 0; row < 8; ++row) {
-        uint8_t bits = (uint8_t)font8x8_basic[ch][row];
-        for (col = 0; col < 8; ++col) {
-            pixel(shm, x + (int32_t)col, y + (int32_t)row, (bits & (1u << col)) ? fg : bg);
-        }
-    }
+static void draw_text_line(struct desktop_shm_window *shm, struct btext_manager *mgr, int32_t x, int32_t y, const char *s, uint32_t fg, uint32_t bg, uint32_t max_chars, int ellipsis) {
+    struct btext_render_options opts = { mgr ? mgr->aa_mode : BTEXT_AA_GRAYSCALE, mgr ? mgr->hinting : BTEXT_HINT_LIGHT, fg, bg };
+    btext_draw_line(shm, mgr, x, y, s, max_chars ? max_chars * 8u : 0u, ellipsis, &opts);
 }
 
-static void draw_text_line(struct desktop_shm_window *shm, int32_t x, int32_t y, const char *s, uint32_t fg, uint32_t bg, uint32_t max_chars, int ellipsis) {
-    uint32_t i = 0;
-    uint32_t len = ulen(s);
-    uint32_t limit = len;
-    if (max_chars && limit > max_chars) limit = max_chars;
-    if (ellipsis && max_chars >= 3 && len > max_chars) limit = max_chars - 3;
-    while (i < limit) {
-        draw_char(shm, x + (int32_t)(i * 8u), y, s[i], fg, bg);
-        ++i;
-    }
-    if (ellipsis && max_chars >= 3 && len > max_chars) {
-        draw_char(shm, x + (int32_t)(i++ * 8u), y, '.', fg, bg);
-        draw_char(shm, x + (int32_t)(i++ * 8u), y, '.', fg, bg);
-        draw_char(shm, x + (int32_t)(i * 8u), y, '.', fg, bg);
-    }
-}
-
-static void draw_text_block(struct desktop_shm_window *shm, const struct uitk_theme *theme, const struct uitk_rect *rect, const char *s, uint32_t fg, uint32_t bg, uint32_t flags, int32_t scroll_y) {
-    char line[UITK_MAX_TEXT];
-    uint32_t li = 0;
-    uint32_t i = 0;
-    int32_t y = rect->y - scroll_y;
-    uint32_t max_chars = rect->w / theme->font_w;
-    while (s && s[i]) {
-        if (s[i] == '\n') {
-            line[li] = '\0';
-            if (y + (int32_t)theme->font_h > rect->y && y < rect->y + (int32_t)rect->h) draw_text_line(shm, rect->x, y, line, fg, bg, max_chars, (flags & UITK_FLAG_ELLIPSIS) != 0);
-            li = 0;
-            y += theme->line_h;
-            ++i;
-            continue;
-        }
-        if ((flags & UITK_FLAG_WRAP) && max_chars && li + 1 >= max_chars) {
-            line[li] = '\0';
-            if (y + (int32_t)theme->font_h > rect->y && y < rect->y + (int32_t)rect->h) draw_text_line(shm, rect->x, y, line, fg, bg, max_chars, 0);
-            li = 0;
-            y += theme->line_h;
-        }
-        if (li + 1 < (uint32_t)sizeof(line)) line[li++] = s[i];
-        ++i;
-    }
-    line[li] = '\0';
-    if (y + (int32_t)theme->font_h > rect->y && y < rect->y + (int32_t)rect->h) draw_text_line(shm, rect->x, y, line, fg, bg, max_chars, (flags & UITK_FLAG_ELLIPSIS) != 0);
+static void draw_text_block(struct desktop_shm_window *shm, struct btext_manager *mgr, const struct uitk_theme *theme, const struct uitk_rect *rect, const char *s, uint32_t fg, uint32_t bg, uint32_t flags, int32_t scroll_y) {
+    struct btext_render_options opts = { mgr ? mgr->aa_mode : BTEXT_AA_GRAYSCALE, mgr ? mgr->hinting : BTEXT_HINT_LIGHT, fg, bg };
+    uint32_t text_flags = ((flags & UITK_FLAG_ELLIPSIS) ? 1u : 0u) | ((flags & UITK_FLAG_WRAP) ? 2u : 0u);
+    btext_draw_block(shm, mgr, rect->x, rect->y, rect->w, rect->h, s, text_flags, scroll_y, theme->line_h, &opts);
 }
 
 static const struct uitk_icon *find_icon(const struct uitk_tree *tree, const char *name) {
@@ -308,6 +261,7 @@ void uitk_init(struct uitk_tree *tree, uint32_t width, uint32_t height, const st
     tree->snapshot[0] = '\0';
     if (theme) tree->theme = *theme; else uitk_theme_default(&tree->theme);
     uitk_icon_atlas_default(&tree->atlas);
+    btext_manager_init(&tree->text);
     (void)uitk_root(tree);
 }
 
@@ -645,7 +599,7 @@ void uitk_key(struct uitk_tree *tree, uint32_t keycode, uint32_t flags, uint32_t
     }
 }
 
-static void render_items(struct desktop_shm_window *shm, const struct uitk_tree *tree, const struct uitk_node *node, uint32_t bg, uint32_t fg) {
+static void render_items(struct desktop_shm_window *shm, struct uitk_tree *tree, const struct uitk_node *node, uint32_t bg, uint32_t fg) {
     const char *src = node->text[0] ? node->text : node->value;
     char line[UITK_MAX_TEXT];
     uint32_t li = 0;
@@ -660,7 +614,7 @@ static void render_items(struct desktop_shm_window *shm, const struct uitk_tree 
             uint32_t row_bg = (node->selection >= 0 && row == (uint32_t)node->selection) ? tree->theme.selection : bg;
             line[li] = '\0';
             fill_rect(shm, node->rect.x + node->padding, (int32_t)y - node->scroll_y, usable_w, step, row_bg);
-            draw_text_line(shm, node->rect.x + (int32_t)node->padding + 2, (int32_t)y - node->scroll_y, line, fg, row_bg, usable_w / tree->theme.font_w, 1);
+            draw_text_line(shm, &tree->text, node->rect.x + (int32_t)node->padding + 2, (int32_t)y - node->scroll_y, line, fg, row_bg, usable_w / tree->theme.font_w, 1);
             li = 0;
             ++row;
             y += step;
@@ -690,13 +644,13 @@ static void render_node(struct uitk_tree *tree, struct desktop_shm_window *shm, 
         stroke_rect(shm, node->rect.x, node->rect.y, node->rect.w, node->rect.h, theme->border);
         break;
     case UITK_LABEL:
-        draw_text_block(shm, theme, &node->rect, node->text, theme->text, theme->panel, node->flags, node->scroll_y);
+        draw_text_block(shm, &tree->text, theme, &node->rect, node->text, theme->text, theme->panel, node->flags, node->scroll_y);
         break;
     case UITK_BUTTON: {
         uint32_t bg = (state & UITK_STATE_DISABLED) ? theme->panel_alt : ((state & UITK_STATE_PRESSED) ? theme->accent_pressed : ((state & UITK_STATE_HOVERED) ? theme->accent_hover : theme->accent));
         fill_rect(shm, node->rect.x, node->rect.y, node->rect.w, node->rect.h, bg);
         stroke_rect(shm, node->rect.x, node->rect.y, node->rect.w, node->rect.h, (state & UITK_STATE_FOCUSED) ? theme->focus : theme->border);
-        draw_text_line(shm, node->rect.x + 8, node->rect.y + (int32_t)(node->rect.h / 2u) - 4, node->text, theme->text, bg, node->rect.w / theme->font_w, 1);
+        draw_text_line(shm, &tree->text, node->rect.x + 8, node->rect.y + (int32_t)(node->rect.h / 2u) - 4, node->text, theme->text, bg, node->rect.w / theme->font_w, 1);
         break;
     }
     case UITK_INPUT:
@@ -709,8 +663,8 @@ static void render_node(struct uitk_tree *tree, struct desktop_shm_window *shm, 
         inner.y += 4;
         inner.w = inner.w > 8 ? inner.w - 8 : inner.w;
         inner.h = inner.h > 8 ? inner.h - 8 : inner.h;
-        if (node->value[0]) draw_text_block(shm, theme, &inner, node->value, theme->text, theme->panel_alt, node->flags, node->scroll_y);
-        else draw_text_block(shm, theme, &inner, node->aux, theme->text_dim, theme->panel_alt, node->flags | UITK_FLAG_ELLIPSIS, 0);
+        if (node->value[0]) draw_text_block(shm, &tree->text, theme, &inner, node->value, theme->text, theme->panel_alt, node->flags, node->scroll_y);
+        else draw_text_block(shm, &tree->text, theme, &inner, node->aux, theme->text_dim, theme->panel_alt, node->flags | UITK_FLAG_ELLIPSIS, 0);
         if (state & UITK_STATE_FOCUSED) {
             cols = inner.w / theme->font_w;
             if (cols == 0) cols = 1;
@@ -741,7 +695,7 @@ static void render_node(struct uitk_tree *tree, struct desktop_shm_window *shm, 
     case UITK_DIALOG:
         fill_rect(shm, node->rect.x, node->rect.y, node->rect.w, node->rect.h, theme->dialog_bg);
         stroke_rect(shm, node->rect.x, node->rect.y, node->rect.w, node->rect.h, theme->focus);
-        draw_text_line(shm, node->rect.x + 8, node->rect.y + 6, node->text, theme->text, theme->dialog_bg, node->rect.w / theme->font_w, 1);
+        draw_text_line(shm, &tree->text, node->rect.x + 8, node->rect.y + 6, node->text, theme->text, theme->dialog_bg, node->rect.w / theme->font_w, 1);
         break;
     case UITK_ICON:
         draw_icon(shm, tree, &node->rect, node->icon[0] ? node->icon : node->text, theme->text, theme->panel);

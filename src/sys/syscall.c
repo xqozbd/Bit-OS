@@ -69,6 +69,7 @@ struct futex_bucket {
 
 static struct futex_bucket g_futex[FUTEX_BUCKETS];
 static int g_futex_ready = 0;
+static uint32_t g_boot_sys_trace_budget = 24;
 
 static void futex_init_once(void) {
     if (g_futex_ready) return;
@@ -2284,6 +2285,22 @@ uint64_t syscall_dispatch(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3,
 uint64_t syscall_handler(struct syscall_frame *f) {
     if (!f) return (uint64_t)-1;
     profiler_inc(PROF_SYSCALLS);
+    {
+        struct thread *t = thread_current();
+        if (t && t->is_user && g_boot_sys_trace_budget > 0) {
+            uint32_t left = __atomic_fetch_sub(&g_boot_sys_trace_budget, 1u, __ATOMIC_SEQ_CST);
+            if (left > 0) {
+                log_printf("usys: tid=%u name=%s nr=%u rip=%p rdi=%p rsi=%p rdx=%p\n",
+                           (unsigned)t->id,
+                           t->name ? t->name : "(null)",
+                           (unsigned)f->rax,
+                           (void *)(uintptr_t)f->rip,
+                           (void *)(uintptr_t)f->rdi,
+                           (void *)(uintptr_t)f->rsi,
+                           (void *)(uintptr_t)f->rdx);
+            }
+        }
+    }
     uint64_t ret = 0;
     if (f->rax == SYS_FORK) {
         ret = sys_fork_impl(f);

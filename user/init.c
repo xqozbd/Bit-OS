@@ -1,4 +1,13 @@
 #include "sys.h"
+#include "../src/drivers/video/font8x8_basic.h"
+
+#if defined(BITOS_USE_GNU_ATTRS)
+#define BITOS_USER_NORETURN __attribute__((noreturn))
+#define BITOS_USER_NAKED __attribute__((naked))
+#else
+#define BITOS_USER_NORETURN
+#define BITOS_USER_NAKED
+#endif
 
 #define BOOT_MODE_DESKTOP 1
 #define BOOT_MODE_CONSOLE 2
@@ -119,6 +128,83 @@ static uint32_t text_append_u64(char *dst, uint32_t cap, uint32_t idx, uint64_t 
     return text_append(dst, cap, idx, num);
 }
 
+static int g_boot_ui_visible = 0;
+static uint32_t g_boot_ui_width = 0;
+static uint32_t g_boot_ui_height = 0;
+static uint32_t g_boot_ui_line = 0;
+static struct fb_info g_boot_fb_info;
+static char g_status_line[256];
+
+static int boot_ui_probe(void) {
+    if (sys_fb_info(&g_boot_fb_info) < 0 ||
+        g_boot_fb_info.width == 0 ||
+        g_boot_fb_info.height == 0) {
+        return 0;
+    }
+    g_boot_ui_width = g_boot_fb_info.width;
+    g_boot_ui_height = g_boot_fb_info.height;
+    return 1;
+}
+
+static void boot_ui_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t rgb) {
+    if (!g_boot_ui_width || !g_boot_ui_height) return;
+    if (x >= g_boot_ui_width || y >= g_boot_ui_height) return;
+    if (w > g_boot_ui_width - x) w = g_boot_ui_width - x;
+    if (h > g_boot_ui_height - y) h = g_boot_ui_height - y;
+    if (!w || !h) return;
+    (void)sys_fb_drawrect(x, y, w, h, rgb);
+}
+
+static uint32_t boot_ui_char(uint32_t x, uint32_t y, char c, uint32_t fg, uint32_t scale) {
+    unsigned char ch = (unsigned char)c;
+    if (ch >= 128) ch = '?';
+    for (uint32_t row = 0; row < 8; ++row) {
+        unsigned char bits = (unsigned char)font8x8_basic[ch][row];
+        for (uint32_t col = 0; col < 8; ++col) {
+            if (bits & (1u << col)) {
+                boot_ui_rect(x + col * scale, y + row * scale, scale, scale, fg);
+            }
+        }
+    }
+    return x + (8u * scale);
+}
+
+static uint32_t boot_ui_text(uint32_t x, uint32_t y, const char *text, uint32_t fg, uint32_t scale) {
+    while (text && *text) {
+        x = boot_ui_char(x, y, *text++, fg, scale);
+    }
+    return x;
+}
+
+static void boot_ui_begin(void) {
+    if (!boot_ui_probe()) return;
+    g_boot_ui_visible = 1;
+    g_boot_ui_line = 0;
+    (void)sys_fb_clear(0x0B1018);
+    boot_ui_rect(0, 0, g_boot_ui_width, 42, 0x1A2638);
+    boot_ui_text(24, 12, "BitOS Desktop Startup", 0xF3F7FB, 2);
+    boot_ui_text(24, 58, "Userspace init is running. Starting login and desktop.", 0xA8C7E8, 1);
+    boot_ui_text(24, 78, "If this screen stays here, the last line below is the failing stage.", 0x7F95AA, 1);
+    (void)sys_fb_swap();
+}
+
+static void boot_ui_status(const char *svc, const char *msg) {
+    uint32_t y;
+    uint32_t x;
+    if (!g_boot_ui_visible) return;
+    if (g_boot_ui_line >= 12) {
+        boot_ui_rect(24, 104, g_boot_ui_width > 48 ? g_boot_ui_width - 48 : g_boot_ui_width, 220, 0x0B1018);
+        g_boot_ui_line = 0;
+    }
+    y = 108 + g_boot_ui_line * 18;
+    x = boot_ui_text(24, y, "[", 0xF3F7FB, 1);
+    x = boot_ui_text(x, y, svc ? svc : "service", 0x7DD3FC, 1);
+    x = boot_ui_text(x, y, "] ", 0xF3F7FB, 1);
+    (void)boot_ui_text(x, y, msg ? msg : "", 0xE6EEF8, 1);
+    g_boot_ui_line++;
+    (void)sys_fb_swap();
+}
+
 static void log_boot(const char *msg) {
     char line[320];
     uint32_t idx = 0;
@@ -133,16 +219,23 @@ static void log_boot(const char *msg) {
     sys_close(fd);
 }
 
+static void early_text(const char *msg) {
+    uint32_t len = 0;
+    if (!msg) return;
+    while (msg[len]) len++;
+    if (len) (void)sys_write(1, msg, len);
+}
+
 static void status_line(const char *svc, const char *msg) {
-    char line[256];
     uint32_t idx = 0;
-    idx = text_append(line, (uint32_t)sizeof(line), idx, "init: [");
-    idx = text_append(line, (uint32_t)sizeof(line), idx, svc ? svc : "service");
-    idx = text_append(line, (uint32_t)sizeof(line), idx, "] ");
-    idx = text_append(line, (uint32_t)sizeof(line), idx, msg ? msg : "");
-    idx = text_append(line, (uint32_t)sizeof(line), idx, "\n");
-    (void)sys_write(1, line, idx);
-    log_boot(line);
+    g_status_line[0] = '\0';
+    idx = text_append(g_status_line, (uint32_t)sizeof(g_status_line), idx, "init: [");
+    idx = text_append(g_status_line, (uint32_t)sizeof(g_status_line), idx, svc ? svc : "service");
+    idx = text_append(g_status_line, (uint32_t)sizeof(g_status_line), idx, "] ");
+    idx = text_append(g_status_line, (uint32_t)sizeof(g_status_line), idx, msg ? msg : "");
+    idx = text_append(g_status_line, (uint32_t)sizeof(g_status_line), idx, "\n");
+    boot_ui_status(svc, msg);
+    (void)sys_write(1, g_status_line, idx);
 }
 
 static long spawn_execve(char *path, char **argv, char **envp) {
@@ -390,24 +483,23 @@ static int parse_boot_mode(int argc, char **argv, int *safe_mode) {
     return mode;
 }
 
-void _start(void) {
-    uint64_t *sp;
-    int argc = 0;
-    char **argv = 0;
+void BITOS_USER_NORETURN bitos_init_start(uint64_t *sp) {
     int safe_mode = 0;
-    int mode;
-#if defined(__GNUC__) || defined(__clang__)
-    __asm__ volatile("mov %%rsp, %0" : "=r"(sp));
-#else
-    sp = 0;
-#endif
-    if (sp) {
-        argc = (int)sp[0];
-        argv = (char **)&sp[1];
-    }
+    int mode = BOOT_MODE_DESKTOP;
+    (void)sp;
 
+    early_text("init: raw userspace start\n");
+    /*
+     * Do not touch framebuffer syscalls until the compositor/login path is
+     * proven working. Early fb bootstrap was masking progress and may be
+     * stalling before the desktop handoff becomes visible.
+     */
     status_line("boot", "init started");
-    mode = parse_boot_mode(argc, argv, &safe_mode);
+    /*
+     * Keep first userspace boot deterministic: the kernel already selected
+     * desktop mode from Limine. Avoid depending on argv parsing until the
+     * login/desktop handoff is visible and stable.
+     */
     if (mode == BOOT_MODE_CONSOLE) {
         status_line("boot", "console mode forced");
         run_login_recovery("boot.mode=console");
@@ -415,4 +507,17 @@ void _start(void) {
         run_desktop_mode(safe_mode);
     }
     sys_exit(0);
+    for (;;) { }
 }
+
+#if defined(__GNUC__) || defined(__clang__)
+void BITOS_USER_NAKED BITOS_USER_NORETURN _start(void) {
+    __asm__ volatile(
+        "mov %rsp, %rdi\n"
+        "andq $-16, %rsp\n"
+        "call bitos_init_start\n"
+    );
+}
+#else
+void _start(void) { bitos_init_start(0); }
+#endif

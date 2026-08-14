@@ -1,5 +1,13 @@
 #include "sys.h"
 
+#if defined(BITOS_USE_GNU_ATTRS)
+#define BITOS_USER_NORETURN __attribute__((noreturn))
+#define BITOS_USER_NAKED __attribute__((naked))
+#else
+#define BITOS_USER_NORETURN
+#define BITOS_USER_NAKED
+#endif
+
 static const char *base_name(const char *path) {
     const char *last = path;
     for (const char *p = path; p && *p; ++p) {
@@ -1166,15 +1174,9 @@ static int dispatch(const char *name, int argc, char **argv) {
     return -1;
 }
 
-void _start(void) {
-    uint64_t *sp;
-#if defined(__GNUC__) || defined(__clang__)
-    __asm__ volatile("mov %%rsp, %0" : "=r"(sp));
-#else
-    sp = 0;
-#endif
-    int argc = (int)sp[0];
-    char **argv = (char **)&sp[1];
+void BITOS_USER_NORETURN bitos_busybox_start(uint64_t *sp) {
+    int argc = sp ? (int)sp[0] : 0;
+    char **argv = sp ? (char **)&sp[1] : 0;
 
     const char *app = NULL;
     if (argc > 0 && argv && argv[0]) {
@@ -1205,4 +1207,17 @@ void _start(void) {
         sys_exit(1);
     }
     sys_exit(rc);
+    for (;;) { }
 }
+
+#if defined(__GNUC__) || defined(__clang__)
+void BITOS_USER_NAKED BITOS_USER_NORETURN _start(void) {
+    __asm__ volatile(
+        "mov %rsp, %rdi\n"
+        "andq $-16, %rsp\n"
+        "call bitos_busybox_start\n"
+    );
+}
+#else
+void _start(void) { bitos_busybox_start(0); }
+#endif

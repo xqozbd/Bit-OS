@@ -2,6 +2,14 @@
 #include "desktop.h"
 #include "../src/drivers/video/font8x8_basic.h"
 
+#if defined(BITOS_USE_GNU_ATTRS)
+#define BITOS_USER_NORETURN __attribute__((noreturn))
+#define BITOS_USER_NAKED __attribute__((naked))
+#else
+#define BITOS_USER_NORETURN
+#define BITOS_USER_NAKED
+#endif
+
 #define WM_READY_PATH "/tmp/wm.ready"
 #define WM_IPC_PATH "/tmp/wm.ipc"
 #define WM_WINDOW_PREFIX "/tmp/wm.win"
@@ -916,8 +924,7 @@ static void shell_fix_active_workspace(struct desktop_shell *shell, struct wm_wi
         return;
     }
 }
-void _start(void) {
-    uint64_t *sp = 0;
+void BITOS_USER_NORETURN bitos_wm_start(uint64_t *sp) {
     int argc = 0;
     char **argv = 0;
     char **envp = 0;
@@ -937,9 +944,6 @@ void _start(void) {
     int drag_slot = -1, drag_off_x = 0, drag_off_y = 0, left_down = 0;
     uint32_t i;
     struct input_stats input_stats;
-#if defined(__GNUC__) || defined(__clang__)
-    __asm__ volatile("mov %%rsp, %0" : "=r"(sp));
-#endif
     if (sp) { argc = (int)sp[0]; argv = (char **)&sp[1]; envp = argv + argc + 1; }
     (void)argc; (void)argv;
     safe_mode = env_bool(envp, "BITOS_DESKTOP_SAFE");
@@ -1121,3 +1125,15 @@ void _start(void) {
         dirty.valid = 0; dirty.x = 0; dirty.y = 0; dirty.w = 0; dirty.h = 0;
     }
 }
+
+#if defined(__GNUC__) || defined(__clang__)
+void BITOS_USER_NAKED BITOS_USER_NORETURN _start(void) {
+    __asm__ volatile(
+        "mov %rsp, %rdi\n"
+        "andq $-16, %rsp\n"
+        "call bitos_wm_start\n"
+    );
+}
+#else
+void _start(void) { bitos_wm_start(0); }
+#endif

@@ -629,6 +629,10 @@ static void kmain_stage2(void) {
     input_init();
     console_init();
     driver_set_status_idx(drv_console, DRIVER_STATUS_OK, NULL);
+    watchdog_checkpoint("mouse_init");
+    log_printf("Boot: initializing mouse...\n");
+    ms_init();
+    driver_set_status_idx(drv_mouse, DRIVER_STATUS_OK, NULL);
     log_printf("Boot: spawning init...\n");
     const char *boot_mode = boot_param_get("boot.mode");
     int init_ok;
@@ -644,17 +648,21 @@ static void kmain_stage2(void) {
     desktop_boot = init_ok && str_eq(boot_mode, "desktop");
     if (desktop_boot) {
         /*
-         * Userspace owns /dev/fb0 in desktop mode. Stop mirroring kernel log
-         * traffic into the framebuffer before the compositor's first paint so
-         * boot text cannot overwrite the login/desktop surface.
+         * Run init once before the bootstrap thread parks. This makes the
+         * userspace login/desktop handoff deterministic instead of waiting for
+         * the next timer preemption while the old boot screen remains visible.
          */
-        log_set_fb_ready(0);
+        sched_yield();
+    }
+    if (desktop_boot) {
+        /*
+         * Keep framebuffer log mirroring enabled until the desktop handoff is
+         * proven stable. This preserves init/WM/login breadcrumbs on screen
+         * when early userspace fails before it can draw its own surface.
+         */
+        log_printf("Boot: framebuffer logging kept active for desktop bootstrap\n");
     }
     watchdog_checkpoint_boot_ok();
-    watchdog_checkpoint("mouse_init");
-    log_printf("Boot: initializing mouse...\n");
-    ms_init();
-    driver_set_status_idx(drv_mouse, DRIVER_STATUS_OK, NULL);
     if (init_ok) {
         if (str_eq(boot_mode, "desktop")) {
             log_printf("Boot: userspace init started; desktop mode active\n");

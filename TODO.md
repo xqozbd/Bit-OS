@@ -302,23 +302,22 @@
 - [x] Add focus navigation and tab order.
 - [x] Add accessibility metadata skeleton (role/name/state).
 - [x] Add UI toolkit test harness with snapshot tests.
+- [x] Add font manager with fallback chain.
+- [x] Add glyph cache/atlas with LRU eviction.
+- [x] Add UTF-8 decode/encode helpers for all apps.
+- [x] Add basic shaping hooks for complex scripts.
+- [x] Add bidirectional text handling skeleton.
+- [x] Add subpixel AA toggle and grayscale fallback.
+- [x] Add font hinting quality options.
+- [x] Add locale-aware date/time formatting helpers.
+- [x] Add emoji fallback rendering path.
+- [x] Add text selection, copy, and caret movement semantics.
+- [x] Add clipboard text MIME normalization.
+- [x] Add benchmark for text render throughput.
+
 
 
 ## Next
-
-### P1 - Text, Fonts, And Rendering Quality
-- [ ] Add font manager with fallback chain.
-- [ ] Add glyph cache/atlas with LRU eviction.
-- [ ] Add UTF-8 decode/encode helpers for all apps.
-- [ ] Add basic shaping hooks for complex scripts.
-- [ ] Add bidirectional text handling skeleton.
-- [ ] Add subpixel AA toggle and grayscale fallback.
-- [ ] Add font hinting quality options.
-- [ ] Add locale-aware date/time formatting helpers.
-- [ ] Add emoji fallback rendering path.
-- [ ] Add text selection, copy, and caret movement semantics.
-- [ ] Add clipboard text MIME normalization.
-- [ ] Add benchmark for text render throughput.
 
 ### P1 - Process Isolation And Sandboxing
 - [ ] Enforce per-process page-table isolation for all desktop apps.

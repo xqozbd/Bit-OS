@@ -1,5 +1,11 @@
 ## v0.1.2
 
+Desktop Boot Handoff: made `/bin/init` force the desktop target selected by the kernel instead of re-parsing argv during first userspace bring-up; this removes the hang immediately after `Boot: init started` and lets the compositor/login startup sequence run.
+
+Userspace Entry ABI: switched init, compositor, desktop-app dispatcher, and busybox entry points to naked stack-preserving trampolines so argc/argv/envp are read from the real loader stack instead of a compiler-adjusted frame; this fixes init hanging immediately after `Boot: init started` and allows `/bin/wm` plus `/bin/dlogin` to take over the framebuffer.
+
+Desktop Startup Visibility: init now clears the old kernel boot text and paints a userspace framebuffer startup screen with live stage checkpoints before launching the compositor/login path, and the kernel yields to init immediately after spawning it so desktop handoff starts deterministically.
+
 ## Features Added:
 Desktop Runtime: added a shared desktop-app bundle (`deskapp`) with role-based launch aliases for `terminal`, `dlogin`, `files`, `settings`, `editor`, `launcher`, `clipboard`, `screenshot`, `procmon`, `crashreport`, `updatenotify`, and `open`.
 
@@ -16,6 +22,12 @@ Desktop UI Toolkit: added a shared retained-mode userspace toolkit (`user/uitk.[
 Desktop App Integration: the desktop `settings` and `launcher` apps now render through the shared toolkit instead of ad-hoc drawing paths, including toolkit-driven actions, selection state, modal dialogs, and menu handling.
 
 Toolkit Validation / Build: added a snapshot-style toolkit harness (`/bin/uitktest`), linked the toolkit into the desktop app bundle during initramfs staging, and normalized `iso.sh` to LF line endings so the build script runs cleanly under WSL/bash.
+
+Text Rendering Stack: added shared userspace text services (`user/text.[ch]`) with a fallback font manager, LRU glyph cache, UTF-8 helpers, shaping/bidi skeletons, grayscale/subpixel AA options, hinting knobs, emoji fallback glyphs, selection/caret helpers, clipboard text normalization, locale-style datetime formatting, and `/bin/textbench` render-throughput coverage.
+
+Desktop App Dispatch: replaced the desktop app bundle hardcoded launch chain with a route table, and moved initramfs app source/alias lists into scalable build variables so new desktop apps can be registered without editing control flow.
+
+Userspace Syscall ABI: fixed the 4th-6th syscall argument register binding (`r10`, `r8`, `r9`) in `user/sys.h`; this unblocks `mmap`, `execve` environment passing, framebuffer mapping, and the compositor/login UI handoff.
 
 ## Features Removed:
 None

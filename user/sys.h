@@ -7,9 +7,12 @@
 static inline uint64_t sys_call6(uint64_t n, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
     uint64_t ret;
 #if defined(__GNUC__) || defined(__clang__)
+    register uint64_t r10 __asm__("r10") = a4;
+    register uint64_t r8 __asm__("r8") = a5;
+    register uint64_t r9 __asm__("r9") = a6;
     __asm__ volatile("int $0x80"
                      : "=a"(ret)
-                     : "a"(n), "D"(a1), "S"(a2), "d"(a3), "r"(a4), "r"(a5), "r"(a6)
+                     : "a"(n), "D"(a1), "S"(a2), "d"(a3), "r"(r10), "r"(r8), "r"(r9)
                      : "rcx", "r11", "memory");
 #else
     (void)n; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;

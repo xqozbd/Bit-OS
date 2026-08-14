@@ -2,6 +2,14 @@
 #include "desktop.h"
 #include "uitk.h"
 
+#if defined(BITOS_USE_GNU_ATTRS)
+#define BITOS_USER_NORETURN __attribute__((noreturn))
+#define BITOS_USER_NAKED __attribute__((naked))
+#else
+#define BITOS_USER_NORETURN
+#define BITOS_USER_NAKED
+#endif
+
 extern char font8x8_basic[128][8];
 
 #define WM_IPC_PATH "/tmp/wm.ipc"
@@ -22,6 +30,20 @@ extern char font8x8_basic[128][8];
 #define UI_TEXT_DIM 0xB4C1CFu
 #define UI_WARN 0xA35D4Fu
 #define UI_OK 0x4F8A66u
+
+#define GUI_MAX_USERS 32
+#define GUI_SALT_LEN 16
+#define GUI_HASH_LEN 32
+#define GUI_PASS_ITER 4096
+#define GUI_EMAIL_LEN 96
+#define GUI_PASS_MAX 64
+#define GUI_ACCOUNTS_DB "/var/accounts/users.db"
+#define GUI_PASSWD_FALLBACK "/etc/passwd"
+#define GUI_SESSION_FILE "/tmp/desktop-session"
+
+enum {
+    GUI_USER_FLAG_ADMIN = 1u << 0
+};
 
 struct rect { int32_t x; int32_t y; uint32_t w; uint32_t h; };
 struct button { struct rect r; char label[24]; };
@@ -77,6 +99,32 @@ struct pty_state {
     char status[96];
 };
 
+struct gui_user_entry {
+    char name[32];
+    char email[GUI_EMAIL_LEN];
+    uint32_t uid;
+    uint32_t gid;
+    uint32_t flags;
+    uint8_t salt[GUI_SALT_LEN];
+    uint8_t hash[GUI_HASH_LEN];
+    int has_pass;
+};
+
+struct login_state {
+    struct gui_user_entry users[GUI_MAX_USERS];
+    int user_count;
+    int mode_create;
+    int focus_field;
+    int secure_fd;
+    char username[32];
+    char email[GUI_EMAIL_LEN];
+    char password[GUI_PASS_MAX];
+    char confirm[GUI_PASS_MAX];
+    char status[128];
+};
+
+static long spawn_exec_line(const char *exec_line, const char *path_arg);
+
 static uint32_t str_len(const char *s) { uint32_t n = 0; while (s && s[n]) ++n; return n; }
 static int str_eq(const char *a, const char *b) { uint32_t i = 0; if (!a || !b) return 0; while (a[i] && b[i]) { if (a[i] != b[i]) return 0; ++i; } return a[i] == b[i]; }
 static int starts_with(const char *s, const char *p) { uint32_t i = 0; if (!s || !p) return 0; while (p[i]) { if (s[i] != p[i]) return 0; ++i; } return 1; }
@@ -87,6 +135,7 @@ static int ends_with(const char *s, const char *suffix) {
     return 1;
 }
 static int is_space(char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; }
+static int bytes_eq(const uint8_t *a, const uint8_t *b, uint32_t n) { uint32_t i; if (!a || !b) return 0; for (i = 0; i < n; ++i) if (a[i] != b[i]) return 0; return 1; }
 static void str_copy(char *dst, uint32_t cap, const char *src) { uint32_t i = 0; if (!dst || cap == 0) return; if (!src) { dst[0] = '\0'; return; } while (src[i] && i + 1 < cap) { dst[i] = src[i]; ++i; } dst[i] = '\0'; }
 static void str_append(char *dst, uint32_t cap, const char *src) { uint32_t i = str_len(dst), j = 0; if (!dst || cap == 0 || !src) return; while (src[j] && i + 1 < cap) dst[i++] = src[j++]; dst[i] = '\0'; }
 static void trim(char *s) {
@@ -102,6 +151,203 @@ static const char *path_ext(const char *path) { const char *b = base_name(path),
 static uint64_t monotonic_ms(void) { uint64_t hz = (uint64_t)sys_timer_hz(), ticks = (uint64_t)sys_uptime_ticks(); if (!hz) hz = 100; return (ticks * 1000ull) / hz; }
 static void u32_to_text(uint32_t v, char *out, uint32_t cap) { char tmp[16]; uint32_t i = 0, j = 0; if (!out || cap == 0) return; if (v == 0) { if (cap > 1) { out[0] = '0'; out[1] = '\0'; } return; } while (v && i + 1 < (uint32_t)sizeof(tmp)) { tmp[i++] = (char)('0' + (v % 10u)); v /= 10u; } while (i && j + 1 < cap) out[j++] = tmp[--i]; out[j] = '\0'; }
 static void u64_to_text(uint64_t v, char *out, uint32_t cap) { char tmp[32]; uint32_t i = 0, j = 0; if (!out || cap == 0) return; if (v == 0) { if (cap > 1) { out[0] = '0'; out[1] = '\0'; } return; } while (v && i + 1 < (uint32_t)sizeof(tmp)) { tmp[i++] = (char)('0' + (v % 10ull)); v /= 10ull; } while (i && j + 1 < cap) out[j++] = tmp[--i]; out[j] = '\0'; }
+
+static int validate_username_local(const char *name) {
+    uint32_t i = 0;
+    if (!name || !name[0]) return 0;
+    while (name[i]) {
+        char c = name[i];
+        if (!((c >= 'a' && c <= 'z') ||
+              (c >= 'A' && c <= 'Z') ||
+              (c >= '0' && c <= '9') ||
+              c == '_' || c == '-' || c == '.')) {
+            return 0;
+        }
+        ++i;
+    }
+    return 1;
+}
+
+static int validate_email_local(const char *email) {
+    int at = -1;
+    int dot = -1;
+    uint32_t i = 0;
+    if (!email || !email[0]) return 0;
+    while (email[i]) {
+        char c = email[i];
+        if (c == ' ' || c == ':' || c == '\t' || c == '\r' || c == '\n') return 0;
+        if (c == '@') {
+            if (at >= 0) return 0;
+            at = (int)i;
+        } else if (c == '.') {
+            dot = (int)i;
+        }
+        ++i;
+    }
+    if (at <= 0) return 0;
+    if (dot <= at + 1) return 0;
+    if (!email[dot + 1]) return 0;
+    return 1;
+}
+
+static int hex_val_local(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return 10 + (c - 'a');
+    if (c >= 'A' && c <= 'F') return 10 + (c - 'A');
+    return -1;
+}
+
+static void hex_encode_local(const uint8_t *src, int len, char *dst, int dst_len) {
+    static const char *hex = "0123456789abcdef";
+    int i;
+    if (!src || !dst || dst_len < len * 2 + 1) return;
+    for (i = 0; i < len; ++i) {
+        dst[i * 2] = hex[(src[i] >> 4) & 0xF];
+        dst[i * 2 + 1] = hex[src[i] & 0xF];
+    }
+    dst[len * 2] = '\0';
+}
+
+static int hex_decode_local(const char *src, uint8_t *dst, int len) {
+    int i;
+    if (!src || !dst) return 0;
+    for (i = 0; i < len; ++i) {
+        int hi = hex_val_local(src[i * 2]);
+        int lo = hex_val_local(src[i * 2 + 1]);
+        if (hi < 0 || lo < 0) return 0;
+        dst[i] = (uint8_t)((hi << 4) | lo);
+    }
+    return 1;
+}
+
+struct sha256_ctx_local {
+    uint32_t h[8];
+    uint64_t len;
+    uint8_t buf[64];
+    uint32_t buf_len;
+};
+
+static uint32_t rotr32_local(uint32_t x, uint32_t n) { return (x >> n) | (x << (32 - n)); }
+
+static void sha256_init_local(struct sha256_ctx_local *c) {
+    c->h[0] = 0x6a09e667u; c->h[1] = 0xbb67ae85u; c->h[2] = 0x3c6ef372u; c->h[3] = 0xa54ff53au;
+    c->h[4] = 0x510e527fu; c->h[5] = 0x9b05688cu; c->h[6] = 0x1f83d9abu; c->h[7] = 0x5be0cd19u;
+    c->len = 0;
+    c->buf_len = 0;
+}
+
+static void sha256_block_local(struct sha256_ctx_local *c, const uint8_t *p) {
+    static const uint32_t k[64] = {
+        0x428a2f98u,0x71374491u,0xb5c0fbcfu,0xe9b5dba5u,0x3956c25bu,0x59f111f1u,0x923f82a4u,0xab1c5ed5u,
+        0xd807aa98u,0x12835b01u,0x243185beu,0x550c7dc3u,0x72be5d74u,0x80deb1feu,0x9bdc06a7u,0xc19bf174u,
+        0xe49b69c1u,0xefbe4786u,0x0fc19dc6u,0x240ca1ccu,0x2de92c6fu,0x4a7484aau,0x5cb0a9dcu,0x76f988dau,
+        0x983e5152u,0xa831c66du,0xb00327c8u,0xbf597fc7u,0xc6e00bf3u,0xd5a79147u,0x06ca6351u,0x14292967u,
+        0x27b70a85u,0x2e1b2138u,0x4d2c6dfcu,0x53380d13u,0x650a7354u,0x766a0abbu,0x81c2c92eu,0x92722c85u,
+        0xa2bfe8a1u,0xa81a664bu,0xc24b8b70u,0xc76c51a3u,0xd192e819u,0xd6990624u,0xf40e3585u,0x106aa070u,
+        0x19a4c116u,0x1e376c08u,0x2748774cu,0x34b0bcb5u,0x391c0cb3u,0x4ed8aa4au,0x5b9cca4fu,0x682e6ff3u,
+        0x748f82eeu,0x78a5636fu,0x84c87814u,0x8cc70208u,0x90befffau,0xa4506cebu,0xbef9a3f7u,0xc67178f2u
+    };
+    uint32_t w[64];
+    uint32_t a, b, c2, d, e, f, g, h;
+    int i;
+    for (i = 0; i < 16; ++i) {
+        w[i] = ((uint32_t)p[i * 4] << 24) | ((uint32_t)p[i * 4 + 1] << 16) |
+               ((uint32_t)p[i * 4 + 2] << 8) | (uint32_t)p[i * 4 + 3];
+    }
+    for (i = 16; i < 64; ++i) {
+        uint32_t s0 = rotr32_local(w[i - 15], 7) ^ rotr32_local(w[i - 15], 18) ^ (w[i - 15] >> 3);
+        uint32_t s1 = rotr32_local(w[i - 2], 17) ^ rotr32_local(w[i - 2], 19) ^ (w[i - 2] >> 10);
+        w[i] = w[i - 16] + s0 + w[i - 7] + s1;
+    }
+    a = c->h[0]; b = c->h[1]; c2 = c->h[2]; d = c->h[3];
+    e = c->h[4]; f = c->h[5]; g = c->h[6]; h = c->h[7];
+    for (i = 0; i < 64; ++i) {
+        uint32_t s1 = rotr32_local(e, 6) ^ rotr32_local(e, 11) ^ rotr32_local(e, 25);
+        uint32_t ch = (e & f) ^ ((~e) & g);
+        uint32_t t1 = h + s1 + ch + k[i] + w[i];
+        uint32_t s0 = rotr32_local(a, 2) ^ rotr32_local(a, 13) ^ rotr32_local(a, 22);
+        uint32_t maj = (a & b) ^ (a & c2) ^ (b & c2);
+        uint32_t t2 = s0 + maj;
+        h = g; g = f; f = e; e = d + t1;
+        d = c2; c2 = b; b = a; a = t1 + t2;
+    }
+    c->h[0] += a; c->h[1] += b; c->h[2] += c2; c->h[3] += d;
+    c->h[4] += e; c->h[5] += f; c->h[6] += g; c->h[7] += h;
+}
+
+static void sha256_update_local(struct sha256_ctx_local *c, const uint8_t *p, uint32_t n) {
+    if (!c || !p || n == 0) return;
+    c->len += (uint64_t)n * 8ull;
+    while (n > 0) {
+        uint32_t space = 64 - c->buf_len;
+        uint32_t take = (n < space) ? n : space;
+        uint32_t i;
+        for (i = 0; i < take; ++i) c->buf[c->buf_len + i] = p[i];
+        c->buf_len += take;
+        p += take;
+        n -= take;
+        if (c->buf_len == 64) {
+            sha256_block_local(c, c->buf);
+            c->buf_len = 0;
+        }
+    }
+}
+
+static void sha256_final_local(struct sha256_ctx_local *c, uint8_t out[32]) {
+    uint8_t pad[64];
+    uint8_t lenb[8];
+    uint32_t pad_len = 0;
+    int i;
+    pad[pad_len++] = 0x80;
+    while ((c->buf_len + pad_len) % 64 != 56) pad[pad_len++] = 0x00;
+    for (i = 0; i < 8; ++i) lenb[7 - i] = (uint8_t)((c->len >> (i * 8)) & 0xFFu);
+    sha256_update_local(c, pad, pad_len);
+    sha256_update_local(c, lenb, 8);
+    for (i = 0; i < 8; ++i) {
+        out[i * 4 + 0] = (uint8_t)(c->h[i] >> 24);
+        out[i * 4 + 1] = (uint8_t)(c->h[i] >> 16);
+        out[i * 4 + 2] = (uint8_t)(c->h[i] >> 8);
+        out[i * 4 + 3] = (uint8_t)(c->h[i]);
+    }
+}
+
+static void hash_password_local(const uint8_t salt[GUI_SALT_LEN], const char *pass, uint8_t out[GUI_HASH_LEN]) {
+    struct sha256_ctx_local ctx;
+    uint32_t plen = str_len(pass);
+    int i;
+    sha256_init_local(&ctx);
+    sha256_update_local(&ctx, salt, GUI_SALT_LEN);
+    sha256_update_local(&ctx, (const uint8_t *)pass, plen);
+    sha256_final_local(&ctx, out);
+    for (i = 0; i < GUI_PASS_ITER; ++i) {
+        sha256_init_local(&ctx);
+        sha256_update_local(&ctx, out, GUI_HASH_LEN);
+        sha256_update_local(&ctx, (const uint8_t *)pass, plen);
+        sha256_final_local(&ctx, out);
+    }
+}
+
+static int read_urandom_local(uint8_t *buf, int len) {
+    int fd = (int)sys_open("/dev/urandom", O_RDONLY);
+    int got = 0;
+    if (fd < 0) return 0;
+    while (got < len) {
+        long n = sys_read(fd, buf + got, (uint32_t)(len - got));
+        if (n <= 0) break;
+        got += (int)n;
+    }
+    sys_close(fd);
+    return got == len;
+}
+
+static int secure_accounts_storage_local(void) {
+    int ok = 1;
+    if (sys_chown("/var/accounts", 0, 0) != 0) ok = 0;
+    if (sys_chmod("/var/accounts", 0700) != 0) ok = 0;
+    if (sys_chown(GUI_ACCOUNTS_DB, 0, 0) != 0) ok = 0;
+    if (sys_chmod(GUI_ACCOUNTS_DB, 0600) != 0) ok = 0;
+    return ok;
+}
 
 static void pixel(struct desktop_shm_window *shm, int32_t x, int32_t y, uint32_t rgb) {
     if (!shm || x < 0 || y < 0) return;
@@ -295,6 +541,172 @@ static int copy_file_text(const char *src, const char *dst) {
     char buf[APP_BUF_MAX];
     if (read_file_text(src, buf, (uint32_t)sizeof(buf)) < 0) return -1;
     return write_file_text(dst, buf);
+}
+
+static uint32_t parse_u32_local(const char *s) {
+    uint32_t v = 0;
+    uint32_t i = 0;
+    while (s && s[i] >= '0' && s[i] <= '9') {
+        v = v * 10u + (uint32_t)(s[i] - '0');
+        ++i;
+    }
+    return v;
+}
+
+static int user_name_exists_local(struct gui_user_entry *users, int count, const char *name) {
+    int i;
+    for (i = 0; i < count; ++i) if (str_eq(users[i].name, name)) return 1;
+    return 0;
+}
+
+static int user_email_exists_local(struct gui_user_entry *users, int count, const char *email) {
+    int i;
+    for (i = 0; i < count; ++i) if (users[i].email[0] && str_eq(users[i].email, email)) return 1;
+    return 0;
+}
+
+static uint32_t next_uid_local(struct gui_user_entry *users, int count) {
+    uint32_t uid = 1000;
+    int i;
+    for (i = 0; i < count; ++i) if (users[i].uid >= uid) uid = users[i].uid + 1u;
+    return uid;
+}
+
+static int load_accounts_local(struct gui_user_entry *users, int max_users) {
+    char buf[4096];
+    int count = 0;
+    int fd = (int)sys_open(GUI_ACCOUNTS_DB, O_RDONLY);
+    uint32_t off = 0;
+    long n;
+    if (fd >= 0) {
+        n = sys_read(fd, buf, sizeof(buf) - 1);
+        sys_close(fd);
+        if (n > 0) {
+            buf[n] = '\0';
+            while (buf[off] && count < max_users) {
+                char line[256];
+                char *fields[8];
+                uint32_t li = 0;
+                int fi = 0;
+                while (buf[off] == '\n' || buf[off] == '\r') ++off;
+                while (buf[off] && buf[off] != '\n' && li + 1 < (uint32_t)sizeof(line)) line[li++] = buf[off++];
+                while (buf[off] == '\n' || buf[off] == '\r') ++off;
+                line[li] = '\0';
+                trim(line);
+                if (!line[0] || line[0] == '#') continue;
+                fields[fi++] = line;
+                for (li = 0; line[li] && fi < 8; ++li) {
+                    if (line[li] == ':') {
+                        line[li] = '\0';
+                        fields[fi++] = &line[li + 1];
+                    }
+                }
+                if (fi < 7) continue;
+                str_copy(users[count].name, (uint32_t)sizeof(users[count].name), fields[0]);
+                users[count].uid = parse_u32_local(fields[1]);
+                users[count].gid = parse_u32_local(fields[2]);
+                users[count].flags = parse_u32_local(fields[3]);
+                str_copy(users[count].email, (uint32_t)sizeof(users[count].email), fields[4]);
+                users[count].has_pass = 0;
+                if ((int)str_len(fields[5]) == GUI_SALT_LEN * 2 &&
+                    (int)str_len(fields[6]) == GUI_HASH_LEN * 2 &&
+                    hex_decode_local(fields[5], users[count].salt, GUI_SALT_LEN) &&
+                    hex_decode_local(fields[6], users[count].hash, GUI_HASH_LEN)) {
+                    users[count].has_pass = 1;
+                }
+                ++count;
+            }
+            return count;
+        }
+    }
+
+    fd = (int)sys_open(GUI_PASSWD_FALLBACK, O_RDONLY);
+    if (fd < 0) return 0;
+    n = sys_read(fd, buf, sizeof(buf) - 1);
+    sys_close(fd);
+    if (n <= 0) return 0;
+    buf[n] = '\0';
+    off = 0;
+    while (buf[off] && count < max_users) {
+        char line[128];
+        char *fields[4];
+        uint32_t li = 0;
+        int fi = 0;
+        while (buf[off] == '\n' || buf[off] == '\r') ++off;
+        while (buf[off] && buf[off] != '\n' && li + 1 < (uint32_t)sizeof(line)) line[li++] = buf[off++];
+        while (buf[off] == '\n' || buf[off] == '\r') ++off;
+        line[li] = '\0';
+        trim(line);
+        if (!line[0] || line[0] == '#') continue;
+        fields[fi++] = line;
+        for (li = 0; line[li] && fi < 4; ++li) {
+            if (line[li] == ':') {
+                line[li] = '\0';
+                fields[fi++] = &line[li + 1];
+            }
+        }
+        if (fi < 3) continue;
+        str_copy(users[count].name, (uint32_t)sizeof(users[count].name), fields[0]);
+        users[count].uid = parse_u32_local(fields[1]);
+        users[count].gid = parse_u32_local(fields[2]);
+        users[count].flags = (users[count].uid == 0) ? GUI_USER_FLAG_ADMIN : 0;
+        users[count].email[0] = '\0';
+        users[count].has_pass = 0;
+        ++count;
+    }
+    return count;
+}
+
+static int write_accounts_local(struct gui_user_entry *users, int count) {
+    int fd;
+    int i;
+    const char *hdr = "# BitOS accounts v2\n";
+    fd = (int)sys_open(GUI_ACCOUNTS_DB, O_WRONLY | O_CREAT | O_TRUNC);
+    if (fd < 0) return 0;
+    (void)sys_write(fd, hdr, str_len(hdr));
+    for (i = 0; i < count; ++i) {
+        char line[320];
+        char salt_hex[GUI_SALT_LEN * 2 + 1];
+        char hash_hex[GUI_HASH_LEN * 2 + 1];
+        char num[16];
+        line[0] = '\0';
+        str_append(line, (uint32_t)sizeof(line), users[i].name);
+        str_append(line, (uint32_t)sizeof(line), ":");
+        u32_to_text(users[i].uid, num, (uint32_t)sizeof(num));
+        str_append(line, (uint32_t)sizeof(line), num);
+        str_append(line, (uint32_t)sizeof(line), ":");
+        u32_to_text(users[i].gid, num, (uint32_t)sizeof(num));
+        str_append(line, (uint32_t)sizeof(line), num);
+        str_append(line, (uint32_t)sizeof(line), ":");
+        u32_to_text(users[i].flags, num, (uint32_t)sizeof(num));
+        str_append(line, (uint32_t)sizeof(line), num);
+        str_append(line, (uint32_t)sizeof(line), ":");
+        str_append(line, (uint32_t)sizeof(line), users[i].email);
+        str_append(line, (uint32_t)sizeof(line), ":");
+        if (users[i].has_pass) {
+            hex_encode_local(users[i].salt, GUI_SALT_LEN, salt_hex, (int)sizeof(salt_hex));
+            hex_encode_local(users[i].hash, GUI_HASH_LEN, hash_hex, (int)sizeof(hash_hex));
+            str_append(line, (uint32_t)sizeof(line), salt_hex);
+            str_append(line, (uint32_t)sizeof(line), ":");
+            str_append(line, (uint32_t)sizeof(line), hash_hex);
+        }
+        str_append(line, (uint32_t)sizeof(line), "\n");
+        (void)sys_write(fd, line, str_len(line));
+    }
+    sys_close(fd);
+    return secure_accounts_storage_local();
+}
+
+static int write_session_local(const struct gui_user_entry *user) {
+    char buf[256];
+    buf[0] = '\0';
+    if (!user) return -1;
+    str_append(buf, (uint32_t)sizeof(buf), "user=");
+    str_append(buf, (uint32_t)sizeof(buf), user->name);
+    str_append(buf, (uint32_t)sizeof(buf), "\nemail=");
+    str_append(buf, (uint32_t)sizeof(buf), user->email);
+    str_append(buf, (uint32_t)sizeof(buf), "\n");
+    return write_file_text(GUI_SESSION_FILE, buf);
 }
 
 static int parse_dir(const char *path, struct file_item *items, uint32_t *count) {
@@ -622,6 +1034,309 @@ static int run_editor_app(const char *title, const char *path) {
 
 static int run_clipboard_app(void) { return run_editor_app("Clipboard", "/tmp/clipboard.txt"); }
 static int run_text_editor_main(int argc, char **argv) { return run_editor_app("Editor", (argc > 1 && argv[1]) ? argv[1] : "/tmp/note.txt"); }
+
+static void login_clear_secret(char *buf, uint32_t cap) {
+    uint32_t i;
+    if (!buf || cap == 0) return;
+    for (i = 0; i < cap; ++i) buf[i] = '\0';
+}
+
+static void login_mask_text(const char *src, char *dst, uint32_t cap) {
+    uint32_t i = 0;
+    if (!dst || cap == 0) return;
+    while (src && src[i] && i + 1 < cap) {
+        dst[i] = '*';
+        ++i;
+    }
+    dst[i] = '\0';
+}
+
+static void draw_input_box(struct desktop_shm_window *shm, const struct rect *r, const char *label,
+                           const char *value, const char *placeholder, int focused, int secret) {
+    char shown[GUI_PASS_MAX];
+    const char *text = value;
+    fill_rect(shm, r->x, r->y, r->w, r->h, UI_PANEL_ALT);
+    fill_rect(shm, r->x, r->y, r->w, 1, focused ? UI_ACCENT_ALT : UI_TEXT_DIM);
+    fill_rect(shm, r->x, r->y + (int32_t)r->h - 1, r->w, 1, focused ? UI_ACCENT_ALT : UI_TEXT_DIM);
+    fill_rect(shm, r->x, r->y, 1, r->h, focused ? UI_ACCENT_ALT : UI_TEXT_DIM);
+    fill_rect(shm, r->x + (int32_t)r->w - 1, r->y, 1, r->h, focused ? UI_ACCENT_ALT : UI_TEXT_DIM);
+    draw_text(shm, r->x, r->y - 12, label, UI_TEXT_DIM, UI_BG);
+    if (secret && value && value[0]) {
+        login_mask_text(value, shown, (uint32_t)sizeof(shown));
+        text = shown;
+    }
+    if (text && text[0]) draw_text(shm, r->x + 8, r->y + 10, text, UI_TEXT, UI_PANEL_ALT);
+    else draw_text(shm, r->x + 8, r->y + 10, placeholder, UI_TEXT_DIM, UI_PANEL_ALT);
+}
+
+static char *login_field_ptr(struct login_state *st) {
+    if (!st) return 0;
+    if (st->mode_create) {
+        if (st->focus_field == 0) return st->username;
+        if (st->focus_field == 1) return st->email;
+        if (st->focus_field == 2) return st->password;
+        if (st->focus_field == 3) return st->confirm;
+    } else {
+        if (st->focus_field == 0) return st->username;
+        if (st->focus_field == 1) return st->password;
+    }
+    return 0;
+}
+
+static uint32_t login_field_cap(const struct login_state *st) {
+    if (!st) return 0;
+    if (st->mode_create) {
+        if (st->focus_field == 0) return (uint32_t)sizeof(st->username);
+        if (st->focus_field == 1) return (uint32_t)sizeof(st->email);
+        if (st->focus_field == 2) return (uint32_t)sizeof(st->password);
+        if (st->focus_field == 3) return (uint32_t)sizeof(st->confirm);
+    } else {
+        if (st->focus_field == 0) return (uint32_t)sizeof(st->username);
+        if (st->focus_field == 1) return (uint32_t)sizeof(st->password);
+    }
+    return 0;
+}
+
+static void login_focus_next(struct login_state *st) {
+    int limit;
+    if (!st) return;
+    limit = st->mode_create ? 4 : 2;
+    st->focus_field = (st->focus_field + 1) % limit;
+}
+
+static int login_lookup_user(struct login_state *st, const char *name_or_email) {
+    int i;
+    if (!st || !name_or_email || !name_or_email[0]) return -1;
+    for (i = 0; i < st->user_count; ++i) {
+        if (str_eq(st->users[i].name, name_or_email) ||
+            (st->users[i].email[0] && str_eq(st->users[i].email, name_or_email))) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static int login_finish_session(const struct gui_user_entry *user) {
+    if (!user) return -1;
+    (void)write_session_local(user);
+    (void)sys_setgid(user->gid);
+    (void)sys_setuid(user->uid);
+    (void)spawn_exec_line("/bin/launcher", 0);
+    (void)spawn_exec_line("/bin/terminal", 0);
+    (void)spawn_exec_line("/bin/files", 0);
+    return 0;
+}
+
+static int login_submit(struct login_state *st) {
+    if (!st) return 0;
+    if (st->mode_create) {
+        struct gui_user_entry *u;
+        uint32_t uid;
+        if (st->user_count >= GUI_MAX_USERS) {
+            str_copy(st->status, (uint32_t)sizeof(st->status), "Account limit reached");
+            return 0;
+        }
+        if (!validate_username_local(st->username)) {
+            str_copy(st->status, (uint32_t)sizeof(st->status), "Invalid username");
+            return 0;
+        }
+        if (!validate_email_local(st->email)) {
+            str_copy(st->status, (uint32_t)sizeof(st->status), "Invalid email");
+            return 0;
+        }
+        if (user_name_exists_local(st->users, st->user_count, st->username)) {
+            str_copy(st->status, (uint32_t)sizeof(st->status), "Username already exists");
+            return 0;
+        }
+        if (user_email_exists_local(st->users, st->user_count, st->email)) {
+            str_copy(st->status, (uint32_t)sizeof(st->status), "Email already exists");
+            return 0;
+        }
+        if (str_len(st->password) < 6) {
+            str_copy(st->status, (uint32_t)sizeof(st->status), "Password must be at least 6 chars");
+            return 0;
+        }
+        if (!str_eq(st->password, st->confirm)) {
+            str_copy(st->status, (uint32_t)sizeof(st->status), "Passwords do not match");
+            return 0;
+        }
+        u = &st->users[st->user_count];
+        str_copy(u->name, (uint32_t)sizeof(u->name), st->username);
+        str_copy(u->email, (uint32_t)sizeof(u->email), st->email);
+        uid = (st->user_count == 0) ? 0u : next_uid_local(st->users, st->user_count);
+        u->uid = uid;
+        u->gid = uid;
+        u->flags = (st->user_count == 0) ? GUI_USER_FLAG_ADMIN : 0u;
+        if (!read_urandom_local(u->salt, GUI_SALT_LEN)) {
+            uint64_t t = monotonic_ms();
+            uint32_t i;
+            for (i = 0; i < GUI_SALT_LEN; ++i) u->salt[i] = (uint8_t)(t >> ((i * 3u) & 31u));
+        }
+        hash_password_local(u->salt, st->password, u->hash);
+        u->has_pass = 1;
+        if (!write_accounts_local(st->users, st->user_count + 1)) {
+            str_copy(st->status, (uint32_t)sizeof(st->status), "Failed to write account database");
+            return 0;
+        }
+        st->user_count++;
+        st->mode_create = 0;
+        st->focus_field = 1;
+        login_clear_secret(st->password, (uint32_t)sizeof(st->password));
+        login_clear_secret(st->confirm, (uint32_t)sizeof(st->confirm));
+        str_copy(st->status, (uint32_t)sizeof(st->status), "Account created. Sign in.");
+        return 0;
+    }
+
+    {
+        int idx = login_lookup_user(st, st->username);
+        uint8_t hash[GUI_HASH_LEN];
+        if (idx < 0) {
+            str_copy(st->status, (uint32_t)sizeof(st->status), "Unknown user");
+            return 0;
+        }
+        if (!st->users[idx].has_pass) {
+            str_copy(st->status, (uint32_t)sizeof(st->status), "Account has no password");
+            return 0;
+        }
+        hash_password_local(st->users[idx].salt, st->password, hash);
+        if (!bytes_eq(hash, st->users[idx].hash, GUI_HASH_LEN)) {
+            str_copy(st->status, (uint32_t)sizeof(st->status), "Incorrect password");
+            return 0;
+        }
+        str_copy(st->status, (uint32_t)sizeof(st->status), "Login successful");
+        return login_finish_session(&st->users[idx]) == 0;
+    }
+}
+
+static void login_set_secure(struct login_state *st, int enabled) {
+    struct input_secure_request req;
+    if (!st || st->secure_fd < 0) return;
+    req.enabled = enabled ? 1u : 0u;
+    req.reserved = 0u;
+    (void)sys_ioctl(st->secure_fd, INPUT_IOCTL_SET_SECURE, &req);
+}
+
+static void render_dlogin(struct app_window *app, struct login_state *st, const struct rect *fields, const struct button *buttons, uint32_t hot) {
+    char subtitle[128];
+    render_frame(app,
+                 st->mode_create ? "BitOS Login - Create Account" : "BitOS Login",
+                 st->status,
+                 buttons,
+                 2,
+                 hot,
+                 UI_BG);
+    fill_rect(app->shm, 22, 38, app->shm->width - 44, app->shm->height - 92, UI_PANEL);
+    draw_text(app->shm, 38, 56, st->mode_create ? "Create a local BitOS account" : "Sign in to BitOS", UI_TEXT, UI_PANEL);
+    subtitle[0] = '\0';
+    if (st->user_count == 0) str_copy(subtitle, (uint32_t)sizeof(subtitle), "First account becomes administrator. Passwords are salted and hashed.");
+    else str_copy(subtitle, (uint32_t)sizeof(subtitle), "Use mouse or Tab. Account storage is root-owned.");
+    draw_text(app->shm, 38, 70, subtitle, UI_TEXT_DIM, UI_PANEL);
+    draw_input_box(app->shm, &fields[0], "Username", st->username, "username or email", st->focus_field == 0, 0);
+    if (st->mode_create) {
+        draw_input_box(app->shm, &fields[1], "Email", st->email, "name@example.com", st->focus_field == 1, 0);
+        draw_input_box(app->shm, &fields[2], "Password", st->password, "minimum 6 characters", st->focus_field == 2, 1);
+        draw_input_box(app->shm, &fields[3], "Confirm Password", st->confirm, "repeat password", st->focus_field == 3, 1);
+        draw_text(app->shm, 38, 312, "Stored in /var/accounts/users.db with root-only permissions.", UI_TEXT_DIM, UI_PANEL);
+    } else {
+        draw_input_box(app->shm, &fields[2], "Password", st->password, "password", st->focus_field == 1, 1);
+        draw_text(app->shm, 38, 278, "Successful sign-in starts launcher, terminal, and files.", UI_TEXT_DIM, UI_PANEL);
+    }
+}
+
+static int run_dlogin_app(void) {
+    struct app_window app;
+    struct login_state st;
+    struct desktop_msg m;
+    struct rect fields[4] = {
+        { 38, 112, 280, 34 },
+        { 334, 112, 250, 34 },
+        { 38, 182, 280, 34 },
+        { 334, 182, 250, 34 }
+    };
+    struct button buttons[2] = {
+        { { 38, 346, 140, 26 }, "Sign In" },
+        { { 190, 346, 170, 26 }, "Create Account" }
+    };
+    if (app_open(&app, "Login", 640, 420) < 0) return 1;
+    __builtin_memset(&st, 0, sizeof(st));
+    st.secure_fd = (int)sys_open("/dev/input", O_RDONLY | O_NONBLOCK);
+    st.user_count = load_accounts_local(st.users, GUI_MAX_USERS);
+    st.mode_create = (st.user_count == 0) ? 1 : 0;
+    st.focus_field = 0;
+    str_copy(st.status, (uint32_t)sizeof(st.status), st.mode_create ? "Create the first account to unlock the desktop" : "Enter your username and password");
+    login_set_secure(&st, 1);
+    for (;;) {
+        int hot = -1;
+        if (st.mode_create) {
+            str_copy(buttons[0].label, (uint32_t)sizeof(buttons[0].label), "Create");
+            str_copy(buttons[1].label, (uint32_t)sizeof(buttons[1].label), (st.user_count > 0) ? "Back To Login" : "Create First Account");
+        } else {
+            str_copy(buttons[0].label, (uint32_t)sizeof(buttons[0].label), "Sign In");
+            str_copy(buttons[1].label, (uint32_t)sizeof(buttons[1].label), "Create Account");
+        }
+        render_dlogin(&app, &st, fields, buttons, hot);
+        app_damage(&app, 0, 0, app.w, app.h);
+        while (queue_pop_local(&app.shm->events, &m)) {
+            int rc = common_event(&app, &m);
+            int lx = app_local_x(&app, &m);
+            int ly = app_local_y(&app, &m);
+            if (rc < 0) {
+                login_set_secure(&st, 0);
+                if (st.secure_fd >= 0) sys_close(st.secure_fd);
+                app_close(&app);
+                sys_exit(0);
+            }
+            if (m.cmd == DESKTOP_EVT_POINTER) {
+                hot = button_hot(buttons, 2, lx, ly);
+                if ((m.arg0 & 1u) && !(app.last_buttons & 1u)) {
+                    if (rect_hit(&fields[0], lx, ly)) st.focus_field = 0;
+                    else if (st.mode_create && rect_hit(&fields[1], lx, ly)) st.focus_field = 1;
+                    else if (rect_hit(&fields[2], lx, ly)) st.focus_field = st.mode_create ? 2 : 1;
+                    else if (st.mode_create && rect_hit(&fields[3], lx, ly)) st.focus_field = 3;
+                    else if (hot == 0) {
+                        if (login_submit(&st)) {
+                            login_set_secure(&st, 0);
+                            if (st.secure_fd >= 0) sys_close(st.secure_fd);
+                            login_clear_secret(st.password, (uint32_t)sizeof(st.password));
+                            login_clear_secret(st.confirm, (uint32_t)sizeof(st.confirm));
+                            app_close(&app);
+                            sys_exit(0);
+                        }
+                    } else if (hot == 1 && st.user_count > 0) {
+                        st.mode_create = !st.mode_create;
+                        st.focus_field = 0;
+                        login_clear_secret(st.password, (uint32_t)sizeof(st.password));
+                        login_clear_secret(st.confirm, (uint32_t)sizeof(st.confirm));
+                        str_copy(st.status, (uint32_t)sizeof(st.status), st.mode_create ? "Create a new account" : "Enter your username and password");
+                    }
+                }
+                app.last_buttons = m.arg0;
+            } else if (m.cmd == DESKTOP_EVT_KEY && !(m.arg1 & INPUT_FLAG_RELEASE)) {
+                char *field = login_field_ptr(&st);
+                uint32_t cap = login_field_cap(&st);
+                uint32_t len = field ? str_len(field) : 0;
+                if (m.arg0 == '\t') {
+                    login_focus_next(&st);
+                } else if (m.arg0 == '\r' || m.arg0 == '\n') {
+                    if (login_submit(&st)) {
+                        login_set_secure(&st, 0);
+                        if (st.secure_fd >= 0) sys_close(st.secure_fd);
+                        login_clear_secret(st.password, (uint32_t)sizeof(st.password));
+                        login_clear_secret(st.confirm, (uint32_t)sizeof(st.confirm));
+                        app_close(&app);
+                        sys_exit(0);
+                    }
+                } else if ((m.arg0 == 8u || m.arg0 == 127u) && field && len > 0) {
+                    field[len - 1] = '\0';
+                } else if (field && cap > 1 && m.arg0 >= 32u && m.arg0 < 127u && len + 1 < cap) {
+                    field[len] = (char)m.arg0;
+                    field[len + 1] = '\0';
+                }
+            }
+        }
+        sys_sleep_ms(16);
+    }
+}
 
 static void uitk_present(struct app_window *app, struct uitk_tree *ui) {
     if (!app || !app->shm || !ui) return;
@@ -1027,27 +1742,75 @@ static int run_open_helper(int argc, char **argv) {
     return spawn_exec_line("/bin/editor %f", argv[1]) < 0;
 }
 
-void _start(void) {
-    uint64_t *sp = 0;
+typedef int (*app_entry_fn)(int argc, char **argv);
+
+struct app_route {
+    const char *name;
+    const char *title;
+    const char *exec_path;
+    app_entry_fn run;
+};
+
+static int app_terminal(int argc, char **argv) { (void)argc; (void)argv; return run_pty_app("Terminal", "/bin/sh"); }
+static int app_dlogin(int argc, char **argv) { (void)argc; (void)argv; return run_dlogin_app(); }
+static int app_files(int argc, char **argv) { (void)argc; (void)argv; return run_files_app(); }
+static int app_settings(int argc, char **argv) { (void)argc; (void)argv; return run_settings_app(); }
+static int app_editor(int argc, char **argv) { return run_text_editor_main(argc, argv); }
+static int app_launcher(int argc, char **argv) { (void)argc; (void)argv; return run_launcher_app(); }
+static int app_clipboard(int argc, char **argv) { (void)argc; (void)argv; return run_clipboard_app(); }
+static int app_screenshot(int argc, char **argv) { return run_screenshot_app(argc, argv); }
+static int app_procmon(int argc, char **argv) { (void)argc; (void)argv; return run_procmon_app(); }
+static int app_crashreport(int argc, char **argv) { (void)argc; (void)argv; return run_crashreport_app(); }
+static int app_updatenotify(int argc, char **argv) { (void)argc; (void)argv; return run_update_app(); }
+static int app_open_route(int argc, char **argv) { return run_open_helper(argc, argv); }
+
+static const struct app_route app_routes[] = {
+    { "terminal", "Terminal", "/bin/sh", app_terminal },
+    { "dlogin", "Login", "/bin/login", app_dlogin },
+    { "files", "Files", "/bin/files", app_files },
+    { "settings", "Settings", "/bin/settings", app_settings },
+    { "editor", "Editor", "/bin/editor", app_editor },
+    { "launcher", "Launcher", "/bin/launcher", app_launcher },
+    { "clipboard", "Clipboard", "/bin/clipboard", app_clipboard },
+    { "screenshot", "Screenshot", "/bin/screenshot", app_screenshot },
+    { "procmon", "Process Monitor", "/bin/procmon", app_procmon },
+    { "crashreport", "Crash Reporter", "/bin/crashreport", app_crashreport },
+    { "updatenotify", "Software Update", "/bin/updatenotify", app_updatenotify },
+    { "open", "Open", "/bin/open", app_open_route }
+};
+
+static const struct app_route *find_app_route(const char *name) {
+    uint32_t i;
+    for (i = 0; i < (uint32_t)(sizeof(app_routes) / sizeof(app_routes[0])); ++i) {
+        if (str_eq(name, app_routes[i].name)) return &app_routes[i];
+    }
+    return 0;
+}
+
+static int run_registered_app(const char *name, int argc, char **argv) {
+    const struct app_route *route = find_app_route(name);
+    if (route && route->run) return route->run(argc, argv);
+    return run_pty_app("Terminal", "/bin/sh");
+}
+
+void BITOS_USER_NORETURN bitos_deskapp_start(uint64_t *sp) {
     int argc = 0;
     char **argv = 0;
     const char *app;
-#if defined(__GNUC__) || defined(__clang__)
-    __asm__ volatile("mov %%rsp, %0" : "=r"(sp));
-#endif
     if (sp) { argc = (int)sp[0]; argv = (char **)&sp[1]; }
     app = (argc > 0 && argv && argv[0]) ? base_name(argv[0]) : "terminal";
-    if (str_eq(app, "terminal")) sys_exit(run_pty_app("Terminal", "/bin/sh"));
-    if (str_eq(app, "dlogin")) sys_exit(run_pty_app("Login", "/bin/login"));
-    if (str_eq(app, "files")) sys_exit(run_files_app());
-    if (str_eq(app, "settings")) sys_exit(run_settings_app());
-    if (str_eq(app, "editor")) sys_exit(run_text_editor_main(argc, argv));
-    if (str_eq(app, "launcher")) sys_exit(run_launcher_app());
-    if (str_eq(app, "clipboard")) sys_exit(run_clipboard_app());
-    if (str_eq(app, "screenshot")) sys_exit(run_screenshot_app(argc, argv));
-    if (str_eq(app, "procmon")) sys_exit(run_procmon_app());
-    if (str_eq(app, "crashreport")) sys_exit(run_crashreport_app());
-    if (str_eq(app, "updatenotify")) sys_exit(run_update_app());
-    if (str_eq(app, "open")) sys_exit(run_open_helper(argc, argv));
-    sys_exit(run_pty_app("Terminal", "/bin/sh"));
+    sys_exit(run_registered_app(app, argc, argv));
+    for (;;) { }
 }
+
+#if defined(__GNUC__) || defined(__clang__)
+void BITOS_USER_NAKED BITOS_USER_NORETURN _start(void) {
+    __asm__ volatile(
+        "mov %rsp, %rdi\n"
+        "andq $-16, %rsp\n"
+        "call bitos_deskapp_start\n"
+    );
+}
+#else
+void _start(void) { bitos_deskapp_start(0); }
+#endif

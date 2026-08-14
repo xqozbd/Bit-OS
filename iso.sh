@@ -7,6 +7,8 @@ ISO_FALLBACK=0
 INITRAMFS_DIR=initramfs
 INITRAMFS_IMG=initramfs.cpio
 ISO_TOOL=
+USER_APP_SRCS="user/init.c user/busybox.c user/cron.c user/login.c user/wm.c user/deskapp.c user/uitktest.c user/textbench.c"
+DESKTOP_APP_ALIASES="terminal dlogin files settings editor launcher clipboard screenshot procmon crashreport updatenotify open"
 
 rm -rf iso_root
 if [ -e "$ISO" ]; then
@@ -38,23 +40,25 @@ if [ -d "$INITRAMFS_DIR" ]; then
   mkdir -p "$INITRAMFS_DIR/bin"
   mkdir -p "$INITRAMFS_DIR/lib"
   if [ -f "user/libu.c" ]; then
-    x86_64-linux-gnu-gcc -nostdlib -shared -fPIC -fno-stack-protector -Iuser \
+    x86_64-linux-gnu-gcc -nostdlib -shared -fPIC -fno-stack-protector -DBITOS_USE_GNU_ATTRS=1 -Iuser \
       -Wl,-T,user/user_so.lds -Wl,-soname,libu.so \
       -o "$INITRAMFS_DIR/lib/libu.so" user/libu.c
   fi
-  for src in user/init.c user/busybox.c user/cron.c user/login.c user/wm.c user/deskapp.c user/uitktest.c; do
+  for src in $USER_APP_SRCS; do
     [ -f "$src" ] || continue
     base=$(basename "$src" .c)
     extra_srcs=""
     if [ "$base" = "deskapp" ] || [ "$base" = "uitktest" ]; then
-      extra_srcs="user/uitk.c"
+      extra_srcs="user/uitk.c user/text.c"
+    elif [ "$base" = "textbench" ]; then
+      extra_srcs="user/text.c"
     fi
-    x86_64-linux-gnu-gcc -nostdlib -static -ffreestanding -fno-stack-protector -fno-pie -no-pie -Iuser \
+    x86_64-linux-gnu-gcc -nostdlib -static -ffreestanding -fno-stack-protector -fno-pie -no-pie -DBITOS_USE_GNU_ATTRS=1 -Iuser \
       -Wl,-e,_start -Wl,-T,user/user.lds \
       -o "$INITRAMFS_DIR/bin/$base" "$src" $extra_srcs
   done
   if [ -f "user/hello.c" ]; then
-    x86_64-linux-gnu-gcc -nostdlib -ffreestanding -fno-stack-protector -fPIE -pie -Iuser \
+    x86_64-linux-gnu-gcc -nostdlib -ffreestanding -fno-stack-protector -fPIE -pie -DBITOS_USE_GNU_ATTRS=1 -Iuser \
       -Wl,-e,_start -Wl,--no-as-needed -Wl,-rpath,/lib \
       -L"$INITRAMFS_DIR/lib" -Wl,-l:libu.so \
       -o "$INITRAMFS_DIR/bin/hello" user/hello.c
@@ -65,7 +69,7 @@ if [ -d "$INITRAMFS_DIR" ]; then
     done
   fi
   if [ -f "$INITRAMFS_DIR/bin/deskapp" ]; then
-    for app in terminal dlogin files settings editor launcher clipboard screenshot procmon crashreport updatenotify open; do
+    for app in $DESKTOP_APP_ALIASES; do
       cp -f "$INITRAMFS_DIR/bin/deskapp" "$INITRAMFS_DIR/bin/$app"
     done
   fi

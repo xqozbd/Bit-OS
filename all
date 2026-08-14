@@ -1,4 +1,5 @@
 #!/bin/sh
+set -e
 
 # Check if Limine exists
 if [ ! -d "limine" ]; then
@@ -14,6 +15,9 @@ echo "Run in VM Box"
 ISO=BitOS.iso
 if [ -f .last_iso ]; then
   ISO=$(cat .last_iso)
+  echo "IMPORTANT: BitOS.iso was locked/in use, so VMware must boot this new ISO instead: $ISO"
+else
+  echo "VMware ISO path: $ISO"
 fi
 
 if [ -f "$ISO" ]; then

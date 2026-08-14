@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 #include "desktop.h"
+#include "text.h"
 
 #define UITK_MAX_NODES 128u
 #define UITK_MAX_TEXT 160u
@@ -158,6 +159,7 @@ struct uitk_node {
 struct uitk_tree {
     struct uitk_theme theme;
     struct uitk_icon_atlas atlas;
+    struct btext_manager text;
     uint32_t node_count;
     int32_t root;
     int32_t focus;
